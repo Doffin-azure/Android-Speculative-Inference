@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <iomanip>
 #include <sampling.h>
 #include <sys/stat.h>
@@ -97,6 +98,8 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_load(
 
     char gguf_header[4];
     const size_t header_read = fread(gguf_header, 1, sizeof(gguf_header), fp);
+    uint32_t gguf_version = 0;
+    const size_t version_read = fread(&gguf_version, 1, sizeof(gguf_version), fp);
     fclose(fp);
     if (header_read != sizeof(gguf_header) ||
         gguf_header[0] != 'G' ||
@@ -108,10 +111,26 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_load(
         return 4;
     }
 
+    LOGi(
+            "%s: GGUF header verified; size=%lld bytes, version=%u",
+            __func__,
+            (long long) model_stat.st_size,
+            version_read == sizeof(gguf_version) ? gguf_version : 0u);
+
     auto *model = llama_model_load_from_file(model_path, model_params);
+    if (!model) {
+        LOGw("%s: default load failed; retrying with use_mmap = false", __func__);
+        model_params = llama_model_default_params();
+        model_params.use_mmap = false;
+        model = llama_model_load_from_file(model_path, model_params);
+        if (model) {
+            LOGi("%s: fallback load with use_mmap = false succeeded", __func__);
+        }
+    }
     env->ReleaseStringUTFChars(jmodel_path, model_path);
     if (!model) {
-        return 4;
+        LOGe("%s: llama_model_load_from_file() returned null after GGUF validation", __func__);
+        return 5;
     }
     g_model = model;
     return 0;

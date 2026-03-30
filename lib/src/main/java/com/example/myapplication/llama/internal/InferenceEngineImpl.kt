@@ -84,7 +84,8 @@ internal class InferenceEngineImpl private constructor(
             1 -> "Failed to load model: native file open failed."
             2 -> "Failed to load model: imported file is empty."
             3 -> "Failed to load model: imported file is unexpectedly small (${sizeMb} MB)."
-            4 -> "Failed to load model: not a valid GGUF model or unsupported by current llama.cpp build."
+            4 -> "Failed to load model: imported file does not begin with a valid GGUF header."
+            5 -> "Failed to load model: GGUF header is valid, but Android llama.cpp could not create the model. This is likely an Android runtime/build compatibility issue."
             else -> "Failed to load model: $code"
         }
     }

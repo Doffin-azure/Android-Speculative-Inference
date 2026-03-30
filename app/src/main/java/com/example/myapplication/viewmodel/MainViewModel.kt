@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.RandomAccessFile
 
 class MainViewModel(
     application: Application
@@ -235,6 +236,23 @@ class MainViewModel(
         require(targetFile.exists() && targetFile.canRead()) {
             "Imported model copy is not readable."
         }
+        if (candidate.sizeBytes > 0L) {
+            require(targetFile.length() == candidate.sizeBytes) {
+                "Imported model copy size mismatch: expected ${candidate.sizeBytes} bytes, got ${targetFile.length()} bytes."
+            }
+        }
+        require(readGgufHeader(targetFile) == "GGUF") {
+            "Imported model copy does not start with a GGUF header."
+        }
         return targetFile
+    }
+
+    private fun readGgufHeader(file: File): String {
+        RandomAccessFile(file, "r").use { raf ->
+            val header = ByteArray(4)
+            val bytesRead = raf.read(header)
+            require(bytesRead == 4) { "Imported model copy is too short to contain a GGUF header." }
+            return String(header, Charsets.US_ASCII)
+        }
     }
 }
