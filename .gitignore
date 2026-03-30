@@ -16,6 +16,7 @@ gradle-local.properties
 .idea/workspace.xml
 .idea/navEditor.xml
 .idea/assetWizardSettings.xml
+.idea/vcs.xml
 
 # Build outputs
 build/
