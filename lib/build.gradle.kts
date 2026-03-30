@@ -2,7 +2,15 @@ plugins {
     alias(libs.plugins.android.library)
 }
 
+val localProperties = java.util.Properties().apply {
+    val localFile = rootProject.file("gradle-local.properties")
+    if (localFile.exists()) {
+        localFile.inputStream().use(::load)
+    }
+}
+
 val llamaCppSourceDir = providers.gradleProperty("llamaCppSourceDir").orNull
+    ?: localProperties.getProperty("llamaCppSourceDir")
     ?: System.getenv("LLAMA_CPP_SRC")
 
 android {
