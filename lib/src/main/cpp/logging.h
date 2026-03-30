@@ -9,6 +9,7 @@
 
 #pragma once
 #include <android/log.h>
+#include <string>
 
 #ifndef LOG_TAG
 #define LOG_TAG "ai-chat"
@@ -57,10 +58,13 @@ static inline int android_log_prio_from_ggml(enum ggml_log_level level) {
     }
 }
 
+void aichat_capture_log_line(const char *text);
+
 static inline void aichat_android_log_callback(enum ggml_log_level level,
                                               const char* text,
                                               void* /*user*/) {
     const int prio = android_log_prio_from_ggml(level);
     if (!ai_should_log(prio)) return;
+    aichat_capture_log_line(text);
     __android_log_write(prio, LOG_TAG, text);
 }
