@@ -31,11 +31,13 @@ Already resolved:
 - native load diagnostics are more specific
 - desktop GGUF inspection works
 - desktop `llama-cli` has been built in WSL
+- desktop `llama-cli` has now successfully loaded the target GGUF and generated text
 
 Current strongest conclusion:
 
 - the tested `Llama-3.2-1B-Instruct-Q4_K_M.gguf` file appears structurally valid on the computer
-- Android-side load failure is therefore more likely to be caused by runtime compatibility or Android integration details than by an obviously corrupt model file
+- the same file also runs successfully through desktop `llama.cpp`
+- Android-side load failure is therefore much more likely to be caused by Android runtime compatibility or integration details than by the model artifact itself
 
 ## Important Files
 
@@ -61,15 +63,15 @@ Primary blocker:
 
 Secondary blocker:
 
-- desktop-side CLI runtime has been built, but a full successful generation run with the target model has not yet been fully confirmed in the documented environment
+- desktop-side runtime viability is no longer a blocker; it is now a confirmed baseline for comparison
 
 ## Recommended Next Technical Step
 
 The next step should focus on one of these:
 
 1. continue Android-side native load debugging with this same model
-2. continue desktop-side CLI execution until a successful generation run is confirmed
-3. compare Android-side behavior against desktop-side behavior using the same GGUF file
+2. compare Android-side behavior against the now-confirmed desktop success path using the same GGUF file
+3. inspect Android-specific backend/build/runtime differences that could explain the load mismatch
 
 ## What Not To Reopen
 

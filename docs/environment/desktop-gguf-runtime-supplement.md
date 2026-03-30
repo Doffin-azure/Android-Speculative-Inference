@@ -152,21 +152,33 @@ export LD_LIBRARY_PATH=/mnt/c/Users/JXZ/AndroidStudioProjects/llama.cpp/build-ws
   --simple-io
 ```
 
+Validated successful run from PowerShell:
+
+```powershell
+wsl.exe bash -lc "export LD_LIBRARY_PATH=/mnt/c/Users/JXZ/AndroidStudioProjects/llama.cpp/build-wsl-cli/bin:/mnt/c/Users/JXZ/AndroidStudioProjects/llama.cpp/build-wsl-cli/lib:/tmp/cmake-root/usr/lib/x86_64-linux-gnu:/tmp/cmake-root/lib/x86_64-linux-gnu; /mnt/c/Users/JXZ/AndroidStudioProjects/llama.cpp/build-wsl-cli/bin/llama-cli -m /mnt/c/Users/JXZ/AndroidStudioProjects/MyApplication2/Llama-3.2-1B-Instruct-Q4_K_M.gguf -p 'Hello' -n 8 --no-warmup --simple-io -t 2"
+```
+
+Observed result:
+
+- model loaded successfully
+- interactive prompt started successfully
+- prompt `Hello` produced a normal text reply
+- observed throughput was about `110.1 t/s` for prompt processing and `31.4 t/s` for generation in this run
+- a WSL localhost-proxy warning appeared, but it did not block runtime execution
+
 ## Current Interpretation
 
 What is already confirmed:
 
 - the GGUF can be parsed on the computer through `gguf-py`
 - a desktop `llama-cli` binary has been built successfully in WSL
-
-What is not yet fully confirmed in this supplement:
-
-- a successful full desktop generation run with this exact model in the current environment
+- the same GGUF has now completed a real text-generation run through desktop `llama-cli`
 
 Therefore:
 
-- the desktop-side environment is now good enough for direct model inspection
-- the next desktop-side step is to continue runtime execution testing with the built CLI if needed
+- the desktop-side environment is now good enough for both direct model inspection and real local execution
+- the GGUF file itself should now be treated as runtime-validated on the computer
+- the next desktop-side step is optional deeper benchmarking, not basic viability confirmation
 
 ## Repository Hygiene Notes
 
