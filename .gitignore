@@ -8,6 +8,7 @@ gradle-local.properties
 .gradle-user/
 .android-user/
 .kotlin/
+.venv-gguf/
 
 # Android Studio / IntelliJ
 .idea/caches
