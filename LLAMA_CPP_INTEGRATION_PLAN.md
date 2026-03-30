@@ -203,6 +203,24 @@ Android Studio verification needed by user:
 - Confirm `app` no longer expects its own CMake/native configuration.
 - Confirm native build responsibility is now entirely under `:lib`.
 
+## Official Native Replacement - 2026-03-30
+
+Completed in this node:
+- Replaced `lib/src/main/cpp/ai_chat.cpp` with an official `llama.cpp/examples/llama.android/lib`-derived implementation adapted to the local package name.
+- Added `lib/src/main/cpp/logging.h` from the official Android sample.
+- Updated `lib/build.gradle.kts` with the key official CMake arguments needed for real `llama.cpp` builds.
+- Created a machine-local `gradle-local.properties` pointing at the cloned local checkout:
+  `C:\Users\JXZ\AndroidStudioProjects\llama.cpp`
+
+Current status:
+- The project is no longer using a hand-written stub native shell.
+- The native layer is now shaped around the official llama.android implementation and is ready to compile against the local llama.cpp checkout.
+
+Android Studio verification needed by user:
+- Re-sync Gradle so `gradle-local.properties` is picked up.
+- Confirm `:lib` CMake now resolves headers and targets from the local `llama.cpp` checkout.
+- Confirm whether the next failure, if any, is now a real upstream integration/build issue rather than a local project-structure issue.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
