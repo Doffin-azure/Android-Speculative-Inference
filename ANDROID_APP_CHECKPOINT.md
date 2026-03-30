@@ -26,6 +26,16 @@ What this means:
 - There are no more preparation-only nodes that need to be completed before starting the real integration.
 - The next step is no longer project preparation; it is the actual migration of official `llama.cpp/examples/llama.android/lib` native and Gradle/CMake structure into this project.
 
+## Historical Note - 2026-03-30
+
+Some older sections below still describe the first stub-era layout where `app/src/main/cpp`, `LlamaBridge`, or `draftTokenIds` looked more central.
+
+Treat those as historical notes only.
+The current source of truth is:
+- real integration target: `:lib`
+- active engine path: `MainViewModel -> LocalLlmImpl -> AiChat.getInferenceEngine(context) -> :lib`
+- old app-local JNI path: retained only as legacy/reference code
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：

@@ -157,6 +157,16 @@ Next phase boundary:
 - The next meaningful step is the real migration of official `llama.cpp/examples/llama.android/lib` build/native structure into this project.
 - Starting from that point, the work is no longer preparation; it is actual llama.cpp integration.
 
+## Interface Noise Cleanup - 2026-03-30
+
+Completed in this node:
+- Removed the unused stub-era `draftTokenIds` method from the app-local `LocalLlm` adapter.
+- Added an explicit historical-note override so any older references to app-local JNI centrality are not mistaken for the current design.
+
+Why this mattered:
+- `draftTokenIds` was no longer part of the real migration direction.
+- Removing it reduces one more source of confusion before actual llama.cpp integration starts.
+
 ## ViewModel Cleanup Wiring - 2026-03-30
 
 Completed in this node:
