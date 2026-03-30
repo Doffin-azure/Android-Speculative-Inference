@@ -253,6 +253,21 @@ Meaning of this checkpoint:
 - The project has crossed from project-integration work into genuine upstream build/runtime validation.
 - Remaining issues are likely to come from real llama.cpp compilation/runtime behavior, not from local adapter scaffolding.
 
+## First Real Compile Error - 2026-03-30
+
+Observed from Android Studio:
+- `:lib:buildCMakeRelease[arm64-v8a]` failed while compiling `ai_chat.cpp`.
+- The failure came from `logging.h` using `__android_log_is_loggable`, which is unavailable before Android 30.
+- The current app/native target is still Android 26, so the official logging helper needed a compatibility adjustment.
+
+Completed in this node:
+- Added an API-level compatibility fallback in `lib/src/main/cpp/logging.h`.
+- For Android API levels below 30, logging now falls back to unconditional enablement instead of calling the unavailable function.
+
+Meaning of this checkpoint:
+- The build has now progressed past pure wiring problems and is surfacing concrete source-level compatibility issues.
+- This is expected and is the normal path for upstream integration on a lower minSdk project.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
