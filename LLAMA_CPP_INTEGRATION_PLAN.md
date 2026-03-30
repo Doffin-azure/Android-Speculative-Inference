@@ -504,6 +504,16 @@ Meaning of this checkpoint:
 - The project should now treat "Android can locally load and run a real model" as achieved for the current baseline.
 - Subsequent work should build from this success instead of continuing backend-load triage as the main path.
 
+## Ignore Hygiene Update - 2026-03-30
+
+Completed in this node:
+- Added ignore coverage for local `.gguf` model files.
+- Added ignore coverage for the local `MIDTERM_REPORT.md` working file.
+
+Meaning of this checkpoint:
+- Large machine-local artifacts and local report drafts are now kept out of routine repository sync.
+- The git history can stay centered on implementation and curated project documentation.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:

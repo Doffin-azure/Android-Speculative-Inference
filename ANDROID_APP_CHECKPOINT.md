@@ -226,6 +226,16 @@ Why this matters:
   Android can load a real GGUF model and generate text locally.
 - The immediate next work should move above this baseline instead of reopening earlier backend-load uncertainty.
 
+## Ignore Rules Update - 2026-03-30
+
+Completed in this node:
+- Updated `.gitignore` to exclude local GGUF model files.
+- Updated `.gitignore` to exclude the local `MIDTERM_REPORT.md` file from repository sync.
+
+Why this matters:
+- Large local model artifacts and local reporting drafts will no longer keep appearing as untracked noise.
+- Repository sync can stay focused on code and project documentation that should actually be versioned.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：

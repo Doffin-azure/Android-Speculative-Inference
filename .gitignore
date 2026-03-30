@@ -9,8 +9,10 @@ gradle-local.properties
 .android-user/
 .kotlin/
 .venv-gguf/
-CUsersJXZ/
+C飥篣sersJXZ/
 cmake-data_*.deb
+*.gguf
+MIDTERM_REPORT.md
 
 # Android Studio / IntelliJ
 .idea/caches
