@@ -47,6 +47,15 @@ Current structure:
 
 Any older notes below that discuss `app/src/main/cpp` or `LlamaBridge` should be treated as historical background only.
 
+## First Real Native Build Success - 2026-03-30
+
+Android Studio has now completed a successful native build with the local `llama.cpp` checkout wired in.
+
+Current project status:
+- real `llama.cpp` sources are participating in the Android build
+- `:lib` is the active native integration module
+- the remaining work is runtime validation, on-device behavior checks, and fixing any model-load / inference issues that appear next
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：
