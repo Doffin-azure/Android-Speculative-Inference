@@ -426,6 +426,15 @@ Completed in this node:
 Why this matters:
 - This is the concrete fix path for the observed on-device `Cannot read file` failure.
 
+## Native Load Diagnostics Upgrade - 2026-03-30
+
+Completed in this node:
+- Added native preflight validation before model load.
+- The load path now reports more specific failure categories for file-open, empty-file, suspiciously small file, and invalid header cases.
+
+Why this matters:
+- This should make the next `loadModel()` failure much faster to interpret.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:

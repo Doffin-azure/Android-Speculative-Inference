@@ -134,6 +134,15 @@ Why this matters:
 - This directly targets the observed `Cannot read file` failure on device.
 - It avoids fragile assumptions about converting SAF-selected content into directly readable filesystem paths.
 
+## Native Load Diagnostics Upgrade - 2026-03-30
+
+Completed in this node:
+- Added native preflight checks before `llama_model_load_from_file()` runs.
+- Load failures now distinguish between file-open failure, empty file, suspiciously small file, and invalid/non-GGUF header cases.
+
+Why this matters:
+- The next on-device failure should be much more informative than a generic `Failed to load model: 1`.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：

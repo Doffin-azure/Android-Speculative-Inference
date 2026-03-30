@@ -76,6 +76,19 @@ internal class InferenceEngineImpl private constructor(
     @FastNative
     private external fun shutdown()
 
+    private fun describeLoadFailure(code: Int, modelPath: String): String {
+        val file = File(modelPath)
+        val sizeBytes = file.length()
+        val sizeMb = sizeBytes / (1024 * 1024)
+        return when (code) {
+            1 -> "Failed to load model: native file open failed."
+            2 -> "Failed to load model: imported file is empty."
+            3 -> "Failed to load model: imported file is unexpectedly small (${sizeMb} MB)."
+            4 -> "Failed to load model: not a valid GGUF model or unsupported by current llama.cpp build."
+            else -> "Failed to load model: $code"
+        }
+    }
+
     private val mutableState = MutableStateFlow<InferenceEngine.State>(InferenceEngine.State.Uninitialized)
     override val state: StateFlow<InferenceEngine.State> = mutableState.asStateFlow()
 
@@ -158,7 +171,7 @@ internal class InferenceEngineImpl private constructor(
 
             val loadResult = load(pathToModel)
             if (loadResult != 0) {
-                throw IOException("Failed to load model: $loadResult")
+                throw IOException(describeLoadFailure(loadResult, pathToModel))
             }
 
             val prepareResult = prepare()
