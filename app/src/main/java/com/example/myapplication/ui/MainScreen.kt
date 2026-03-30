@@ -1,15 +1,22 @@
 package com.example.myapplication.ui
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
+import androidx.compose.runtime.Composable
 import com.example.myapplication.viewmodel.MainViewModel
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -19,6 +26,8 @@ fun MainScreen(
     statusMessage: String,
     output: String,
     lastError: String,
+    eventLog: String,
+    diagnosticLogPath: String,
     isModelLoaded: Boolean,
     isLoadingModel: Boolean,
     isGenerating: Boolean,
@@ -32,6 +41,7 @@ fun MainScreen(
 ) {
     var prompt by remember { mutableStateOf("") }
     val busy = isLoadingModel || isGenerating
+    val clipboardManager = LocalClipboardManager.current
 
     Column(
         modifier = Modifier
@@ -58,9 +68,20 @@ fun MainScreen(
             )
         }
 
+        if (diagnosticLogPath.isNotBlank()) {
+            CopyableReadOnlyField(
+                label = "Diagnostic Log Path",
+                value = diagnosticLogPath,
+                onCopy = { clipboardManager.setText(AnnotatedString(diagnosticLogPath)) },
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+
         if (lastError.isNotBlank()) {
-            Text(
-                text = "Last error: $lastError",
+            CopyableReadOnlyField(
+                label = "Last Error",
+                value = lastError,
+                onCopy = { clipboardManager.setText(AnnotatedString(lastError)) },
                 modifier = Modifier.padding(top = 8.dp)
             )
         }
@@ -123,9 +144,46 @@ fun MainScreen(
             Text(if (isGenerating) "Running..." else "Run Local")
         }
 
-        Text(
-            text = output,
+        CopyableReadOnlyField(
+            label = "Output",
+            value = output,
+            onCopy = { clipboardManager.setText(AnnotatedString(output)) },
             modifier = Modifier.padding(top = 16.dp)
+        )
+
+        CopyableReadOnlyField(
+            label = "Event Log",
+            value = eventLog,
+            onCopy = { clipboardManager.setText(AnnotatedString(eventLog)) },
+            modifier = Modifier.padding(top = 16.dp)
+        )
+    }
+}
+
+@Composable
+private fun CopyableReadOnlyField(
+    label: String,
+    value: String,
+    onCopy: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row {
+            Text(text = label, modifier = Modifier.weight(1f))
+            Button(onClick = onCopy) {
+                Text("Copy")
+            }
+        }
+
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            minLines = 4,
+            maxLines = 12
         )
     }
 }
