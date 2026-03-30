@@ -9,6 +9,8 @@ gradle-local.properties
 .android-user/
 .kotlin/
 .venv-gguf/
+CUsersJXZ/
+cmake-data_*.deb
 
 # Android Studio / IntelliJ
 .idea/caches
