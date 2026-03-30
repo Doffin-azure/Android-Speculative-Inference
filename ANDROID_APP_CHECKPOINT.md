@@ -36,6 +36,17 @@ The current source of truth is:
 - active engine path: `MainViewModel -> LocalLlmImpl -> AiChat.getInferenceEngine(context) -> :lib`
 - old app-local JNI path: retained only as legacy/reference code
 
+## App JNI Removed - 2026-03-30
+
+The old app-local JNI bridge has now been removed from the active project structure.
+
+Current structure:
+- `app` no longer owns `externalNativeBuild`
+- `app/src/main/cpp` is no longer part of the active integration path
+- all native integration responsibility is now concentrated in `:lib`
+
+Any older notes below that discuss `app/src/main/cpp` or `LlamaBridge` should be treated as historical background only.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：
