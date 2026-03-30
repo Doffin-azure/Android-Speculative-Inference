@@ -1,9 +1,12 @@
 package com.example.myapplication
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import com.example.myapplication.ui.MainScreen
@@ -16,6 +19,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
+            val directoryPicker = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocumentTree()
+            ) { uri: Uri? ->
+                uri?.let(viewModel::onModelDirectorySelected)
+            }
+
             val backendLabel by viewModel.backendLabel.collectAsState()
             val statusMessage by viewModel.statusMessage.collectAsState()
             val output by viewModel.output.collectAsState()
@@ -37,6 +46,9 @@ class MainActivity : ComponentActivity() {
                 modelPath = modelPath,
                 loadedModelPath = loadedModelPath,
                 onModelPathChange = { viewModel.updateModelPath(it) },
+                onPickModelDirectory = {
+                    directoryPicker.launch(null)
+                },
                 onLoadModel = { viewModel.loadModel() },
                 onRun = { prompt -> viewModel.runLocal(prompt) }
             )

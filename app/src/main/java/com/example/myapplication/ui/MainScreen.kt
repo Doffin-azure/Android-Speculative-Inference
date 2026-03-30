@@ -24,6 +24,7 @@ fun MainScreen(
     modelPath: String,
     loadedModelPath: String,
     onModelPathChange: (String) -> Unit,
+    onPickModelDirectory: () -> Unit,
     onLoadModel: () -> Unit,
     onRun: (String) -> Unit
 ) {
@@ -65,14 +66,22 @@ fun MainScreen(
         TextField(
             value = modelPath,
             onValueChange = onModelPathChange,
-            label = { Text("Model Path") },
+            label = { Text("Model File Path") },
             enabled = !busy,
             modifier = Modifier.padding(top = 16.dp)
         )
 
         Button(
-            onClick = onLoadModel,
+            onClick = onPickModelDirectory,
             enabled = !busy,
+            modifier = Modifier.padding(top = 16.dp)
+        ) {
+            Text("Pick Model Directory")
+        }
+
+        Button(
+            onClick = onLoadModel,
+            enabled = !busy && modelPath.isNotBlank(),
             modifier = Modifier.padding(top = 16.dp)
         ) {
             Text(if (isLoadingModel) "Loading..." else "Load Model")
