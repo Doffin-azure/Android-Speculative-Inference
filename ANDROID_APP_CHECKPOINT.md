@@ -33,6 +33,7 @@ Current stage:
 Effective from this checkpoint:
 - Do not forget git sync after each completed node.
 - Do not treat git sync as silent housekeeping; include an explicit explanation of what the node changed.
+- Do not stop at the git explanation; also record the node summary in the markdown checkpoint/archive documents.
 - Do not let Codex perform bundle work.
 - If a bundle or packaging step is needed, ask the user to do it in Android Studio and provide the expected verification points.
 
@@ -179,6 +180,32 @@ Completed in this node:
 Why this matters:
 - The model file is no longer only "structurally valid"; it is now proven runnable on the computer.
 - The Android-side failure should now be treated primarily as an Android runtime/integration issue rather than a bad-model suspicion.
+
+## Android Diagnostics UI And Logging - 2026-03-30
+
+Completed in these recent nodes:
+- Added copyable read-only UI fields for `Last Error`, `Output`, `Event Log`, and the diagnostic log path.
+- Added event-log accumulation in the app layer so runtime steps are easier to reconstruct.
+- Added automatic writing of the latest diagnostic snapshot into the app-private file:
+  `files/logs/diagnostic-latest.txt`
+- Added a fix for the Compose diagnostics-header layout compile error after the first UI iteration.
+
+Why this matters:
+- Android-side failures can now be copied directly from the UI.
+- Android Studio `Device File Explorer` can now pull a stable diagnostic text file instead of relying only on screenshots or manual copying.
+
+## Android Backend Root-Cause Narrowing - 2026-03-30
+
+Completed in these recent nodes:
+- Added fallback loading with `use_mmap = false` after initial native load failure.
+- Added propagation of recent native load diagnostics into the UI error text.
+- Confirmed from device diagnostics that the previous failure reason was:
+  `no backends are loaded`
+- Switched Android build/runtime configuration away from dynamic ggml backend loading and toward built-in backend loading for a more stable baseline.
+
+Why this matters:
+- The runtime failure has been narrowed from a vague Android incompatibility suspicion to a specific backend-loading problem.
+- Current Android verification should now test whether the built-in backend path restores successful model loading.
 
 ## 当前目标
 
