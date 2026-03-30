@@ -268,6 +268,17 @@ Meaning of this checkpoint:
 - The build has now progressed past pure wiring problems and is surfacing concrete source-level compatibility issues.
 - This is expected and is the normal path for upstream integration on a lower minSdk project.
 
+## First Real Native Build Success - 2026-03-30
+
+Observed from Android Studio:
+- Build completed successfully.
+- `:lib` finished a real native build against the local `llama.cpp` checkout.
+- The project has now crossed from source-integration work into runtime/behavior validation territory.
+
+Meaning of this checkpoint:
+- Official `llama.cpp` sources are now successfully wired into this project's Android native build.
+- The next meaningful work is no longer "make it compile"; it is validating runtime behavior on device and fixing any model-loading or generation issues that appear there.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
