@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <iomanip>
+#include <mutex>
 #include <sampling.h>
 #include <sys/stat.h>
 #include <string>
@@ -40,6 +41,30 @@ static llama_context *g_context;
 static llama_batch g_batch;
 static common_chat_templates_ptr g_chat_templates;
 static common_sampler *g_sampler;
+static std::mutex g_log_mutex;
+static std::string g_recent_native_logs;
+
+static void clear_recent_native_logs() {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    g_recent_native_logs.clear();
+}
+
+void aichat_capture_log_line(const char *text) {
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    g_recent_native_logs.append(text);
+    constexpr size_t MAX_LOG_CHARS = 4000;
+    if (g_recent_native_logs.size() > MAX_LOG_CHARS) {
+        g_recent_native_logs.erase(0, g_recent_native_logs.size() - MAX_LOG_CHARS);
+    }
+}
+
+static std::string recent_native_logs_snapshot() {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    return g_recent_native_logs;
+}
 
 extern "C"
 JNIEXPORT void JNICALL
@@ -64,6 +89,7 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_load(
         JNIEnv *env,
         jobject,
         jstring jmodel_path) {
+    clear_recent_native_logs();
     llama_model_params model_params = llama_model_default_params();
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
@@ -134,6 +160,15 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_load(
     }
     g_model = model;
     return 0;
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_lastNativeLoadDiagnostics(
+        JNIEnv *env,
+        jobject /* unused */) {
+    const std::string snapshot = recent_native_logs_snapshot();
+    return env->NewStringUTF(snapshot.c_str());
 }
 
 static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {

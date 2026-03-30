@@ -53,6 +53,9 @@ internal class InferenceEngineImpl private constructor(
     private external fun load(modelPath: String): Int
 
     @FastNative
+    private external fun lastNativeLoadDiagnostics(): String
+
+    @FastNative
     private external fun prepare(): Int
 
     @FastNative
@@ -80,13 +83,18 @@ internal class InferenceEngineImpl private constructor(
         val file = File(modelPath)
         val sizeBytes = file.length()
         val sizeMb = sizeBytes / (1024 * 1024)
+        val nativeDetails = runCatching { lastNativeLoadDiagnostics().trim() }.getOrDefault("")
+        val detailSuffix = nativeDetails
+            .takeIf { it.isNotBlank() }
+            ?.let { " Native details: ${it.takeLast(600)}" }
+            .orEmpty()
         return when (code) {
-            1 -> "Failed to load model: native file open failed."
-            2 -> "Failed to load model: imported file is empty."
-            3 -> "Failed to load model: imported file is unexpectedly small (${sizeMb} MB)."
-            4 -> "Failed to load model: imported file does not begin with a valid GGUF header."
-            5 -> "Failed to load model: GGUF header is valid, but Android llama.cpp could not create the model. This is likely an Android runtime/build compatibility issue."
-            else -> "Failed to load model: $code"
+            1 -> "Failed to load model: native file open failed.$detailSuffix"
+            2 -> "Failed to load model: imported file is empty.$detailSuffix"
+            3 -> "Failed to load model: imported file is unexpectedly small (${sizeMb} MB).$detailSuffix"
+            4 -> "Failed to load model: imported file does not begin with a valid GGUF header.$detailSuffix"
+            5 -> "Failed to load model: GGUF header is valid, but Android llama.cpp could not create the model. This is likely an Android runtime/build compatibility issue.$detailSuffix"
+            else -> "Failed to load model: $code.$detailSuffix"
         }
     }
 
