@@ -157,6 +157,25 @@ Next phase boundary:
 - The next meaningful step is the real migration of official `llama.cpp/examples/llama.android/lib` build/native structure into this project.
 - Starting from that point, the work is no longer preparation; it is actual llama.cpp integration.
 
+## Actual Integration Start - 2026-03-30
+
+Completed in this node:
+- Replaced the ad-hoc `NativeInferenceEngine` bridge with an official-style `InferenceEngineImpl` singleton in `:lib`.
+- Changed `AiChat` to prefer `InferenceEngineImpl.getInstance(context)` and only fall back to `StubInferenceEngine` if native loading fails.
+- Migrated `ai_chat.cpp` to an official-style engine JNI contract:
+  `init`, `load`, `prepare`, `systemInfo`, `benchModel`, `processSystemPrompt`, `processUserPrompt`, `generateNextToken`, `unload`, `shutdown`.
+- Switched the `:lib` native library naming and CMake project shape closer to the official sample by moving to `ai-chat`.
+- Updated `lib/src/main/cpp/CMakeLists.txt` so that, when `LLAMA_CPP_SRC` is supplied, it begins using official-style `add_subdirectory(...)`, include paths, and `llama/common/android` linking.
+
+Current status:
+- Kotlin and C++ entry points are now shaped for real llama.android integration.
+- Native behavior is still stubbed until the actual llama.cpp source tree is supplied and the real native body is migrated.
+
+Android Studio verification needed by user:
+- Sync Gradle project.
+- Confirm `:lib` resolves after the `InferenceEngineImpl` migration.
+- Confirm the new native library name `ai-chat` is reflected without unresolved symbol errors.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
