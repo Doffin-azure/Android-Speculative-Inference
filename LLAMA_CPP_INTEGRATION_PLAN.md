@@ -113,6 +113,20 @@ Android Studio verification needed by user:
 - Sync Gradle project.
 - Optionally create a local `gradle-local.properties` later and confirm the property is picked up when needed.
 
+## Build Script Fix - 2026-03-30
+
+Completed in this node:
+- Fixed `lib/build.gradle.kts` after Android Studio reported Kotlin DSL script compilation errors.
+- Replaced the fragile `java.util.Properties()` / `use(::load)` form with explicit `import java.util.Properties` and `use { input -> load(input) }`.
+
+Why this mattered:
+- The previous script form was accepted in theory but failed in the Gradle Kotlin DSL script compilation context used by Android Studio.
+- This was a real integration blocker, so it was corrected immediately and recorded here.
+
+Android Studio verification needed by user:
+- Re-run Gradle Sync / build model load.
+- Confirm the `:lib` script now configures without Kotlin DSL compilation errors.
+
 ## ViewModel Cleanup Wiring - 2026-03-30
 
 Completed in this node:

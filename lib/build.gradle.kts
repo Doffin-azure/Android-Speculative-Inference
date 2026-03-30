@@ -1,11 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.library)
 }
 
-val localProperties = java.util.Properties().apply {
+val localProperties = Properties().apply {
     val localFile = rootProject.file("gradle-local.properties")
     if (localFile.exists()) {
-        localFile.inputStream().use(::load)
+        localFile.inputStream().use { input ->
+            load(input)
+        }
     }
 }
 
