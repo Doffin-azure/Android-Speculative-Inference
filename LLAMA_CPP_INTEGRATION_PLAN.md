@@ -33,7 +33,7 @@ From 2026-03-30 onward, repeat verification in Android Studio instead of termina
 
 Current effective call chain:
 
-`MainViewModel(AndroidViewModel) -> LocalLlmImpl(context) -> AiChat.getInferenceEngine(context) -> :lib/NativeInferenceEngine -> :lib NativeBridge -> lib/src/main/cpp/ai_chat.cpp`
+`MainViewModel(AndroidViewModel) -> LocalLlmImpl(context) -> AiChat.getInferenceEngine(context) -> :lib/InferenceEngineImpl -> lib/src/main/cpp/ai_chat.cpp`
 
 Remaining next step:
 - Replace `lib/src/main/cpp/ai_chat.cpp` and `lib/src/main/cpp/CMakeLists.txt` with the real `llama.cpp/examples/llama.android/lib` integration structure.
@@ -175,6 +175,16 @@ Android Studio verification needed by user:
 - Sync Gradle project.
 - Confirm `:lib` resolves after the `InferenceEngineImpl` migration.
 - Confirm the new native library name `ai-chat` is reflected without unresolved symbol errors.
+
+## Integration Consistency Pass - 2026-03-30
+
+Completed in this node:
+- Updated the archive’s top-level call chain so it matches the new `InferenceEngineImpl` architecture.
+- Relaxed `InferenceEngineImpl` cleanup handling so transitional initialization state is tolerated more safely.
+
+Why this matters:
+- The archive once again matches the actual code path after the first migration wave.
+- Early lifecycle calls are less likely to trip over the engine’s initialization boundary.
 
 ## Interface Noise Cleanup - 2026-03-30
 
