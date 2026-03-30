@@ -83,6 +83,21 @@ Android Studio verification needed by user:
 - Sync Gradle project and confirm no issues from the added environment-variable fallback.
 - When you are ready to start real integration later, configure the path locally without modifying tracked files.
 
+## Context Wiring Alignment - 2026-03-30
+
+Completed in this node:
+- Switched the active app inference path to request the engine through `AiChat.getInferenceEngine(context)`.
+- Updated `LocalLlmImpl` to require an Android `Context`.
+- Updated `MainViewModel` to `AndroidViewModel` so the app can provide `Application` context without inventing a custom factory yet.
+
+Why this matters:
+- The official `llama.android` sample exposes the engine through a context-aware entry point.
+- This removes one more mismatch before real llama.cpp integration begins.
+
+Android Studio verification needed by user:
+- Sync Gradle project and confirm `MainViewModel` still instantiates correctly through `by viewModels()`.
+- Confirm there are no IDE errors after changing `MainViewModel` from `ViewModel` to `AndroidViewModel`.
+
 ## Legacy Bridge Clarification - 2026-03-30
 
 Completed in this node:

@@ -1,6 +1,7 @@
 package com.example.myapplication.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myapplication.inference.LocalLlm
 import com.example.myapplication.inference.LocalLlmImpl
@@ -10,8 +11,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class MainViewModel(
-    private val localLlm: LocalLlm = LocalLlmImpl()
-) : ViewModel() {
+    application: Application
+) : AndroidViewModel(application) {
+
+    private val localLlm: LocalLlm = LocalLlmImpl(application.applicationContext)
 
     private val _backendLabel = MutableStateFlow("Detecting backend...")
     val backendLabel: StateFlow<String> = _backendLabel.asStateFlow()
