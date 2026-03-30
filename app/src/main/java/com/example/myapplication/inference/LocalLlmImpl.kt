@@ -57,8 +57,4 @@ class LocalLlmImpl(context: Context) : LocalLlm {
     override fun cleanup() {
         engine.cleanUp()
     }
-
-    override suspend fun draftTokenIds(prompt: String, count: Int): List<Int> {
-        return (1..count).toList()
-    }
 }

@@ -10,5 +10,4 @@ interface LocalLlm {
     suspend fun generate(prompt: String, maxTokens: Int = 32): String
     suspend fun benchmark(pp: Int, tg: Int, pl: Int, nr: Int = 1): String
     fun cleanup()
-    suspend fun draftTokenIds(prompt: String, count: Int = 4): List<Int>
 }
