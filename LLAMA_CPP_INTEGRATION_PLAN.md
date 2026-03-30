@@ -457,6 +457,16 @@ Primary entry point:
 Why this matters:
 - Resume cost should now be lower because the high-signal operational material has a dedicated home.
 
+## Desktop Runtime Confirmation - 2026-03-30
+
+Completed in this node:
+- Confirmed that the desktop WSL environment can do more than inspect GGUF metadata.
+- `llama-cli` successfully loaded `Llama-3.2-1B-Instruct-Q4_K_M.gguf` and generated a normal reply to a minimal prompt.
+
+Meaning of this checkpoint:
+- The target model file and desktop-side `llama.cpp` runtime are now confirmed working together.
+- Android-side failure analysis should proceed under the assumption that the remaining mismatch is Android-specific unless new contrary evidence appears.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:

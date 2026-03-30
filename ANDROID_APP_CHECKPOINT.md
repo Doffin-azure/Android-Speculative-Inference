@@ -170,6 +170,16 @@ Primary entry point:
 Why this matters:
 - New work can resume from the curated docs first instead of searching through long root-level archives.
 
+## Desktop Runtime Success - 2026-03-30
+
+Completed in this node:
+- Confirmed that the computer-side WSL `llama-cli` environment can load `Llama-3.2-1B-Instruct-Q4_K_M.gguf`.
+- Confirmed that the same file can produce a normal text response from a minimal `Hello` prompt.
+
+Why this matters:
+- The model file is no longer only "structurally valid"; it is now proven runnable on the computer.
+- The Android-side failure should now be treated primarily as an Android runtime/integration issue rather than a bad-model suspicion.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：
