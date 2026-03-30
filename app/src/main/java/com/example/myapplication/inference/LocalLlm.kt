@@ -6,6 +6,9 @@ interface LocalLlm {
     fun loadedModelPath(): String
     fun lastError(): String
     suspend fun loadModel(modelPath: String): Boolean
+    suspend fun setSystemPrompt(systemPrompt: String): Boolean
     suspend fun generate(prompt: String, maxTokens: Int = 32): String
+    suspend fun benchmark(pp: Int, tg: Int, pl: Int, nr: Int = 1): String
+    fun cleanup()
     suspend fun draftTokenIds(prompt: String, count: Int = 4): List<Int>
 }
