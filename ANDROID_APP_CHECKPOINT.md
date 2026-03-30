@@ -207,6 +207,25 @@ Why this matters:
 - The runtime failure has been narrowed from a vague Android incompatibility suspicion to a specific backend-loading problem.
 - Current Android verification should now test whether the built-in backend path restores successful model loading.
 
+## Android Local Baseline Success - 2026-03-30
+
+Completed in this node:
+- Confirmed that the Android app can now load `Llama-3.2-1B-Instruct-Q4_K_M.gguf` on device.
+- Confirmed that the imported model copy is used successfully from:
+  `/data/user/0/com.example.myapplication/files/imported-models/Llama-3.2-1B-Instruct-Q4_K_M.gguf`
+- Confirmed that a minimal prompt completes local generation successfully on device.
+- Verified that the built-in ggml backend path resolved the previous `no backends are loaded` failure.
+
+Observed result summary:
+- `Model loaded: true`
+- `Status: Inference complete.`
+- minimal prompt output returned visible text
+
+Why this matters:
+- The project has now crossed the key local-baseline milestone:
+  Android can load a real GGUF model and generate text locally.
+- The immediate next work should move above this baseline instead of reopening earlier backend-load uncertainty.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：

@@ -492,6 +492,18 @@ Meaning of this checkpoint:
 - The current Android blocker is no longer "unknown model load failure".
 - The active hypothesis is now specifically about Android backend initialization/loading behavior, and the project is testing the built-in backend path as the corrective baseline.
 
+## Android Local Runtime Milestone - 2026-03-30
+
+Completed in this node:
+- Built-in backend loading successfully restored Android-side model loading.
+- The app successfully loaded `Llama-3.2-1B-Instruct-Q4_K_M.gguf` from the app-private imported-model path.
+- The app completed a real minimal local generation run and returned visible output.
+
+Meaning of this checkpoint:
+- The Android local baseline is now proven with a real GGUF model, not just desktop-side validation.
+- The project should now treat "Android can locally load and run a real model" as achieved for the current baseline.
+- Subsequent work should build from this success instead of continuing backend-load triage as the main path.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
