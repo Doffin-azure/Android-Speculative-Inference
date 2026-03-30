@@ -136,6 +136,27 @@ Completed in this node:
 Why this matters:
 - The archive is now safe to use as the single source of truth when resuming work.
 
+## Config Ergonomics Polish - 2026-03-30
+
+Completed in this node:
+- Added explicit path-resolution instructions to `gradle-local.template.properties`.
+- Added comments in `lib/build.gradle.kts` and `lib/src/main/cpp/CMakeLists.txt` to clarify that machine-local llama.cpp paths must not be committed.
+- Clarified the exact handoff point between the current stub path and the future real-source integration.
+
+Why this matters:
+- The remaining setup is now discoverable directly from the files the next integration step will touch.
+- This reduces the chance of path confusion when real llama.cpp work begins.
+
+## Preparation Complete - 2026-03-30
+
+Status:
+- All preparation-only nodes are complete.
+- There are no remaining housekeeping, wiring, local-config, or archive-consistency tasks that should be done before real integration starts.
+
+Next phase boundary:
+- The next meaningful step is the real migration of official `llama.cpp/examples/llama.android/lib` build/native structure into this project.
+- Starting from that point, the work is no longer preparation; it is actual llama.cpp integration.
+
 ## ViewModel Cleanup Wiring - 2026-03-30
 
 Completed in this node:

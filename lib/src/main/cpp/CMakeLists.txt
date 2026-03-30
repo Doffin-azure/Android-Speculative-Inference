@@ -4,6 +4,9 @@ project("ai_chat_jni")
 
 set(USE_LLAMA_CPP OFF)
 
+# Actual llama.cpp source integration should start by providing LLAMA_CPP_SRC,
+# then replacing the current stub implementation in ai_chat.cpp with the
+# official llama.android/lib native wiring.
 if (DEFINED LLAMA_CPP_SRC AND EXISTS "${LLAMA_CPP_SRC}/CMakeLists.txt")
     message(STATUS "Using external llama.cpp source: ${LLAMA_CPP_SRC}")
     set(USE_LLAMA_CPP ON)
