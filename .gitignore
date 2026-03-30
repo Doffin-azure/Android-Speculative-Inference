@@ -1,0 +1,32 @@
+*.iml
+.DS_Store
+
+# Local machine / SDK configuration
+local.properties
+.gradle/
+.gradle-user/
+.android-user/
+
+# Android Studio / IntelliJ
+.idea/caches
+.idea/libraries
+.idea/modules.xml
+.idea/workspace.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+
+# Build outputs
+build/
+*/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# APK / AAB outputs
+*.apk
+*.aab
+*.ap_
+
+# Native / profiling artifacts
+*.so
+*.hprof
