@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+// Legacy app-local stub JNI. The active migration target is lib/src/main/cpp/ai_chat.cpp.
+
 namespace {
 bool g_model_loaded = false;
 std::string g_model_path;

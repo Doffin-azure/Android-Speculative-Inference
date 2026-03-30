@@ -50,6 +50,7 @@ android {
     }
     externalNativeBuild {
         cmake {
+            // Legacy JNI stub only. Real llama.cpp integration is being prepared in :lib.
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }

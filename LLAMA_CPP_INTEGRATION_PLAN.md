@@ -67,6 +67,22 @@ Android Studio verification needed by user:
 - Sync Gradle project after the new optional `llamaCppSourceDir` handling.
 - If you later clone `llama.cpp`, provide the path from Android Studio Gradle settings or a local Gradle property and confirm CMake sees it.
 
+## Legacy Bridge Clarification - 2026-03-30
+
+Completed in this node:
+- Marked the `app` module JNI bridge as legacy/reference-only.
+- Added comments in `app/build.gradle.kts`, `app/src/main/java/.../LlamaBridge.kt`, and `app/src/main/cpp/*` to reduce confusion about the active migration path.
+- Confirmed the intended real integration target remains `:lib`, not the old app-local JNI files.
+
+Current rule of thumb:
+- Keep `app/src/main/cpp/llama_jni.cpp` buildable for now.
+- Do not extend the old `app` JNI path with new llama.cpp logic.
+- Put all new local inference integration work into `:lib`.
+
+Android Studio verification needed by user:
+- Sync Gradle project and ensure the new comments/metadata changes do not affect indexing.
+- Continue treating `:lib` as the only module where future llama.cpp integration work should land.
+
 ## 当前状态
 
 项目已经具备这些基础：
