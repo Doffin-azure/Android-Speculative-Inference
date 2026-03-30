@@ -1,5 +1,6 @@
 package com.example.myapplication.llama
 
+import android.content.Context
 import com.example.myapplication.llama.internal.StubInferenceEngine
 import com.example.myapplication.llama.internal.NativeInferenceEngine
 
@@ -11,6 +12,8 @@ object AiChat {
     private val engine: InferenceEngine by lazy {
         runCatching { NativeInferenceEngine() }.getOrElse { StubInferenceEngine() }
     }
+
+    fun getInferenceEngine(context: Context): InferenceEngine = engine
 
     fun getInferenceEngine(): InferenceEngine = engine
 }

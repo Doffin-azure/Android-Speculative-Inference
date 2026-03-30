@@ -30,15 +30,32 @@ internal class NativeInferenceEngine : InferenceEngine {
         }
     }
 
-    override fun generate(prompt: String, maxTokens: Int): Flow<String> = flow {
+    override suspend fun setSystemPrompt(systemPrompt: String) {
+        if (!NativeBridge.isModelLoaded()) {
+            val message = NativeBridge.lastError().ifBlank { "Load a model before setting the system prompt." }
+            mutableState.value = InferenceEngine.State.Error(message)
+            return
+        }
+
+        mutableState.value = InferenceEngine.State.ProcessingSystemPrompt
+        val ok = NativeBridge.setSystemPrompt(systemPrompt)
+        mutableState.value = if (ok) {
+            InferenceEngine.State.ModelReady
+        } else {
+            InferenceEngine.State.Error(NativeBridge.lastError())
+        }
+    }
+
+    override fun sendUserPrompt(message: String, predictLength: Int): Flow<String> = flow {
         if (!NativeBridge.isModelLoaded()) {
             val message = NativeBridge.lastError().ifBlank { "Load a model before generating." }
             mutableState.value = InferenceEngine.State.Error(message)
             return@flow
         }
 
+        mutableState.value = InferenceEngine.State.ProcessingUserPrompt
         mutableState.value = InferenceEngine.State.Generating
-        val output = NativeBridge.generate(prompt, maxTokens)
+        val output = NativeBridge.generate(message, predictLength)
         val error = NativeBridge.lastError()
         if (error.isNotBlank()) {
             mutableState.value = InferenceEngine.State.Error(error)
@@ -49,8 +66,31 @@ internal class NativeInferenceEngine : InferenceEngine {
         mutableState.value = InferenceEngine.State.ModelReady
     }
 
-    override fun unloadModel() {
+    override suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int): String {
+        if (!NativeBridge.isModelLoaded()) {
+            val message = NativeBridge.lastError().ifBlank { "Load a model before benchmarking." }
+            mutableState.value = InferenceEngine.State.Error(message)
+            return message
+        }
+
+        mutableState.value = InferenceEngine.State.Benchmarking
+        val output = NativeBridge.bench(pp, tg, pl, nr)
+        val error = NativeBridge.lastError()
+        mutableState.value = if (error.isBlank()) {
+            InferenceEngine.State.ModelReady
+        } else {
+            InferenceEngine.State.Error(error)
+        }
+        return if (error.isBlank()) output else error
+    }
+
+    override fun cleanUp() {
         NativeBridge.unloadModel()
+        mutableState.value = InferenceEngine.State.Uninitialized
+    }
+
+    override fun destroy() {
+        NativeBridge.destroy()
         mutableState.value = InferenceEngine.State.Uninitialized
     }
 }

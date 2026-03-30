@@ -2,6 +2,8 @@ plugins {
     alias(libs.plugins.android.library)
 }
 
+val llamaCppSourceDir = providers.gradleProperty("llamaCppSourceDir").orNull
+
 android {
     namespace = "com.example.myapplication.llama"
     compileSdk {
@@ -22,6 +24,9 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += ""
+                if (!llamaCppSourceDir.isNullOrBlank()) {
+                    arguments += "-DLLAMA_CPP_SRC=$llamaCppSourceDir"
+                }
             }
         }
     }

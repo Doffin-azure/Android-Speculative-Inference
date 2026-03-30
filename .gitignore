@@ -6,6 +6,7 @@ local.properties
 .gradle/
 .gradle-user/
 .android-user/
+.kotlin/
 
 # Android Studio / IntelliJ
 .idea/caches
