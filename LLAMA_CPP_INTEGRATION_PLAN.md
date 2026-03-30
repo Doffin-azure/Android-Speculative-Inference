@@ -98,6 +98,21 @@ Android Studio verification needed by user:
 - No build change expected.
 - Optionally confirm the template file is visible in the project and the ignored `gradle-local.properties` convention is acceptable.
 
+## Local Property Loading - 2026-03-30
+
+Completed in this node:
+- Updated `lib/build.gradle.kts` so it really reads `gradle-local.properties` from the project root.
+- The future llama source path is now resolved in this order:
+  `-PllamaCppSourceDir` -> `gradle-local.properties` -> `LLAMA_CPP_SRC`.
+
+Why this matters:
+- The local template added earlier is now backed by real loading behavior.
+- Future llama.cpp path setup can stay entirely local without editing tracked files.
+
+Android Studio verification needed by user:
+- Sync Gradle project.
+- Optionally create a local `gradle-local.properties` later and confirm the property is picked up when needed.
+
 ## ViewModel Cleanup Wiring - 2026-03-30
 
 Completed in this node:
