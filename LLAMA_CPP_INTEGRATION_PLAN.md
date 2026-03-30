@@ -399,6 +399,16 @@ Why this matters:
 - Device-side runtime validation is less brittle because model selection errors are easier to avoid and easier to diagnose.
 - This improves the path toward the next real milestone: load a real model and validate first prompt generation on device.
 
+## Runtime Correctness Fixes - 2026-03-30
+
+Completed in this node:
+- Changed engine initialization waiting so load attempts wait for the native engine to reach `Initialized` or `Error` instead of failing immediately during background startup.
+- Changed app-side generation handling so the full streamed response is joined together rather than truncating to the first emitted chunk.
+
+Why this matters:
+- These fixes improve runtime correctness directly.
+- They reduce false-negative failures during model-load validation and make first-prompt generation results more trustworthy.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
