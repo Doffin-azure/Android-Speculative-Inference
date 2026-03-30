@@ -47,6 +47,7 @@ Near-term success condition before speculative decoding work begins:
 Additional explicit reminders for future turns:
 - Git sync is a required close-out step after each completed node, not an optional cleanup step.
 - The sync should be accompanied by a brief explanation of what changed so the repository history stays understandable.
+- The node should also be summarized in the markdown archive/checkpoint documents, not only in git history.
 - If bundle output, packaging, or related Android Studio actions are needed, the user performs them.
 - Codex should respond by preparing code, documenting the verification target, and telling the user what to run/check.
 
@@ -466,6 +467,30 @@ Completed in this node:
 Meaning of this checkpoint:
 - The target model file and desktop-side `llama.cpp` runtime are now confirmed working together.
 - Android-side failure analysis should proceed under the assumption that the remaining mismatch is Android-specific unless new contrary evidence appears.
+
+## Android Diagnostics Transport Update - 2026-03-30
+
+Completed in these nodes:
+- Added copyable diagnostics surfaces in the Android UI for error text, output, and event log.
+- Added persisted diagnostic snapshots in app-private storage at:
+  `files/logs/diagnostic-latest.txt`
+- Adjusted the diagnostics UI implementation after a Compose layout compile error.
+
+Meaning of this checkpoint:
+- Android runtime investigation no longer depends on manually retyping long error messages.
+- Device-side diagnostics can now be transferred either through the UI copy buttons or through Android Studio file inspection.
+
+## Android Backend Investigation Update - 2026-03-30
+
+Completed in these nodes:
+- Added native load fallback with `use_mmap = false`.
+- Added native log capture so recent `llama.cpp` load diagnostics are surfaced in the app error message.
+- Confirmed from device output that the failure reason was `no backends are loaded`.
+- Switched Android integration from dynamic ggml backend loading to built-in backend loading for the next validation round.
+
+Meaning of this checkpoint:
+- The current Android blocker is no longer "unknown model load failure".
+- The active hypothesis is now specifically about Android backend initialization/loading behavior, and the project is testing the built-in backend path as the corrective baseline.
 
 ## Interface Noise Cleanup - 2026-03-30
 
