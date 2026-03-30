@@ -9,6 +9,23 @@
 - Build rule: all Gradle sync, compile, CMake, install, and runtime verification steps are performed in Android Studio by the user.
 - Codex should focus on code/document edits and should not run project build commands unless this rule is explicitly changed later.
 
+## Preparation Complete - 2026-03-30
+
+The pre-integration preparation phase is now complete.
+
+Current ready state:
+- `:lib` is the only intended landing zone for real `llama.cpp` integration.
+- The app now reaches the engine through `AiChat.getInferenceEngine(context)`.
+- The app adapter surface already includes room for richer engine features such as system prompts, benchmarking, and cleanup.
+- Lifecycle cleanup wiring is already in place in `MainViewModel`.
+- Machine-local llama.cpp source configuration is prepared through:
+  `-PllamaCppSourceDir`, `gradle-local.properties`, or `LLAMA_CPP_SRC`.
+- Local config templates and ignore rules are in place, so machine-specific paths do not need to touch tracked files.
+
+What this means:
+- There are no more preparation-only nodes that need to be completed before starting the real integration.
+- The next step is no longer project preparation; it is the actual migration of official `llama.cpp/examples/llama.android/lib` native and Gradle/CMake structure into this project.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：

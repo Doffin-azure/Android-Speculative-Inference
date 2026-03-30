@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.library)
 }
 
+// Machine-local configuration only. Do not commit llama.cpp checkout paths.
 val localProperties = Properties().apply {
     val localFile = rootProject.file("gradle-local.properties")
     if (localFile.exists()) {
