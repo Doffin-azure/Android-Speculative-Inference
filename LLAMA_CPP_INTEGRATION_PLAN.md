@@ -35,10 +35,20 @@ Near-term success condition before speculative decoding work begins:
 
 - Add and maintain a proper `.gitignore` for Android Studio, Gradle, native build outputs, and local machine files.
 - After each completed work session, sync the git repository before moving on to the next stage.
+- When a work session is completed, include a short explicit git-sync explanation describing the purpose and scope of the changes.
 - Codex is responsible for the git sync workflow unless the user says otherwise.
 - All Gradle sync, build, CMake configure/build, app run, and device verification steps are done in Android Studio by the user.
 - Codex should not run project build commands unless the user explicitly changes this rule later.
 - When build-related changes are made, record what needs to be verified in Android Studio instead of running terminal builds.
+- Android bundle / packaging / bundle verification must be performed by the user in Android Studio; Codex should not do bundle steps directly.
+
+## Collaboration Update - 2026-03-30
+
+Additional explicit reminders for future turns:
+- Git sync is a required close-out step after each completed node, not an optional cleanup step.
+- The sync should be accompanied by a brief explanation of what changed so the repository history stays understandable.
+- If bundle output, packaging, or related Android Studio actions are needed, the user performs them.
+- Codex should respond by preparing code, documenting the verification target, and telling the user what to run/check.
 
 ## Continuation Update - 2026-03-30
 
@@ -375,6 +385,8 @@ Next work plan:
 Rule for future turns:
 - Do not reopen preparation work unless a runtime issue proves a missing prerequisite.
 - Focus on runtime behavior and real inference correctness first.
+- Remember the close-out workflow: explain the completed node, then sync git.
+- Remember the execution boundary: no bundle work by Codex; user performs bundle/package steps in Android Studio.
 
 ## Interface Noise Cleanup - 2026-03-30
 

@@ -23,8 +23,18 @@ Current stage:
 
 - Repository hygiene: keep Android Studio, Gradle, native build output, and local environment files out of git via `.gitignore`.
 - Workflow rule: after each completed task/session, sync the git repository.
+- Workflow clarification: when a task/session is completed, record a short human-readable git sync summary describing what changed before or alongside the sync.
 - Build rule: all Gradle sync, compile, CMake, install, and runtime verification steps are performed in Android Studio by the user.
 - Codex should focus on code/document edits and should not run project build commands unless this rule is explicitly changed later.
+- Bundle rule: Android bundle / packaging / bundle verification is performed by the user; Codex should not run bundle-related steps and should instead tell the user exactly what to verify.
+
+## Collaboration Update - 2026-03-30
+
+Effective from this checkpoint:
+- Do not forget git sync after each completed node.
+- Do not treat git sync as silent housekeeping; include an explicit explanation of what the node changed.
+- Do not let Codex perform bundle work.
+- If a bundle or packaging step is needed, ask the user to do it in Android Studio and provide the expected verification points.
 
 ## Preparation Complete - 2026-03-30
 
