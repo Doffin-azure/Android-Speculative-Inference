@@ -232,6 +232,27 @@ Why this matters:
 - The project’s CMake behavior is now much closer to the official `examples/llama.android/lib` layout.
 - Any remaining failures are increasingly likely to be genuine upstream integration issues instead of missing local build flags.
 
+## First Real Sync Result - 2026-03-30
+
+Observed from Android Studio:
+- Gradle model preparation succeeded.
+- CMake now reaches the local `llama.cpp` checkout successfully.
+- Current warnings are environmental rather than structural project failures.
+
+Warnings seen:
+- `Git not found. Build info will not be accurate.`
+  This is non-blocking for local Android integration work.
+- Windows object-path-length warnings under `.cxx/.../build-llama/...`
+  This may become a practical issue later even though sync currently succeeds.
+
+Recommended local mitigation:
+- Prefer a shorter local llama.cpp checkout path, e.g. `C:\src\llama.cpp`.
+- Then update `gradle-local.properties` to point to that shorter path.
+
+Meaning of this checkpoint:
+- The project has crossed from project-integration work into genuine upstream build/runtime validation.
+- Remaining issues are likely to come from real llama.cpp compilation/runtime behavior, not from local adapter scaffolding.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
