@@ -59,6 +59,7 @@ Android Studio verification needed by user:
 
 Local preparation completed:
 - `:lib` now accepts an optional Gradle property `llamaCppSourceDir`.
+- `:lib` also accepts the environment variable `LLAMA_CPP_SRC` as a fallback.
 - `lib/src/main/cpp/CMakeLists.txt` now detects whether `LLAMA_CPP_SRC` points to a valid `llama.cpp` checkout.
 - If no source path is provided, CMake stays on the current stub path.
 - This keeps the project safe to open now while preparing for a later real-source migration.
@@ -66,6 +67,21 @@ Local preparation completed:
 Android Studio verification needed by user:
 - Sync Gradle project after the new optional `llamaCppSourceDir` handling.
 - If you later clone `llama.cpp`, provide the path from Android Studio Gradle settings or a local Gradle property and confirm CMake sees it.
+
+Recommended future path injection order:
+1. Put `llamaCppSourceDir=...` into a user-local Gradle property that is not committed.
+2. If that is inconvenient, use environment variable `LLAMA_CPP_SRC`.
+3. Do not hardcode a machine-specific llama.cpp path into tracked project files.
+
+## Path Config Convenience - 2026-03-30
+
+Completed in this node:
+- Added environment-variable fallback for the future llama.cpp source path in `lib/build.gradle.kts`.
+- Documented the preferred order for local-only path configuration.
+
+Android Studio verification needed by user:
+- Sync Gradle project and confirm no issues from the added environment-variable fallback.
+- When you are ready to start real integration later, configure the path locally without modifying tracked files.
 
 ## Legacy Bridge Clarification - 2026-03-30
 

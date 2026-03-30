@@ -3,6 +3,7 @@ plugins {
 }
 
 val llamaCppSourceDir = providers.gradleProperty("llamaCppSourceDir").orNull
+    ?: System.getenv("LLAMA_CPP_SRC")
 
 android {
     namespace = "com.example.myapplication.llama"
