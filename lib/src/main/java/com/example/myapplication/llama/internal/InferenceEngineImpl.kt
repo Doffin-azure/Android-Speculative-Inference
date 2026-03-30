@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
@@ -111,11 +112,12 @@ internal class InferenceEngineImpl private constructor(
     }
 
     private suspend fun awaitInitializedState() {
-        withContext(llamaDispatcher) {
-            check(
-                state.value is InferenceEngine.State.Initialized ||
-                    state.value is InferenceEngine.State.Error
-            ) { "Engine is not ready yet: ${state.value.javaClass.simpleName}." }
+        val engineState = state.first {
+            it is InferenceEngine.State.Initialized || it is InferenceEngine.State.Error
+        }
+
+        check(engineState is InferenceEngine.State.Initialized) {
+            "Engine is not ready yet: ${engineState.javaClass.simpleName}."
         }
     }
 

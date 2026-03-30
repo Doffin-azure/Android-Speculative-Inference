@@ -3,7 +3,7 @@ package com.example.myapplication.inference
 import android.content.Context
 import com.example.myapplication.llama.AiChat
 import com.example.myapplication.llama.InferenceEngine
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.toList
 
 class LocalLlmImpl(context: Context) : LocalLlm {
     private val engine: InferenceEngine = AiChat.getInferenceEngine(context.applicationContext)
@@ -43,10 +43,10 @@ class LocalLlmImpl(context: Context) : LocalLlm {
     }
 
     override suspend fun generate(prompt: String, maxTokens: Int): String {
-        val output = engine.generate(prompt, maxTokens).firstOrNull()
+        val output = engine.generate(prompt, maxTokens).toList().joinToString(separator = "")
         return when (val state = engine.state.value) {
             is InferenceEngine.State.Error -> state.message
-            else -> output ?: ""
+            else -> output
         }
     }
 

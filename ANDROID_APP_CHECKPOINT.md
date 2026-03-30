@@ -106,6 +106,16 @@ What this means:
 - Model selection is now better aligned with real device usage.
 - Runtime validation can focus more on model load/inference behavior and less on manual path entry mistakes.
 
+## Runtime Correctness Fixes - 2026-03-30
+
+Completed in this node:
+- Fixed the engine initialization wait path so model loading no longer fails early just because native initialization is still finishing in the background.
+- Fixed app-side generation collection so streamed output chunks are concatenated into the full response instead of only keeping the first emitted segment.
+
+Why this matters:
+- These were runtime-behavior bugs, not UI polish.
+- They directly affect whether on-device validation reflects real model behavior.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：
