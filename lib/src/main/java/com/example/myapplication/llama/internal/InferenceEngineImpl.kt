@@ -117,7 +117,14 @@ internal class InferenceEngineImpl private constructor(
         }
 
         check(engineState is InferenceEngine.State.Initialized) {
-            "Engine is not ready yet: ${engineState.javaClass.simpleName}."
+            when (engineState) {
+                is InferenceEngine.State.Error -> {
+                    val detail = engineState.message.ifBlank { currentError }
+                    "Engine initialization failed: ${detail.ifBlank { "unknown error" }}"
+                }
+
+                else -> "Engine is not ready yet: ${engineState.javaClass.simpleName}."
+            }
         }
     }
 
