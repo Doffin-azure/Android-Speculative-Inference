@@ -29,6 +29,8 @@ class MainActivity : ComponentActivity() {
             val statusMessage by viewModel.statusMessage.collectAsState()
             val output by viewModel.output.collectAsState()
             val lastError by viewModel.lastError.collectAsState()
+            val eventLog by viewModel.eventLog.collectAsState()
+            val diagnosticLogPath by viewModel.diagnosticLogPath.collectAsState()
             val isModelLoaded by viewModel.isModelLoaded.collectAsState()
             val isLoadingModel by viewModel.isLoadingModel.collectAsState()
             val isGenerating by viewModel.isGenerating.collectAsState()
@@ -41,6 +43,8 @@ class MainActivity : ComponentActivity() {
                 statusMessage = statusMessage,
                 output = output,
                 lastError = lastError,
+                eventLog = eventLog,
+                diagnosticLogPath = diagnosticLogPath,
                 isModelLoaded = isModelLoaded,
                 isLoadingModel = isLoadingModel,
                 isGenerating = isGenerating,

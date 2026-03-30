@@ -36,6 +36,12 @@ class MainViewModel(
     private val _statusMessage = MutableStateFlow("Idle")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
+    private val _eventLog = MutableStateFlow("Ready")
+    val eventLog: StateFlow<String> = _eventLog.asStateFlow()
+
+    private val _diagnosticLogPath = MutableStateFlow("")
+    val diagnosticLogPath: StateFlow<String> = _diagnosticLogPath.asStateFlow()
+
     private val _isModelLoaded = MutableStateFlow(false)
     val isModelLoaded: StateFlow<Boolean> = _isModelLoaded.asStateFlow()
 
@@ -60,12 +66,14 @@ class MainViewModel(
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
     init {
+        _diagnosticLogPath.value = diagnosticLogFile().absolutePath
         _backendLabel.value = try {
             localLlm.backendLabel()
         } catch (e: Exception) {
             "Backend unavailable: ${e.message ?: "unknown error"}"
         }
 
+        appendLog("Backend: ${_backendLabel.value}")
         refreshNativeState()
     }
 
@@ -85,6 +93,7 @@ class MainViewModel(
             _modelPath.value = ""
             _statusMessage.value = "No .gguf model found in selected directory."
             _lastError.value = "Selected directory does not contain a readable .gguf file."
+            appendLog("Directory selection failed: no readable .gguf file found.")
             return
         }
 
@@ -99,6 +108,7 @@ class MainViewModel(
             "Multiple models found. Pick the one to load."
         }
         _lastError.value = ""
+        appendLog("Selected directory with ${modelFiles.size} model candidate(s).")
     }
 
     fun selectModelCandidate(path: String, announceChoice: Boolean = true) {
@@ -109,6 +119,7 @@ class MainViewModel(
             _statusMessage.value = "Selected model: ${selected.name}"
             _lastError.value = ""
         }
+        appendLog("Model candidate selected: ${selected.name} (${selected.sizeBytes} bytes)")
     }
 
     fun loadModel() {
@@ -120,6 +131,7 @@ class MainViewModel(
             if (_modelPath.value.isBlank()) {
                 _statusMessage.value = "Pick a model directory first."
                 _lastError.value = "Model path is empty."
+                appendLog("Load blocked: model path is empty.")
                 return@launch
             }
 
@@ -131,9 +143,11 @@ class MainViewModel(
                     it.contentUri == _selectedModelContentUri.value
                 }
                 requireNotNull(selectedModel) { "No model file is currently selected." }
+                appendLog("Load requested for ${selectedModel.name} (${selectedModel.sizeBytes} bytes)")
 
                 _statusMessage.value = "Preparing readable local model copy..."
                 val readableModelFile = ensureReadableLocalModelCopy(selectedModel)
+                appendLog("Prepared local copy: ${readableModelFile.absolutePath} (${readableModelFile.length()} bytes)")
 
                 _statusMessage.value = "Loading model..."
                 val ok = localLlm.loadModel(readableModelFile.absolutePath)
@@ -143,11 +157,19 @@ class MainViewModel(
                 } else {
                     "Model load failed."
                 }
+                appendLog(
+                    if (ok) {
+                        "Model loaded successfully."
+                    } else {
+                        "Model load returned false. Last error: ${_lastError.value}"
+                    }
+                )
             } catch (e: Exception) {
                 _isModelLoaded.value = false
                 _loadedModelPath.value = ""
                 _lastError.value = e.message ?: "unknown error"
                 _statusMessage.value = "Load error: ${e.message}"
+                appendLog("Load error: ${e.message ?: "unknown error"}")
             } finally {
                 _isLoadingModel.value = false
             }
@@ -162,11 +184,13 @@ class MainViewModel(
 
             if (!_isModelLoaded.value) {
                 _statusMessage.value = "Load model first."
+                appendLog("Run blocked: model not loaded.")
                 return@launch
             }
 
             if (prompt.isBlank()) {
                 _statusMessage.value = "Please enter a prompt."
+                appendLog("Run blocked: prompt is empty.")
                 return@launch
             }
 
@@ -174,12 +198,15 @@ class MainViewModel(
             _statusMessage.value = "Running..."
             _lastError.value = ""
             try {
+                appendLog("Generation requested. Prompt length: ${prompt.length}")
                 _output.value = localLlm.generate(prompt)
                 refreshNativeState()
                 _statusMessage.value = "Inference complete."
+                appendLog("Generation completed. Output length: ${_output.value.length}")
             } catch (e: Exception) {
                 _lastError.value = e.message ?: "unknown error"
                 _statusMessage.value = "Run error: ${e.message}"
+                appendLog("Run error: ${e.message ?: "unknown error"}")
             } finally {
                 _isGenerating.value = false
             }
@@ -190,6 +217,50 @@ class MainViewModel(
         _isModelLoaded.value = runCatching { localLlm.isModelLoaded() }.getOrDefault(false)
         _loadedModelPath.value = runCatching { localLlm.loadedModelPath() }.getOrDefault("")
         _lastError.value = runCatching { localLlm.lastError() }.getOrDefault("")
+        persistDiagnosticSnapshot()
+    }
+
+    private fun appendLog(message: String) {
+        val timestamp = System.currentTimeMillis()
+        _eventLog.value = buildString {
+            append(_eventLog.value)
+            appendLine()
+            append("[$timestamp] ")
+            append(message)
+        }
+        persistDiagnosticSnapshot()
+    }
+
+    private fun persistDiagnosticSnapshot() {
+        val application = getApplication<Application>()
+        val logFile = diagnosticLogFile()
+        logFile.parentFile?.mkdirs()
+        val snapshot = buildString {
+            appendLine("Backend: ${_backendLabel.value}")
+            appendLine("Status: ${_statusMessage.value}")
+            appendLine("Model loaded: ${_isModelLoaded.value}")
+            appendLine("Selected model: ${_modelPath.value}")
+            appendLine("Loaded model path: ${_loadedModelPath.value}")
+            appendLine("Last error: ${_lastError.value}")
+            appendLine("Diagnostic log path: ${logFile.absolutePath}")
+            appendLine()
+            appendLine("Event Log:")
+            appendLine(_eventLog.value)
+            appendLine()
+            appendLine("Output:")
+            appendLine(_output.value)
+        }
+        runCatching {
+            logFile.writeText(snapshot)
+            _diagnosticLogPath.value = logFile.absolutePath
+        }.onFailure {
+            android.util.Log.e("MainViewModel", "Failed to write diagnostic log", it)
+        }
+    }
+
+    private fun diagnosticLogFile(): File {
+        val application = getApplication<Application>()
+        return File(application.filesDir, "logs/diagnostic-latest.txt")
     }
 
     override fun onCleared() {
