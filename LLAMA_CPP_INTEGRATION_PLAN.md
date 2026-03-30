@@ -409,6 +409,14 @@ Why this matters:
 - These fixes improve runtime correctness directly.
 - They reduce false-negative failures during model-load validation and make first-prompt generation results more trustworthy.
 
+## Runtime Error Surfacing Fix - 2026-03-30
+
+Completed in this node:
+- Changed initialization gating so an `Error` state now reports the underlying initialization failure detail instead of only showing a generic readiness failure.
+
+Why this matters:
+- This should make the next on-device load attempt materially easier to diagnose.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:

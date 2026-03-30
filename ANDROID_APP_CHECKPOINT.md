@@ -116,6 +116,14 @@ Why this matters:
 - These were runtime-behavior bugs, not UI polish.
 - They directly affect whether on-device validation reflects real model behavior.
 
+## Runtime Error Surfacing Fix - 2026-03-30
+
+Completed in this node:
+- Improved initialization failure reporting so load attempts now surface the underlying engine error instead of collapsing everything into a generic `engine is not ready yet` message.
+
+Why this matters:
+- The next runtime test should give a more actionable failure message if native init/backends/library loading is the real problem.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：
