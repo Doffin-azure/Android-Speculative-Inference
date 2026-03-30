@@ -56,6 +56,17 @@ Current project status:
 - `:lib` is the active native integration module
 - the remaining work is runtime validation, on-device behavior checks, and fixing any model-load / inference issues that appear next
 
+## Handoff Summary - 2026-03-30
+
+If work is resumed in a new context, the short version is:
+- build integration is already successful
+- next step is device runtime validation, not more project scaffolding
+- test order should be:
+  1. run app
+  2. load real model
+  3. run minimal prompt
+  4. inspect UI status + Logcat if anything fails
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：
