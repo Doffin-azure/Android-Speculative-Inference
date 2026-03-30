@@ -143,6 +143,21 @@ Completed in this node:
 Why this matters:
 - The next on-device failure should be much more informative than a generic `Failed to load model: 1`.
 
+## Desktop GGUF Check Environment - 2026-03-30
+
+Completed in this node:
+- Added a reusable local script `tools/gguf_check.py` for reading GGUF metadata on the computer.
+- Created a project-local virtual environment `.venv-gguf` and verified it can read the imported model through `llama.cpp/gguf-py`.
+
+Validated on:
+- `Llama-3.2-1B-Instruct-Q4_K_M.gguf`
+- header: `GGUF`
+- version: `3`
+- size: about `770 MB`
+
+Why this matters:
+- The computer can now be used to quickly distinguish "bad model file" from "Android-side loading/runtime issue".
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：

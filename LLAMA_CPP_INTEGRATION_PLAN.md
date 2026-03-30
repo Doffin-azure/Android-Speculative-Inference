@@ -435,6 +435,16 @@ Completed in this node:
 Why this matters:
 - This should make the next `loadModel()` failure much faster to interpret.
 
+## Desktop GGUF Check Environment - 2026-03-30
+
+Completed in this node:
+- Added a reusable desktop-side GGUF inspection script at `tools/gguf_check.py`.
+- Set up a local `.venv-gguf` environment that can load `llama.cpp/gguf-py` and inspect the target model file.
+
+Why this matters:
+- Desktop validation is now available as a separate checkpoint from Android runtime validation.
+- This reduces ambiguity when deciding whether a failure comes from the model artifact or the Android-side loading path.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
