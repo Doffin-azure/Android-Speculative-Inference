@@ -1,8 +1,10 @@
 #include <android/log.h>
 #include <jni.h>
 #include <cmath>
+#include <cstdio>
 #include <iomanip>
 #include <sampling.h>
+#include <sys/stat.h>
 #include <string>
 #include <unistd.h>
 
@@ -66,10 +68,50 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_load(
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
     LOGd("%s: Loading model from:\n%s\n", __func__, model_path);
 
+    struct stat model_stat {};
+    if (stat(model_path, &model_stat) != 0) {
+        LOGe("%s: stat() failed for model path", __func__);
+        env->ReleaseStringUTFChars(jmodel_path, model_path);
+        return 1;
+    }
+
+    if (model_stat.st_size <= 0) {
+        LOGe("%s: model file is empty", __func__);
+        env->ReleaseStringUTFChars(jmodel_path, model_path);
+        return 2;
+    }
+
+    constexpr off_t MIN_REASONABLE_GGUF_SIZE = 1024 * 1024;
+    if (model_stat.st_size < MIN_REASONABLE_GGUF_SIZE) {
+        LOGe("%s: model file is too small to be a valid GGUF: %lld bytes", __func__, (long long) model_stat.st_size);
+        env->ReleaseStringUTFChars(jmodel_path, model_path);
+        return 3;
+    }
+
+    FILE *fp = fopen(model_path, "rb");
+    if (fp == nullptr) {
+        LOGe("%s: fopen() failed for model path", __func__);
+        env->ReleaseStringUTFChars(jmodel_path, model_path);
+        return 1;
+    }
+
+    char gguf_header[4];
+    const size_t header_read = fread(gguf_header, 1, sizeof(gguf_header), fp);
+    fclose(fp);
+    if (header_read != sizeof(gguf_header) ||
+        gguf_header[0] != 'G' ||
+        gguf_header[1] != 'G' ||
+        gguf_header[2] != 'U' ||
+        gguf_header[3] != 'F') {
+        LOGe("%s: file does not start with GGUF header", __func__);
+        env->ReleaseStringUTFChars(jmodel_path, model_path);
+        return 4;
+    }
+
     auto *model = llama_model_load_from_file(model_path, model_params);
     env->ReleaseStringUTFChars(jmodel_path, model_path);
     if (!model) {
-        return 1;
+        return 4;
     }
     g_model = model;
     return 0;
