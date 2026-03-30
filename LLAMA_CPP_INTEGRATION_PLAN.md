@@ -445,6 +445,18 @@ Why this matters:
 - Desktop validation is now available as a separate checkpoint from Android runtime validation.
 - This reduces ambiguity when deciding whether a failure comes from the model artifact or the Android-side loading path.
 
+## Documentation Library Update - 2026-03-30
+
+Completed in this node:
+- Added a curated `docs/` library to separate operational knowledge from long archive files.
+- Added documentation for desktop GGUF validation, current project status, workflow rules, and archive usage.
+
+Primary entry point:
+- `docs/README.md`
+
+Why this matters:
+- Resume cost should now be lower because the high-signal operational material has a dedicated home.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:

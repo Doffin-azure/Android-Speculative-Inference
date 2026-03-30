@@ -158,6 +158,18 @@ Validated on:
 Why this matters:
 - The computer can now be used to quickly distinguish "bad model file" from "Android-side loading/runtime issue".
 
+## Documentation Library Update - 2026-03-30
+
+Completed in this node:
+- Added a curated `docs/` library for operational knowledge.
+- Added a desktop runtime supplement, current-status summary, workflow rules summary, and root-document map.
+
+Primary entry point:
+- `docs/README.md`
+
+Why this matters:
+- New work can resume from the curated docs first instead of searching through long root-level archives.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：
