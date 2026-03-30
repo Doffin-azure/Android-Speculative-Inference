@@ -20,6 +20,11 @@ class MainViewModel(
     application: Application
 ) : AndroidViewModel(application) {
 
+    data class ModelCandidate(
+        val name: String,
+        val path: String
+    )
+
     private val localLlm: LocalLlm = LocalLlmImpl(application.applicationContext)
 
     private val _backendLabel = MutableStateFlow("Detecting backend...")
@@ -36,6 +41,9 @@ class MainViewModel(
 
     private val _modelPath = MutableStateFlow("")
     val modelPath: StateFlow<String> = _modelPath.asStateFlow()
+
+    private val _modelCandidates = MutableStateFlow<List<ModelCandidate>>(emptyList())
+    val modelCandidates: StateFlow<List<ModelCandidate>> = _modelCandidates.asStateFlow()
 
     private val _loadedModelPath = MutableStateFlow("")
     val loadedModelPath: StateFlow<String> = _loadedModelPath.asStateFlow()
@@ -59,10 +67,6 @@ class MainViewModel(
         refreshNativeState()
     }
 
-    fun updateModelPath(path: String) {
-        _modelPath.value = path
-    }
-
     fun onModelDirectorySelected(directoryUri: Uri) {
         val application = getApplication<Application>()
         runCatching {
@@ -72,16 +76,35 @@ class MainViewModel(
             )
         }
 
-        val modelFile = findModelFileInDirectory(directoryUri)
-        if (modelFile == null) {
+        val modelFiles = findModelFilesInDirectory(directoryUri)
+        if (modelFiles.isEmpty()) {
+            _modelCandidates.value = emptyList()
+            _modelPath.value = ""
             _statusMessage.value = "No .gguf model found in selected directory."
             _lastError.value = "Selected directory does not contain a readable .gguf file."
             return
         }
 
-        _modelPath.value = modelFile
-        _statusMessage.value = "Model path selected from directory."
+        _modelCandidates.value = modelFiles
+        selectModelCandidate(
+            path = modelFiles.first().path,
+            announceChoice = modelFiles.size == 1
+        )
+        _statusMessage.value = if (modelFiles.size == 1) {
+            "Model selected from directory."
+        } else {
+            "Multiple models found. Pick the one to load."
+        }
         _lastError.value = ""
+    }
+
+    fun selectModelCandidate(path: String, announceChoice: Boolean = true) {
+        val selected = _modelCandidates.value.firstOrNull { it.path == path } ?: return
+        _modelPath.value = selected.path
+        if (announceChoice) {
+            _statusMessage.value = "Selected model: ${selected.name}"
+            _lastError.value = ""
+        }
     }
 
     fun loadModel() {
@@ -161,15 +184,19 @@ class MainViewModel(
         super.onCleared()
     }
 
-    private fun findModelFileInDirectory(directoryUri: Uri): String? {
+    private fun findModelFilesInDirectory(directoryUri: Uri): List<ModelCandidate> {
         val application = getApplication<Application>()
-        val tree = DocumentFile.fromTreeUri(application, directoryUri) ?: return null
+        val tree = DocumentFile.fromTreeUri(application, directoryUri) ?: return emptyList()
 
         return tree.listFiles()
             .filter { it.isFile && it.name?.endsWith(".gguf", ignoreCase = true) == true }
             .sortedBy { it.name.orEmpty() }
-            .mapNotNull { resolveAbsolutePath(directoryUri, it.name.orEmpty()) }
-            .firstOrNull()
+            .mapNotNull { file ->
+                val name = file.name.orEmpty()
+                resolveAbsolutePath(directoryUri, name)?.let { path ->
+                    ModelCandidate(name = name, path = path)
+                }
+            }
     }
 
     private fun resolveAbsolutePath(directoryUri: Uri, fileName: String): String? {

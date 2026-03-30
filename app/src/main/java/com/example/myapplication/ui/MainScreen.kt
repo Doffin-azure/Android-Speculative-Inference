@@ -8,6 +8,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
+import com.example.myapplication.viewmodel.MainViewModel
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -22,9 +23,10 @@ fun MainScreen(
     isLoadingModel: Boolean,
     isGenerating: Boolean,
     modelPath: String,
+    modelCandidates: List<MainViewModel.ModelCandidate>,
     loadedModelPath: String,
-    onModelPathChange: (String) -> Unit,
     onPickModelDirectory: () -> Unit,
+    onSelectModelCandidate: (String) -> Unit,
     onLoadModel: () -> Unit,
     onRun: (String) -> Unit
 ) {
@@ -65,9 +67,10 @@ fun MainScreen(
 
         TextField(
             value = modelPath,
-            onValueChange = onModelPathChange,
+            onValueChange = {},
             label = { Text("Model File Path") },
-            enabled = !busy,
+            readOnly = true,
+            enabled = true,
             modifier = Modifier.padding(top = 16.dp)
         )
 
@@ -77,6 +80,23 @@ fun MainScreen(
             modifier = Modifier.padding(top = 16.dp)
         ) {
             Text("Pick Model Directory")
+        }
+
+        if (modelCandidates.size > 1) {
+            Text(
+                text = "Models found in directory:",
+                modifier = Modifier.padding(top = 16.dp)
+            )
+
+            modelCandidates.forEach { candidate ->
+                Button(
+                    onClick = { onSelectModelCandidate(candidate.path) },
+                    enabled = !busy,
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text(candidate.name)
+                }
+            }
         }
 
         Button(

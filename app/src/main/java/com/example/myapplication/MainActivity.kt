@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
             val isLoadingModel by viewModel.isLoadingModel.collectAsState()
             val isGenerating by viewModel.isGenerating.collectAsState()
             val modelPath by viewModel.modelPath.collectAsState()
+            val modelCandidates by viewModel.modelCandidates.collectAsState()
             val loadedModelPath by viewModel.loadedModelPath.collectAsState()
 
             MainScreen(
@@ -44,11 +45,12 @@ class MainActivity : ComponentActivity() {
                 isLoadingModel = isLoadingModel,
                 isGenerating = isGenerating,
                 modelPath = modelPath,
+                modelCandidates = modelCandidates,
                 loadedModelPath = loadedModelPath,
-                onModelPathChange = { viewModel.updateModelPath(it) },
                 onPickModelDirectory = {
                     directoryPicker.launch(null)
                 },
+                onSelectModelCandidate = viewModel::selectModelCandidate,
                 onLoadModel = { viewModel.loadModel() },
                 onRun = { prompt -> viewModel.runLocal(prompt) }
             )
