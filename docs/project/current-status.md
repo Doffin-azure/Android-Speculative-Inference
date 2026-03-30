@@ -32,12 +32,16 @@ Already resolved:
 - desktop GGUF inspection works
 - desktop `llama-cli` has been built in WSL
 - desktop `llama-cli` has now successfully loaded the target GGUF and generated text
+- Android diagnostics can now be copied directly from the UI or pulled from a persisted app-private log file
+- Android-side model-load failure has been narrowed to a backend-loading problem instead of a bad GGUF file
 
 Current strongest conclusion:
 
 - the tested `Llama-3.2-1B-Instruct-Q4_K_M.gguf` file appears structurally valid on the computer
 - the same file also runs successfully through desktop `llama.cpp`
 - Android-side load failure is therefore much more likely to be caused by Android runtime compatibility or integration details than by the model artifact itself
+- the latest device-side root cause before the current fix was `no backends are loaded`
+- the active Android fix path is to use a built-in ggml backend instead of relying on dynamic backend loading
 
 ## Important Files
 
@@ -59,7 +63,7 @@ Desktop GGUF validation path:
 
 Primary blocker:
 
-- Android app still fails to load the model at runtime even though the file itself looks valid on the computer
+- Android app runtime still needs to be revalidated after switching from dynamic backend loading to built-in backend loading
 
 Secondary blocker:
 
@@ -71,7 +75,7 @@ The next step should focus on one of these:
 
 1. continue Android-side native load debugging with this same model
 2. compare Android-side behavior against the now-confirmed desktop success path using the same GGUF file
-3. inspect Android-specific backend/build/runtime differences that could explain the load mismatch
+3. verify whether the built-in backend change restores successful Android model loading
 
 ## What Not To Reopen
 
