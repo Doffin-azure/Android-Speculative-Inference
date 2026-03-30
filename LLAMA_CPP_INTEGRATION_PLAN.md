@@ -6,6 +6,7 @@
 
 - Add and maintain a proper `.gitignore` for Android Studio, Gradle, native build outputs, and local machine files.
 - After each completed work session, sync the git repository before moving on to the next stage.
+- Codex is responsible for the git sync workflow unless the user says otherwise.
 - All Gradle sync, build, CMake configure/build, app run, and device verification steps are done in Android Studio by the user.
 - Codex should not run project build commands unless the user explicitly changes this rule later.
 - When build-related changes are made, record what needs to be verified in Android Studio instead of running terminal builds.
@@ -15,7 +16,7 @@
 Completed in this session:
 - `:lib` now contains a JNI landing zone instead of only pure-Kotlin stub code.
 - Added `lib/src/main/cpp/CMakeLists.txt`
-- Added `lib/src/main/cpp/ai_chat_stub.cpp`
+- Added `lib/src/main/cpp/ai_chat.cpp`
 - Added `NativeBridge.kt` and `NativeInferenceEngine.kt`
 - `AiChat` now prefers the native-backed engine and falls back to the stub engine if JNI loading fails.
 - `InferenceEngine` now exposes backend/status inspection methods needed by the app layer.
@@ -32,10 +33,39 @@ From 2026-03-30 onward, repeat verification in Android Studio instead of termina
 
 Current effective call chain:
 
-`MainViewModel -> LocalLlmImpl -> :lib/NativeInferenceEngine -> :lib NativeBridge -> lib/src/main/cpp/ai_chat_stub.cpp`
+`MainViewModel -> LocalLlmImpl -> :lib/NativeInferenceEngine -> :lib NativeBridge -> lib/src/main/cpp/ai_chat.cpp`
 
 Remaining next step:
-- Replace `lib/src/main/cpp/ai_chat_stub.cpp` and `lib/src/main/cpp/CMakeLists.txt` with the real `llama.cpp/examples/llama.android/lib` integration structure.
+- Replace `lib/src/main/cpp/ai_chat.cpp` and `lib/src/main/cpp/CMakeLists.txt` with the real `llama.cpp/examples/llama.android/lib` integration structure.
+
+## API Alignment Update - 2026-03-30
+
+Based on the current official `llama.cpp` Android sample:
+- `docs/android.md` still points to importing `examples/llama.android` into Android Studio.
+- `AiChat.kt` now exposes `getInferenceEngine(context)`.
+- `InferenceEngine.kt` now uses `sendUserPrompt(...)`, `setSystemPrompt(...)`, `bench(...)`, `cleanUp()`, and `destroy()`.
+
+Local alignment completed:
+- Added a context overload to local `AiChat`.
+- Expanded local `InferenceEngine` state and lifecycle surface to better match the official sample while keeping compatibility with current app code.
+- Renamed the native landing-zone source file from `ai_chat_stub.cpp` to `ai_chat.cpp` so the file layout is closer to the official sample.
+
+Android Studio verification needed by user:
+- Sync Gradle project.
+- Confirm `:lib` still indexes correctly after the `InferenceEngine` API expansion.
+- Confirm native source rename from `ai_chat_stub.cpp` to `ai_chat.cpp` is reflected in the Android Studio CMake model.
+
+## Source Switch Prep - 2026-03-30
+
+Local preparation completed:
+- `:lib` now accepts an optional Gradle property `llamaCppSourceDir`.
+- `lib/src/main/cpp/CMakeLists.txt` now detects whether `LLAMA_CPP_SRC` points to a valid `llama.cpp` checkout.
+- If no source path is provided, CMake stays on the current stub path.
+- This keeps the project safe to open now while preparing for a later real-source migration.
+
+Android Studio verification needed by user:
+- Sync Gradle project after the new optional `llamaCppSourceDir` handling.
+- If you later clone `llama.cpp`, provide the path from Android Studio Gradle settings or a local Gradle property and confirm CMake sees it.
 
 ## 当前状态
 
