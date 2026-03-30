@@ -98,6 +98,20 @@ Android Studio verification needed by user:
 - No build change expected.
 - Optionally confirm the template file is visible in the project and the ignored `gradle-local.properties` convention is acceptable.
 
+## ViewModel Cleanup Wiring - 2026-03-30
+
+Completed in this node:
+- Connected `MainViewModel.onCleared()` to `LocalLlm.cleanup()`.
+- Prepared the app lifecycle for future native/resource cleanup once the real llama.cpp engine is attached.
+
+Why this matters:
+- The current stub does not strongly need cleanup, but the real engine almost certainly will.
+- This reduces lifecycle-related refactor work later.
+
+Android Studio verification needed by user:
+- Sync/build model check only.
+- Confirm there are no IDE issues after overriding `onCleared()` in `MainViewModel`.
+
 ## Context Wiring Alignment - 2026-03-30
 
 Completed in this node:

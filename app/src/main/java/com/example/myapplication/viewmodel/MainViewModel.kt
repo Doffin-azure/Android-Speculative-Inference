@@ -128,4 +128,9 @@ class MainViewModel(
         _loadedModelPath.value = runCatching { localLlm.loadedModelPath() }.getOrDefault("")
         _lastError.value = runCatching { localLlm.lastError() }.getOrDefault("")
     }
+
+    override fun onCleared() {
+        runCatching { localLlm.cleanup() }
+        super.onCleared()
+    }
 }
