@@ -417,6 +417,15 @@ Completed in this node:
 Why this matters:
 - This should make the next on-device load attempt materially easier to diagnose.
 
+## SAF Import Fix - 2026-03-30
+
+Completed in this node:
+- Reworked model loading so a SAF-selected `.gguf` file is copied into app-private storage before native loading.
+- The app no longer depends on direct readability of the externally selected filesystem path.
+
+Why this matters:
+- This is the concrete fix path for the observed on-device `Cannot read file` failure.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:

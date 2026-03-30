@@ -90,7 +90,7 @@ fun MainScreen(
 
             modelCandidates.forEach { candidate ->
                 Button(
-                    onClick = { onSelectModelCandidate(candidate.path) },
+                    onClick = { onSelectModelCandidate(candidate.contentUri) },
                     enabled = !busy,
                     modifier = Modifier.padding(top = 8.dp)
                 ) {

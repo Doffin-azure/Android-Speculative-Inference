@@ -3,13 +3,11 @@ package com.example.myapplication.viewmodel
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
-import android.os.Environment
-import android.provider.DocumentsContract
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.documentfile.provider.DocumentFile
 import com.example.myapplication.inference.LocalLlm
 import com.example.myapplication.inference.LocalLlmImpl
-import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,7 +20,8 @@ class MainViewModel(
 
     data class ModelCandidate(
         val name: String,
-        val path: String
+        val contentUri: String,
+        val sizeBytes: Long
     )
 
     private val localLlm: LocalLlm = LocalLlmImpl(application.applicationContext)
@@ -41,6 +40,8 @@ class MainViewModel(
 
     private val _modelPath = MutableStateFlow("")
     val modelPath: StateFlow<String> = _modelPath.asStateFlow()
+
+    private val _selectedModelContentUri = MutableStateFlow("")
 
     private val _modelCandidates = MutableStateFlow<List<ModelCandidate>>(emptyList())
     val modelCandidates: StateFlow<List<ModelCandidate>> = _modelCandidates.asStateFlow()
@@ -79,6 +80,7 @@ class MainViewModel(
         val modelFiles = findModelFilesInDirectory(directoryUri)
         if (modelFiles.isEmpty()) {
             _modelCandidates.value = emptyList()
+            _selectedModelContentUri.value = ""
             _modelPath.value = ""
             _statusMessage.value = "No .gguf model found in selected directory."
             _lastError.value = "Selected directory does not contain a readable .gguf file."
@@ -87,7 +89,7 @@ class MainViewModel(
 
         _modelCandidates.value = modelFiles
         selectModelCandidate(
-            path = modelFiles.first().path,
+            path = modelFiles.first().contentUri,
             announceChoice = modelFiles.size == 1
         )
         _statusMessage.value = if (modelFiles.size == 1) {
@@ -99,8 +101,9 @@ class MainViewModel(
     }
 
     fun selectModelCandidate(path: String, announceChoice: Boolean = true) {
-        val selected = _modelCandidates.value.firstOrNull { it.path == path } ?: return
-        _modelPath.value = selected.path
+        val selected = _modelCandidates.value.firstOrNull { it.contentUri == path } ?: return
+        _selectedModelContentUri.value = selected.contentUri
+        _modelPath.value = selected.name
         if (announceChoice) {
             _statusMessage.value = "Selected model: ${selected.name}"
             _lastError.value = ""
@@ -123,7 +126,16 @@ class MainViewModel(
             _statusMessage.value = "Loading model..."
             _lastError.value = ""
             try {
-                val ok = localLlm.loadModel(_modelPath.value)
+                val selectedModel = _modelCandidates.value.firstOrNull {
+                    it.contentUri == _selectedModelContentUri.value
+                }
+                requireNotNull(selectedModel) { "No model file is currently selected." }
+
+                _statusMessage.value = "Preparing readable local model copy..."
+                val readableModelFile = ensureReadableLocalModelCopy(selectedModel)
+
+                _statusMessage.value = "Loading model..."
+                val ok = localLlm.loadModel(readableModelFile.absolutePath)
                 refreshNativeState()
                 _statusMessage.value = if (ok) {
                     "Model loaded."
@@ -192,32 +204,37 @@ class MainViewModel(
             .filter { it.isFile && it.name?.endsWith(".gguf", ignoreCase = true) == true }
             .sortedBy { it.name.orEmpty() }
             .mapNotNull { file ->
-                val name = file.name.orEmpty()
-                resolveAbsolutePath(directoryUri, name)?.let { path ->
-                    ModelCandidate(name = name, path = path)
-                }
+                val name = file.name ?: return@mapNotNull null
+                ModelCandidate(
+                    name = name,
+                    contentUri = file.uri.toString(),
+                    sizeBytes = file.length()
+                )
             }
     }
 
-    private fun resolveAbsolutePath(directoryUri: Uri, fileName: String): String? {
-        val treeDocumentId = DocumentsContract.getTreeDocumentId(directoryUri)
-        val parts = treeDocumentId.split(':', limit = 2)
-        if (parts.size != 2) {
-            return null
+    private fun ensureReadableLocalModelCopy(candidate: ModelCandidate): File {
+        val application = getApplication<Application>()
+        val sourceUri = Uri.parse(candidate.contentUri)
+        val targetDir = File(application.filesDir, "imported-models").apply {
+            mkdirs()
+        }
+        val targetFile = File(targetDir, candidate.name)
+
+        if (targetFile.exists() && targetFile.length() > 0L && targetFile.length() == candidate.sizeBytes) {
+            return targetFile
         }
 
-        val volume = parts[0]
-        val relativeDir = parts[1]
-        val baseDir = when (volume.lowercase()) {
-            "primary" -> Environment.getExternalStorageDirectory()
-            else -> File("/storage/$volume")
+        application.contentResolver.openInputStream(sourceUri).use { input ->
+            requireNotNull(input) { "Cannot open selected model file." }
+            targetFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
         }
 
-        val modelFile = File(baseDir, joinPath(relativeDir, fileName))
-        return modelFile.path.takeIf { modelFile.exists() }
-    }
-
-    private fun joinPath(parent: String, child: String): String {
-        return if (parent.isBlank()) child else "$parent/$child"
+        require(targetFile.exists() && targetFile.canRead()) {
+            "Imported model copy is not readable."
+        }
+        return targetFile
     }
 }

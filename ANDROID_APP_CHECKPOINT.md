@@ -124,6 +124,16 @@ Completed in this node:
 Why this matters:
 - The next runtime test should give a more actionable failure message if native init/backends/library loading is the real problem.
 
+## SAF Import Fix - 2026-03-30
+
+Completed in this node:
+- Stopped relying on direct external-storage file readability after SAF directory selection.
+- The app now prepares a readable app-local copy of the selected `.gguf` file before passing its path into the native engine.
+
+Why this matters:
+- This directly targets the observed `Cannot read file` failure on device.
+- It avoids fragile assumptions about converting SAF-selected content into directly readable filesystem paths.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：
