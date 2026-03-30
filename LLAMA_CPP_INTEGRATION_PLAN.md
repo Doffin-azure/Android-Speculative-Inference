@@ -1,5 +1,34 @@
 # llama.cpp Integration Plan
 
+## Long-Term Roadmap - 2026-03-30
+
+The long-term goal is not only a phone-local `llama.cpp` app.
+
+The intended end state is a cooperative speculative decoding system where:
+- the phone runs a smaller draft model locally
+- the computer runs a larger target model
+- the phone proposes token chunks
+- the computer verifies, accepts, or rejects them
+- both sides work together to improve latency and practical usability
+
+The roadmap from here is:
+1. Stabilize phone-local runtime behavior.
+2. Confirm real model loading and minimal prompt generation on device.
+3. Add a computer-side inference service for ordinary remote generation.
+4. Let the phone talk to the computer model through a normal non-speculative request path first.
+5. Design and implement the speculative decoding protocol on top of that baseline.
+6. Optimize throughput, fallback behavior, thermal behavior, and UX after the protocol works end to end.
+
+Current phase:
+- We are in phase 1 and phase 2 now.
+- Build integration is already complete.
+- The next real work is runtime validation, model-loading validation, and first-token generation validation on device.
+
+Near-term success condition before speculative decoding work begins:
+- the Android app can load a real GGUF model on device
+- the local engine can answer a minimal prompt successfully
+- UI state, lifecycle cleanup, and error reporting are stable enough to support later networking work
+
 更新时间: 2026-03-30
 
 ## Collaboration Rules - 2026-03-30

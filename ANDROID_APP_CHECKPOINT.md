@@ -1,5 +1,22 @@
 # Android App Checkpoint
 
+## Long-Term Roadmap - 2026-03-30
+
+This project is ultimately aimed at phone + computer cooperative speculative decoding, not only phone-local inference.
+
+Planned stage order:
+1. Stabilize local Android runtime with real `llama.cpp`.
+2. Validate real model load and minimal prompt generation on device.
+3. Add a computer-side inference service.
+4. Add a normal phone-to-computer inference path first.
+5. Build speculative decoding with phone-local draft generation and computer-side target verification.
+6. Tune performance, robustness, and user experience after the full loop works.
+
+Current stage:
+- build integration is done
+- runtime validation is the active next step
+- speculative decoding remains the long-term destination, not the immediate next code task
+
 更新时间: 2026-03-29
 
 ## Collaboration Rules - 2026-03-30
