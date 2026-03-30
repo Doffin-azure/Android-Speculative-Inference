@@ -33,7 +33,7 @@ From 2026-03-30 onward, repeat verification in Android Studio instead of termina
 
 Current effective call chain:
 
-`MainViewModel -> LocalLlmImpl -> :lib/NativeInferenceEngine -> :lib NativeBridge -> lib/src/main/cpp/ai_chat.cpp`
+`MainViewModel(AndroidViewModel) -> LocalLlmImpl(context) -> AiChat.getInferenceEngine(context) -> :lib/NativeInferenceEngine -> :lib NativeBridge -> lib/src/main/cpp/ai_chat.cpp`
 
 Remaining next step:
 - Replace `lib/src/main/cpp/ai_chat.cpp` and `lib/src/main/cpp/CMakeLists.txt` with the real `llama.cpp/examples/llama.android/lib` integration structure.
@@ -126,6 +126,15 @@ Why this mattered:
 Android Studio verification needed by user:
 - Re-run Gradle Sync / build model load.
 - Confirm the `:lib` script now configures without Kotlin DSL compilation errors.
+
+## Archive Consistency Fix - 2026-03-30
+
+Completed in this node:
+- Updated outdated call-chain text in the archive so it matches the current app wiring.
+- Removed stale references that still implied the old `StubLlamaEngine` main path.
+
+Why this matters:
+- The archive is now safe to use as the single source of truth when resuming work.
 
 ## ViewModel Cleanup Wiring - 2026-03-30
 
@@ -328,7 +337,7 @@ Android Studio verification needed by user:
 
 当前本项目的本地推理调用链已经变为：
 
-`MainViewModel -> LocalLlmImpl -> :lib/StubLlamaEngine`
+`MainViewModel(AndroidViewModel) -> LocalLlmImpl(context) -> AiChat.getInferenceEngine(context) -> :lib/NativeInferenceEngine`
 
 这意味着下一步接真实实现时，优先替换：
 
