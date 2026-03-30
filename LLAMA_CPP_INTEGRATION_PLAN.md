@@ -279,6 +279,74 @@ Meaning of this checkpoint:
 - Official `llama.cpp` sources are now successfully wired into this project's Android native build.
 - The next meaningful work is no longer "make it compile"; it is validating runtime behavior on device and fixing any model-loading or generation issues that appear there.
 
+## Context Handoff - 2026-03-30
+
+Use this section as the primary resume point in a fresh context window.
+
+Current real status:
+- Real `llama.cpp` sources are cloned locally at:
+  `C:\Users\JXZ\AndroidStudioProjects\llama.cpp`
+- Local path injection is active through ignored file:
+  `gradle-local.properties`
+- `:lib` is the only native integration module.
+- `app` no longer owns JNI/CMake code.
+- Android Studio has already completed:
+  - Gradle sync with real `llama.cpp` source discovery
+  - successful native build against the local `llama.cpp` checkout
+
+Current active runtime chain:
+- `MainViewModel(AndroidViewModel)`
+- `LocalLlmImpl(context)`
+- `AiChat.getInferenceEngine(context)`
+- `:lib/InferenceEngineImpl`
+- `lib/src/main/cpp/ai_chat.cpp`
+- linked against local `llama.cpp`
+
+Files that now matter most:
+- `lib/src/main/java/com/example/myapplication/llama/internal/InferenceEngineImpl.kt`
+- `lib/src/main/cpp/ai_chat.cpp`
+- `lib/src/main/cpp/CMakeLists.txt`
+- `lib/build.gradle.kts`
+- `gradle-local.properties` (local only, ignored)
+
+Known environment notes:
+- `Git not found` warning from llama.cpp CMake build-info is non-blocking.
+- Windows long-path warnings may become relevant later.
+  Recommended mitigation if needed:
+  move llama.cpp checkout to a shorter path like `C:\src\llama.cpp`
+  and update `gradle-local.properties`.
+
+What has already been fully finished:
+- preparation phase
+- app-local JNI removal
+- official-style engine migration
+- official native source replacement
+- first real llama.cpp native build success
+
+What is not finished yet:
+- runtime validation on device
+- confirming model load succeeds with a real GGUF file
+- confirming generation succeeds and returns visible text
+- investigating any runtime crashes, native exceptions, or bad output
+- optional performance/ABI/path cleanup after correctness is proven
+
+Next work plan:
+1. Run the app on device from Android Studio.
+2. Test real model loading with a valid local GGUF path.
+3. Test one minimal prompt and capture:
+   - UI error/status text
+   - first relevant Logcat lines for `ai-chat`, `InferenceEngineImpl`, `llama`, or `ggml`
+4. If model load fails:
+   debug file access, backend init, and native load/prepare stages first.
+5. If generation fails after model load:
+   debug prompt processing, tokenizer/chat-template handling, and `generateNextToken()`.
+6. Only after runtime correctness is stable:
+   consider path shortening, warning cleanup, and performance tuning.
+
+Rule for future turns:
+- Do not reopen preparation work unless a runtime issue proves a missing prerequisite.
+- Focus on runtime behavior and real inference correctness first.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
