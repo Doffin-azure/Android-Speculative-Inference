@@ -17,8 +17,8 @@ The staged path remains:
 Current real stage:
 
 - `llama.cpp` Android native build is already integrated and successful
-- the active blocker is runtime validation on device
-- the main unresolved issue is Android-side model loading/runtime behavior, not project scaffolding
+- on-device local runtime validation has now succeeded for the current test model
+- the immediate blocker is no longer "can Android load and run a real model locally"
 
 ## Active Technical Findings
 
@@ -34,14 +34,15 @@ Already resolved:
 - desktop `llama-cli` has now successfully loaded the target GGUF and generated text
 - Android diagnostics can now be copied directly from the UI or pulled from a persisted app-private log file
 - Android-side model-load failure has been narrowed to a backend-loading problem instead of a bad GGUF file
+- Android built-in backend loading has now restored successful model loading
+- Android has now completed a real minimal prompt generation with the imported GGUF model
 
 Current strongest conclusion:
 
 - the tested `Llama-3.2-1B-Instruct-Q4_K_M.gguf` file appears structurally valid on the computer
 - the same file also runs successfully through desktop `llama.cpp`
-- Android-side load failure is therefore much more likely to be caused by Android runtime compatibility or integration details than by the model artifact itself
-- the latest device-side root cause before the current fix was `no backends are loaded`
-- the active Android fix path is to use a built-in ggml backend instead of relying on dynamic backend loading
+- Android now also loads the same file successfully after switching to the built-in ggml backend path
+- the earlier Android failure was specifically caused by backend-loading configuration, not by the model artifact
 
 ## Important Files
 
@@ -63,7 +64,7 @@ Desktop GGUF validation path:
 
 Primary blocker:
 
-- Android app runtime still needs to be revalidated after switching from dynamic backend loading to built-in backend loading
+- Android local baseline is now working; the next blocker shifts to making the local baseline stable enough to support the later phone+computer architecture
 
 Secondary blocker:
 
@@ -73,9 +74,9 @@ Secondary blocker:
 
 The next step should focus on one of these:
 
-1. continue Android-side native load debugging with this same model
-2. compare Android-side behavior against the now-confirmed desktop success path using the same GGUF file
-3. verify whether the built-in backend change restores successful Android model loading
+1. record the Android local-runtime success as a completed milestone and preserve the known-good setup
+2. continue validating local generation behavior with a few more prompts so the baseline is not a one-shot fluke
+3. begin preparing the next stage above the local baseline instead of reopening backend-load triage
 
 ## What Not To Reopen
 
