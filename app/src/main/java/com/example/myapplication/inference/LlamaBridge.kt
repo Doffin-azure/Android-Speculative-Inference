@@ -1,5 +1,9 @@
 package com.example.myapplication.inference
 
+/**
+ * Legacy app-local JNI bridge retained only as a fallback reference.
+ * The active local inference path is now routed through the :lib module.
+ */
 object LlamaBridge {
     init {
         System.loadLibrary("llama-jni")
