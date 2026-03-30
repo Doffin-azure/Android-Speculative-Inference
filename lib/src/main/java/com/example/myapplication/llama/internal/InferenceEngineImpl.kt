@@ -110,6 +110,15 @@ internal class InferenceEngineImpl private constructor(
         }
     }
 
+    private suspend fun awaitInitializedState() {
+        withContext(llamaDispatcher) {
+            check(
+                state.value is InferenceEngine.State.Initialized ||
+                    state.value is InferenceEngine.State.Error
+            ) { "Engine is not ready yet: ${state.value.javaClass.simpleName}." }
+        }
+    }
+
     override fun backendLabel(): String = "ai-chat (official-style engine shell)"
 
     override fun isModelLoaded(): Boolean {
@@ -125,10 +134,7 @@ internal class InferenceEngineImpl private constructor(
     override fun lastError(): String = currentError
 
     override suspend fun loadModel(pathToModel: String) = withContext(llamaDispatcher) {
-        check(
-            state.value is InferenceEngine.State.Initialized ||
-                state.value is InferenceEngine.State.Error
-        ) { "Cannot load model in ${state.value.javaClass.simpleName}." }
+        awaitInitializedState()
 
         try {
             File(pathToModel).let {
@@ -247,6 +253,7 @@ internal class InferenceEngineImpl private constructor(
                 }
 
                 is InferenceEngine.State.Initialized,
+                is InferenceEngine.State.Initializing,
                 is InferenceEngine.State.Uninitialized -> Unit
 
                 else -> {
