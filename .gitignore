@@ -3,6 +3,7 @@
 
 # Local machine / SDK configuration
 local.properties
+gradle-local.properties
 .gradle/
 .gradle-user/
 .android-user/

@@ -83,6 +83,21 @@ Android Studio verification needed by user:
 - Sync Gradle project and confirm no issues from the added environment-variable fallback.
 - When you are ready to start real integration later, configure the path locally without modifying tracked files.
 
+## Local Config Template - 2026-03-30
+
+Completed in this node:
+- Added `gradle-local.template.properties` as a checked-in example for future machine-local llama.cpp path settings.
+- Added `gradle-local.properties` to `.gitignore` so the real local file can stay untracked.
+
+How this will be used later:
+- Copy `gradle-local.template.properties` to `gradle-local.properties`.
+- Put `llamaCppSourceDir=...` into that local-only file when it is time to start real llama.cpp integration.
+- Keep tracked project files machine-agnostic.
+
+Android Studio verification needed by user:
+- No build change expected.
+- Optionally confirm the template file is visible in the project and the ignored `gradle-local.properties` convention is acceptable.
+
 ## Context Wiring Alignment - 2026-03-30
 
 Completed in this node:
