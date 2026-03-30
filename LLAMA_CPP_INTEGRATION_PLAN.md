@@ -388,6 +388,17 @@ Rule for future turns:
 - Remember the close-out workflow: explain the completed node, then sync git.
 - Remember the execution boundary: no bundle work by Codex; user performs bundle/package steps in Android Studio.
 
+## Model Directory Picker Update - 2026-03-30
+
+Completed in this node:
+- Added a system directory picker flow in the app UI instead of relying only on manual model-path typing.
+- The app now scans the selected directory for readable `.gguf` files.
+- When multiple candidate models are present, the app surfaces them in the UI for explicit selection instead of silently taking the first one.
+
+Why this matters:
+- Device-side runtime validation is less brittle because model selection errors are easier to avoid and easier to diagnose.
+- This improves the path toward the next real milestone: load a real model and validate first prompt generation on device.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:

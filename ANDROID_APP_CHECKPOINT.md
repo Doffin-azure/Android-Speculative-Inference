@@ -94,6 +94,18 @@ If work is resumed in a new context, the short version is:
   3. run minimal prompt
   4. inspect UI status + Logcat if anything fails
 
+## Model Directory Picker Update - 2026-03-30
+
+Completed in this node:
+- Replaced the "manual model path only" flow with a system directory picker entry point.
+- After a directory is selected, the app now scans for readable `.gguf` files.
+- If exactly one model is found, it is selected automatically.
+- If multiple models are found, the UI now lists them explicitly so the user can choose which file to load.
+
+What this means:
+- Model selection is now better aligned with real device usage.
+- Runtime validation can focus more on model load/inference behavior and less on manual path entry mistakes.
+
 ## 当前目标
 
 开发一个 Android 手机上的本地推理 App，后续再扩展到：
