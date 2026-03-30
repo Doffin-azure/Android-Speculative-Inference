@@ -186,6 +186,23 @@ Why this matters:
 - The archive once again matches the actual code path after the first migration wave.
 - Early lifecycle calls are less likely to trip over the engine’s initialization boundary.
 
+## App JNI Removal - 2026-03-30
+
+Completed in this node:
+- Removed the obsolete app-local JNI bridge `LlamaBridge.kt`.
+- Removed `app/src/main/cpp/CMakeLists.txt` and `app/src/main/cpp/llama_jni.cpp`.
+- Removed `app` module `externalNativeBuild` wiring so the application no longer builds an unused native target.
+- Removed the now-empty `app/src/main/cpp` directory from the project tree.
+
+Current structure:
+- `app` is now fully a UI/application shell.
+- `:lib` is now the only native integration module.
+
+Android Studio verification needed by user:
+- Sync Gradle project.
+- Confirm `app` no longer expects its own CMake/native configuration.
+- Confirm native build responsibility is now entirely under `:lib`.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:

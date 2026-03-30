@@ -19,16 +19,6 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
-
-        externalNativeBuild {
-            cmake {
-                cppFlags += ""
-            }
-        }
     }
 
 
@@ -47,13 +37,6 @@ android {
     }
     buildFeatures {
         compose = true
-    }
-    externalNativeBuild {
-        cmake {
-            // Legacy JNI stub only. Real llama.cpp integration is being prepared in :lib.
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
     }
 }
 
