@@ -1,0 +1,310 @@
+# Android App Checkpoint
+
+更新时间: 2026-03-29
+
+## Collaboration Rules - 2026-03-30
+
+- Repository hygiene: keep Android Studio, Gradle, native build output, and local environment files out of git via `.gitignore`.
+- Workflow rule: after each completed task/session, sync the git repository.
+- Build rule: all Gradle sync, compile, CMake, install, and runtime verification steps are performed in Android Studio by the user.
+- Codex should focus on code/document edits and should not run project build commands unless this rule is explicitly changed later.
+
+## 当前目标
+
+开发一个 Android 手机上的本地推理 App，后续再扩展到：
+
+- 本地 GPU / NPU 推理
+- 云端推理
+- 手机本地 draft + 云端 target 的投机解码
+
+当前阶段只做到：
+
+- Android 开发环境打通
+- 真机部署成功
+- Kotlin/Compose 项目骨架建立
+- `ViewModel` 状态管理建立
+- JNI 骨架打通
+
+还没有开始：
+
+- 真实 `llama.cpp` 集成
+- 模型文件选择与加载
+- 云端 WebSocket
+- speculative decoding 协议
+
+## 已确认的开发路线
+
+优先路线：
+
+- Windows 上做 Android 原生开发
+- VS Code 可作为主要编辑器
+- Android Studio 负责 SDK / NDK / 模拟器 / 首次项目创建 / 必要同步
+- WSL 更适合后续跑 Python/FastAPI 云端服务，不适合作为 Android 主开发环境
+
+原因：
+
+- 真机调试、ADB、NDK、Gradle、Android Studio 在 Windows 原生更顺
+- 手机上的 GPU / NPU / 发热 / 内存测试必须在真机上做
+
+## 环境部分已完成
+
+已完成的认知和配置：
+
+- 用户有电脑和一台手机
+- Android 开发优先选真机，不选模拟器
+- 手机 USB 连接时优先选“文件传输”，不要选 MIDI
+- 已打开 USB 调试
+- Android Studio 已能正常连接手机并运行默认 App
+
+已讨论和确认的组件安装方式：
+
+在 Android Studio 的 `SDK Manager` 中安装：
+
+- `Android SDK`
+- `Android SDK Platform-Tools`
+- `Android SDK Build-Tools`
+- `Android SDK Command-line Tools (latest)`
+- `NDK (Side by side)`
+- `CMake`
+
+## 项目创建部分已完成
+
+已完成：
+
+- 使用 Android Studio 创建了 Android 项目
+- 项目名为 `My Application`
+- 已成功运行到真机
+
+提醒：
+
+- `Android` 视图会折叠真实目录，只显示 `manifests`、`kotlin+java`、`res`
+- 需要看真实路径时，要切到 `Project` 视图
+
+## 项目结构设计
+
+在 `kotlin+java` 对应的包名下，已经规划了这些 package：
+
+- `ui`
+- `inference`
+- `network`
+- `viewmodel`
+
+后续 native 目录应位于：
+
+- `app/src/main/cpp`
+
+## 已建立的代码架构
+
+### UI 层
+
+- `MainScreen.kt`
+
+职责：
+
+- 显示模型状态
+- 输入模型路径
+- 输入 prompt
+- 触发加载模型
+- 触发本地推理
+- 展示输出
+
+### 推理接口层
+
+- `LocalLlm.kt`
+- `LocalLlmImpl.kt`
+- `LlamaBridge.kt`
+
+职责：
+
+- 抽象本地模型能力
+- 通过 JNI 调用 native 层
+
+### 状态管理层
+
+- `MainViewModel.kt`
+
+职责：
+
+- 管理 `output`
+- 管理 `isModelLoaded`
+- 管理 `modelPath`
+- 统一处理 `loadModel()` 和 `runLocal()`
+
+### Activity 层
+
+- `MainActivity.kt`
+
+职责：
+
+- 绑定 `ViewModel`
+- 将状态传给 `MainScreen`
+
+## 目前功能状态
+
+当前 App 应具备：
+
+- 显示 `Model: Loaded / Not loaded`
+- 输入 `Model Path`
+- 点击 `Load Model`
+- 输入 `Prompt`
+- 点击 `Run Local`
+- 显示输出
+
+当前 native 仍为假实现，但整条链已经打通：
+
+- Kotlin -> JNI -> C++ -> Kotlin UI
+
+运行成功后的行为应类似：
+
+- 点击 `Load Model` 返回成功
+- 输入 prompt 后点击 `Run Local`
+- 输出形如 `JNI output: <你的输入>`
+
+## 已踩过的关键问题
+
+### 1. `MainActivity` 重复声明
+
+出现过：
+
+- `Redeclaration: class MainActivity : ComponentActivity`
+
+原因：
+
+- 项目中存在重复的 `MainActivity`
+- 或同一个文件残留了默认模板和新代码两份定义
+
+处理方式：
+
+- 全局搜索 `class MainActivity`
+- 保证只保留一个定义
+
+### 2. 找不到 `cpp` 目录
+
+原因：
+
+- 当时处于 `Android` 视图
+- 该视图不会直接暴露真实目录结构
+
+处理方式：
+
+- 切换到 `Project` 视图
+- 在 `app/src/main/` 下手动创建 `cpp` 目录
+
+### 3. 找不到 `app/build.gradle.kts`
+
+原因：
+
+- 混淆了 `app/build/` 目录和 `app/build.gradle.kts` 文件
+
+处理方式：
+
+- 搜索并打开 `app/build.gradle.kts`
+- 不要误改 `app/build/` 生成目录
+
+## 当前 native / JNI 状态
+
+已设计的 JNI 桥：
+
+- `LlamaBridge.kt`
+  - `loadModel(modelPath: String): Boolean`
+  - `generate(prompt: String, maxTokens: Int): String`
+  - `draftTokenIds(prompt: String, count: Int): IntArray`
+
+native 侧已规划文件：
+
+- `app/src/main/cpp/llama_jni.cpp`
+- `app/src/main/cpp/CMakeLists.txt`
+
+`System.loadLibrary("llama-jni")` 与 CMake 中的库名必须一致。
+
+JNI 方法名必须和包名完全匹配。如果包名不是：
+
+- `com.example.myapplication`
+
+则 `llama_jni.cpp` 中的 JNI 符号名也必须同步修改。
+
+## `app/build.gradle.kts` 当前认知
+
+已确认项目使用 `build.gradle.kts`。
+
+用户贴出的模块级 Gradle 文件已经包含：
+
+- `externalNativeBuild`
+- `cmake.path = file("src/main/cpp/CMakeLists.txt")`
+- `cmake.version = "3.22.1"`
+
+还补充建议过：
+
+```kotlin
+ndk {
+    abiFilters += listOf("arm64-v8a")
+}
+```
+
+目的：
+
+- 先只构建手机常用的 `arm64-v8a`
+- 降低 native 构建复杂度
+
+## 当前最重要的结论
+
+不要下一步就直接硬写真实 `llama.cpp` JNI。
+
+更稳的顺序是：
+
+1. 先跑通官方 `llama.cpp` Android 示例
+2. 再把其中的 native 层和 Kotlin 封装迁到自己的项目
+
+原因：
+
+- `llama.cpp` 的 `libllama` API 变化较快
+- 官方已经提供 `examples/llama.android`
+- 直接复用官方示例，比从零手搓 JNI 更稳
+
+官方参考：
+
+- Android 文档：<https://github.com/ggml-org/llama.cpp/blob/master/docs/android.md>
+- 仓库：<https://github.com/ggml-org/llama.cpp>
+
+## 明确建议的下一步
+
+下次继续时，按这个顺序进行：
+
+1. 下载 `llama.cpp` 仓库
+2. 在 Android Studio 中打开 `examples/llama.android`
+3. 先把官方 demo 跑到手机上
+4. 看懂它的关键目录、Kotlin 封装、native 组织方式
+5. 再回到 `My Application` 项目，把成熟部分迁入自己的工程
+
+不要先做：
+
+- 云端服务
+- speculative decoding 协议
+- NPU 优化
+- GPU/NPU 自动切换
+
+这些都必须在本地真实模型稳定跑通之后再做
+
+## 后续总路线
+
+完整路线已经明确为：
+
+1. Android 环境与真机部署
+2. Kotlin/Compose App 骨架
+3. ViewModel 状态管理
+4. JNI 骨架
+5. 接入官方 `llama.cpp` Android 示例
+6. 在自己项目中接入真实本地模型
+7. 支持模型文件选择与加载
+8. 接入云端普通推理接口
+9. 再实现手机 draft + 云端 verify 的 speculative decoding
+
+## 下次恢复工作时的开场提示
+
+下次可以直接对 Codex 说：
+
+`继续按照 ANDROID_APP_CHECKPOINT.md，从 llama.cpp 官方 Android 示例接入开始。`
+
+或者更具体：
+
+`阅读 ANDROID_APP_CHECKPOINT.md，然后带我把 llama.cpp/examples/llama.android 跑通。`
