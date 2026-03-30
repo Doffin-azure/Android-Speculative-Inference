@@ -98,6 +98,21 @@ Android Studio verification needed by user:
 - Sync Gradle project and confirm `MainViewModel` still instantiates correctly through `by viewModels()`.
 - Confirm there are no IDE errors after changing `MainViewModel` from `ViewModel` to `AndroidViewModel`.
 
+## App Adapter Alignment - 2026-03-30
+
+Completed in this node:
+- Expanded the app-layer `LocalLlm` abstraction so it is closer to the richer `:lib` inference API.
+- Added app-layer placeholders for `setSystemPrompt(...)`, `benchmark(...)`, and `cleanup()`.
+- Wired `LocalLlmImpl` to forward those calls into `:lib`.
+
+Why this matters:
+- The app layer is no longer shaped only around the earliest stub use case.
+- Future UI work can consume richer llama features without redesigning the adapter boundary first.
+
+Android Studio verification needed by user:
+- Sync Gradle project and confirm the new `LocalLlm` methods do not introduce IDE errors.
+- No UI changes are expected yet; this is API-surface preparation only.
+
 ## Legacy Bridge Clarification - 2026-03-30
 
 Completed in this node:

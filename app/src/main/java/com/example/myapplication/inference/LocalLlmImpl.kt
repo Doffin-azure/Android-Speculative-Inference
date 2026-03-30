@@ -33,12 +33,29 @@ class LocalLlmImpl(context: Context) : LocalLlm {
         }
     }
 
+    override suspend fun setSystemPrompt(systemPrompt: String): Boolean {
+        engine.setSystemPrompt(systemPrompt)
+        return when (engine.state.value) {
+            is InferenceEngine.State.ModelReady -> true
+            is InferenceEngine.State.Error -> false
+            else -> false
+        }
+    }
+
     override suspend fun generate(prompt: String, maxTokens: Int): String {
         val output = engine.generate(prompt, maxTokens).firstOrNull()
         return when (val state = engine.state.value) {
             is InferenceEngine.State.Error -> state.message
             else -> output ?: ""
         }
+    }
+
+    override suspend fun benchmark(pp: Int, tg: Int, pl: Int, nr: Int): String {
+        return engine.bench(pp, tg, pl, nr)
+    }
+
+    override fun cleanup() {
+        engine.cleanUp()
     }
 
     override suspend fun draftTokenIds(prompt: String, count: Int): List<Int> {
