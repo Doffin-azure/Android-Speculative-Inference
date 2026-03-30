@@ -1,21 +1,26 @@
 cmake_minimum_required(VERSION 3.22.1)
 
-project("ai_chat_jni")
+project("ai-chat" VERSION 1.0.0 LANGUAGES C CXX)
 
 set(USE_LLAMA_CPP OFF)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED true)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED true)
 
-# Actual llama.cpp source integration should start by providing LLAMA_CPP_SRC,
+# Actual llama.cpp source integration starts by providing LLAMA_CPP_SRC,
 # then replacing the current stub implementation in ai_chat.cpp with the
 # official llama.android/lib native wiring.
 if (DEFINED LLAMA_CPP_SRC AND EXISTS "${LLAMA_CPP_SRC}/CMakeLists.txt")
     message(STATUS "Using external llama.cpp source: ${LLAMA_CPP_SRC}")
     set(USE_LLAMA_CPP ON)
+    set(LLAMA_SRC "${LLAMA_CPP_SRC}")
 else()
     message(STATUS "Using stub ai_chat.cpp. Provide -DLLAMA_CPP_SRC=/path/to/llama.cpp to switch to real integration.")
 endif()
 
 add_library(
-        ai-chat-jni
+        ${CMAKE_PROJECT_NAME}
         SHARED
         ai_chat.cpp
 )
@@ -27,9 +32,25 @@ find_library(
 
 if (USE_LLAMA_CPP)
     add_compile_definitions(USE_REAL_LLAMA_CPP=1)
+    add_subdirectory(${LLAMA_SRC} build-llama)
+
+    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+            ${LLAMA_SRC}
+            ${LLAMA_SRC}/common
+            ${LLAMA_SRC}/include
+            ${LLAMA_SRC}/ggml/include
+            ${LLAMA_SRC}/ggml/src)
 endif()
 
 target_link_libraries(
-        ai-chat-jni
+        ${CMAKE_PROJECT_NAME}
         ${log-lib}
 )
+
+if (USE_LLAMA_CPP)
+    target_link_libraries(
+            ${CMAKE_PROJECT_NAME}
+            llama
+            common
+            android)
+endif()
