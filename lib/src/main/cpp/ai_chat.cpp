@@ -72,12 +72,20 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_init(
         JNIEnv *env,
         jobject /* unused */,
         jstring nativeLibDir) {
+    clear_recent_native_logs();
     llama_log_set(aichat_android_log_callback, nullptr);
 
+#ifdef GGML_BACKEND_DL
     const auto *path_to_backend = env->GetStringUTFChars(nativeLibDir, 0);
-    LOGi("Loading backends from %s", path_to_backend);
+    LOGi("Loading dynamic backends from %s", path_to_backend);
     ggml_backend_load_all_from_path(path_to_backend);
     env->ReleaseStringUTFChars(nativeLibDir, path_to_backend);
+#else
+    (void) env;
+    (void) nativeLibDir;
+    LOGi("Loading built-in ggml backends");
+    ggml_backend_load_all();
+#endif
 
     llama_backend_init();
     LOGi("Backend initiated; log handler set.");
