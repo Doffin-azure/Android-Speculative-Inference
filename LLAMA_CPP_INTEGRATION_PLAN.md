@@ -221,6 +221,17 @@ Android Studio verification needed by user:
 - Confirm `:lib` CMake now resolves headers and targets from the local `llama.cpp` checkout.
 - Confirm whether the next failure, if any, is now a real upstream integration/build issue rather than a local project-structure issue.
 
+## Official Build Parity Pass - 2026-03-30
+
+Completed in this node:
+- Brought `lib/src/main/cpp/CMakeLists.txt` closer to the official Android sample by adding ABI-based `GGML_SYSTEM_ARCH`, `GGML_CPU_KLEIDIAI`, and `GGML_OPENMP` handling.
+- Added the related compile definitions for the `ai-chat` target when building against a real `llama.cpp` checkout.
+- Added `-DCMAKE_BUILD_TYPE=Release` to `lib/build.gradle.kts` so the native configuration is closer to the official sample defaults.
+
+Why this matters:
+- The project’s CMake behavior is now much closer to the official `examples/llama.android/lib` layout.
+- Any remaining failures are increasingly likely to be genuine upstream integration issues instead of missing local build flags.
+
 ## Interface Noise Cleanup - 2026-03-30
 
 Completed in this node:
