@@ -1,11 +1,12 @@
 package com.example.myapplication.inference
 
+import android.content.Context
 import com.example.myapplication.llama.AiChat
 import com.example.myapplication.llama.InferenceEngine
 import kotlinx.coroutines.flow.firstOrNull
 
-class LocalLlmImpl : LocalLlm {
-    private val engine: InferenceEngine = AiChat.getInferenceEngine()
+class LocalLlmImpl(context: Context) : LocalLlm {
+    private val engine: InferenceEngine = AiChat.getInferenceEngine(context.applicationContext)
 
     override fun backendLabel(): String {
         return engine.backendLabel()
