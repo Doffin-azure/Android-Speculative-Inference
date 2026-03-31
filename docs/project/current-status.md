@@ -18,7 +18,9 @@ Current real stage:
 
 - `llama.cpp` Android native build is already integrated and successful
 - on-device local runtime validation has now succeeded for the current test model
+- the Android local baseline has been re-confirmed through the repeat validation checklist
 - the immediate blocker is no longer "can Android load and run a real model locally"
+- the next active stage is defining and implementing the computer-side normal inference service
 
 ## Active Technical Findings
 
@@ -43,6 +45,7 @@ Current strongest conclusion:
 - the same file also runs successfully through desktop `llama.cpp`
 - Android now also loads the same file successfully after switching to the built-in ggml backend path
 - the earlier Android failure was specifically caused by backend-loading configuration, not by the model artifact
+- the Android local baseline should now be treated as established rather than tentative
 
 ## Important Files
 
@@ -64,7 +67,8 @@ Desktop GGUF validation path:
 
 Primary blocker:
 
-- Android local baseline is now working; the next blocker shifts to making the local baseline stable enough to support the later phone+computer architecture
+- the next blocker is no longer Android local correctness
+- the next blocker is defining a clean ordinary remote inference boundary between phone and computer
 
 Secondary blocker:
 
@@ -74,40 +78,41 @@ Secondary blocker:
 
 The next step should focus on one of these:
 
-1. record the Android local-runtime success as a completed milestone and preserve the known-good setup
-2. continue validating local generation behavior with a few more prompts so the baseline is not a one-shot fluke
-3. begin preparing the next stage above the local baseline instead of reopening backend-load triage
+1. define the computer-side normal inference service contract
+2. implement the smallest possible desktop service that returns one complete generation response
+3. add the Android-side normal remote request path on top of that contract
 
 ## Immediate Execution Order
 
 Use this order unless a new runtime failure appears:
 
-1. preserve the current Android local-runtime success as the baseline milestone
-2. rerun a few small on-device prompt checks and capture diagnostics if anything regresses
-3. only after the baseline still looks healthy, start the next-stage design for the computer-side normal inference service
+1. use `docs/project/computer-inference-service-boundary.md` as the stage-3 design reference
+2. define the first normal request/response payload for the computer-side service
+3. implement and verify the desktop service locally before involving the Android client
+4. only after the ordinary remote path works, plan speculative decoding on top of it
 
 Practical interpretation:
 
-- do not spend the next node reopening backend-load debugging unless a fresh device run fails again
-- do not spend the next node on UI polish unless it is needed to support runtime validation
-- treat desktop GGUF tooling as confirmation support, not the current mainline
-- use `docs/project/android-local-baseline-checklist.md` as the on-device rerun procedure
+- do not reopen backend-load debugging unless a fresh device run fails again
+- do not jump straight into speculative decoding protocol work
+- do not replace the proven local path while introducing the remote path
+- use `docs/project/computer-inference-service-boundary.md` as the mainline reference for the next node
 
 ## Definition Of Done For The Next Node
 
 The next node is complete when all of the following are true:
 
-- the Android local-runtime success is explicitly recorded as a milestone in project documentation
-- the known-good test setup is preserved clearly enough that the same validation can be repeated later
-- at least a small set of repeat prompt checks has either succeeded again or produced captured diagnostics for the next debug pass
+- the ordinary computer-side inference service boundary is documented clearly enough to implement against
+- the first service contract is simple enough to test independently from Android
+- the local Android baseline remains the fallback reference while the remote path is added
 - the close-out includes the required git-sync explanation and markdown summary update
 
 ## After That
 
-Once the local baseline has been re-confirmed, the next architectural step is:
+Once the ordinary remote boundary is defined, the next architectural step is:
 
-1. define the computer-side normal inference service boundary
-2. define the Android-to-computer normal request path
+1. implement the computer-side normal inference service
+2. add the Android-to-computer normal request path
 3. treat speculative decoding as a later layer on top of that ordinary remote path
 
 ## What Not To Reopen
