@@ -76,6 +76,9 @@ class MainViewModel(
     private val _remoteProbeSummary = MutableStateFlow("")
     val remoteProbeSummary: StateFlow<String> = _remoteProbeSummary.asStateFlow()
 
+    private val _remoteResultSummary = MutableStateFlow("")
+    val remoteResultSummary: StateFlow<String> = _remoteResultSummary.asStateFlow()
+
     private val _lastError = MutableStateFlow("")
     val lastError: StateFlow<String> = _lastError.asStateFlow()
 
@@ -271,6 +274,7 @@ class MainViewModel(
             _statusMessage.value = "Testing remote connectivity..."
             _lastError.value = ""
             _remoteProbeSummary.value = ""
+            _remoteResultSummary.value = ""
 
             try {
                 appendLog("Remote probe requested for $baseUrl")
@@ -321,6 +325,7 @@ class MainViewModel(
             _isGenerating.value = true
             _statusMessage.value = "Checking remote service..."
             _lastError.value = ""
+            _remoteResultSummary.value = ""
 
             try {
                 appendLog("Remote health check requested for $baseUrl")
@@ -337,6 +342,15 @@ class MainViewModel(
                 val response = remoteClient.generate(baseUrl, request)
                 _output.value = response.outputText.ifBlank { response.error }
                 _remoteBackendLabel.value = response.backendLabel
+                _remoteResultSummary.value = buildString {
+                    appendLine("RequestId: ${response.requestId}")
+                    appendLine("Finish reason: ${response.finishReason}")
+                    appendLine("Backend: ${response.backendLabel}")
+                    if (response.generationMs >= 0) {
+                        appendLine("Generation ms: ${response.generationMs}")
+                    }
+                    appendLine("Output length: ${response.outputText.length}")
+                }.trim()
                 _statusMessage.value = "Remote inference complete."
                 _lastError.value = response.error
                 appendLog(
@@ -381,6 +395,7 @@ class MainViewModel(
             appendLine("Remote server URL: ${_remoteServerUrl.value}")
             appendLine("Remote backend: ${_remoteBackendLabel.value}")
             appendLine("Remote probe summary: ${_remoteProbeSummary.value}")
+            appendLine("Remote result summary: ${_remoteResultSummary.value}")
             appendLine("Status: ${_statusMessage.value}")
             appendLine("Model loaded: ${_isModelLoaded.value}")
             appendLine("Selected model: ${_modelPath.value}")

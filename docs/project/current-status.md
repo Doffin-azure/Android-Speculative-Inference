@@ -23,7 +23,8 @@ Current real stage:
 - the project now has a first working desktop HTTP inference service skeleton
 - the Android app now contains a first normal remote client path and local/remote mode switch
 - the project now also has a dedicated remote connectivity probe path with desktop-side request logging
-- the next active stage is verifying the Android-to-desktop remote path in Android Studio / on device
+- the Android-to-desktop normal remote path has now completed a successful end-to-end validation run
+- the next active stage is stabilizing the ordinary remote baseline and then defining the speculative layer on top of it
 
 ## Active Technical Findings
 
@@ -52,6 +53,7 @@ Current strongest conclusion:
 - the first desktop `POST /v1/generate` baseline is now working locally through the new service skeleton
 - the codebase now has the minimum Android-side pieces needed to call that remote service
 - the project now has a separate network probe path so connectivity can be tested without involving model generation
+- the ordinary remote path has now also been validated from the Android device over the LAN against the desktop service
 
 ## Important Files
 
@@ -78,7 +80,8 @@ Desktop GGUF validation path:
 Primary blocker:
 
 - the next blocker is no longer Android local correctness
-- the next blocker is verifying the new Android remote client path against the working desktop service
+- the next blocker is no longer basic phone-to-computer reachability
+- the next blocker is turning the newly proven ordinary remote path into a stable baseline for the later speculative protocol
 
 Secondary blocker:
 
@@ -88,20 +91,18 @@ Secondary blocker:
 
 The next step should focus on one of these:
 
-1. verify the new Android remote client path against the desktop service from Android Studio / on device
-2. use the new probe path first to confirm network reachability before generation
-3. keep the local path intact as fallback while remote validation proceeds
+1. record the successful ordinary remote baseline as a completed milestone
+2. tighten remote-mode diagnostics and small UX details while the validation is still fresh
+3. start defining the speculative decoding protocol on top of the now-proven local + remote baselines
 
 ## Immediate Execution Order
 
 Use this order unless a new runtime failure appears:
 
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
-2. start the desktop service locally
-3. use the Android-side remote connectivity probe and confirm a matching line appears in the desktop request log
-4. only after the probe succeeds, run the full remote generation path
-5. capture remote success or failure through the existing diagnostics surfaces
-6. only after the ordinary remote path works end to end, plan speculative decoding on top of it
+2. preserve the currently known-good ordinary remote path as the baseline reference
+3. keep the local and ordinary remote paths both usable while defining the speculative layer
+4. only after the speculative contract is clear, decide what additional client/server restructuring is needed
 
 Practical interpretation:
 
@@ -112,14 +113,15 @@ Practical interpretation:
 - use `docs/project/desktop-inference-service-runbook.md` for the working desktop-service baseline
 - remember that the Android app currently uses ordinary HTTP, so the desktop service host must be reachable from the device or emulator
 - use the probe endpoint and desktop request log first when debugging "cannot connect" failures
+- treat the current local and ordinary remote paths as proven baselines, not open hypotheses
 
 ## Definition Of Done For The Next Node
 
 The next node is complete when all of the following are true:
 
-- Android can call the working desktop service through the new normal request path
-- the Android-side probe can confirm basic network reachability and the desktop request log records the attempt
-- the app can surface remote success or remote failure clearly
+- the successful ordinary remote path is recorded clearly in project documentation
+- the app surfaces remote request metadata clearly enough to support future debugging
+- the project has a concrete first draft of the speculative-layer contract
 - the local Android baseline remains the fallback reference while the remote path is added
 - the close-out includes the required git-sync explanation and markdown summary update
 
@@ -127,19 +129,17 @@ The next node is complete when all of the following are true:
 
 Once the ordinary remote boundary is defined, the next architectural step is:
 
-1. add the Android-to-computer normal request path
-2. validate the full local-network or localhost-bridge flow
-3. treat speculative decoding as a later layer on top of that ordinary remote path
+1. define the speculative draft/verify protocol
+2. decide how the phone-local model and computer-hosted model exchange token work
+3. preserve fallback behavior between local-only, remote-only, and future speculative modes
 
 ## Android Studio Verification Needed By User
 
 For the next validation node:
 
-- confirm the app still syncs and indexes after the remote-client additions
-- start the desktop service using `docs/project/desktop-inference-service-runbook.md`
-- use the remote probe before trying full generation
-- test remote mode from the app with a reachable service URL
-- confirm both success and failure states are readable through the app UI and diagnostic snapshot
+- confirm the app still syncs and indexes after the latest remote-result UI additions
+- keep one known-good ordinary remote run recorded as the new baseline reference
+- use the remote probe and ordinary remote run again only when later changes need regression checking
 
 ## What Not To Reopen
 
