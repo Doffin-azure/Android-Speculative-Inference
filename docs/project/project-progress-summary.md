@@ -177,6 +177,7 @@ Already complete:
   - `prompt_stub`
   - `llama_preview`
   - `llama_step_proxy`
+  - `llama_replay_proxy`
 - Android now surfaces the active verifier mode in probe results, session summaries, and dedicated UI state
 
 Why it matters:
@@ -214,6 +215,20 @@ Why it matters:
 - this is the closest current verifier harness to real target verification without changing the Android protocol
 - it removes the earlier limitation where accepted/correction behavior could only see the fixed preview generated at session start
 
+## Milestone 12: Llama Replay Proxy Bridge
+
+Already complete:
+
+- the desktop service now exposes `llama_replay_proxy`
+- this mode rebuilds the verifier target from the currently accepted assistant prefix instead of only relying on a fixed preview buffer
+- local smoke validation already confirmed clean `start -> propose -> close` behavior with `accepted_by_llama_replay`
+- replay-mode preview text is now filtered cleanly enough to surface the real continuation instead of banner noise
+
+Why it matters:
+
+- this is the closest current verifier bridge to true target continuation checking without changing the Android-side protocol
+- it lets desktop verification depend on the speculative session's already accepted output, not just on the original prompt or a one-shot preview
+
 ## What Is Proven Right Now
 
 These statements should now be treated as established:
@@ -226,6 +241,7 @@ These statements should now be treated as established:
 - Android can deliberately trigger and display correction behavior
 - verifier mode and llama-backed preview visibility are proven
 - llama-backed preview refresh during speculative propose is proven
+- replay-based target continuation proxy verification is proven
 
 ## What Is Still Stubbed
 
@@ -233,7 +249,7 @@ These parts are still not the final implementation:
 
 - Android draft tokens are still placeholder prompt-derived token ids
 - desktop speculative verification is still not based on target-model token-by-token verification
-- `llama_preview` and `llama_step_proxy` provide preview-text proxy verification, not full target token verification
+- `llama_preview`, `llama_step_proxy`, and `llama_replay_proxy` are still proxy verifiers, not full target token verification
 - speculative sessions are still debug-first, not performance-first
 
 ## Current Main Technical Gap
@@ -251,8 +267,8 @@ That ordering is still the lowest-risk path.
 ## Recommended Next Implementation Order
 
 1. keep the current Android speculative debug harness as the regression path
-2. keep `llama_step_proxy` as the highest-fidelity regression harness while true verification is being built
-3. replace desktop preview-text proxy verification with real target-model token verification
+2. keep `llama_replay_proxy` as the highest-fidelity regression harness while true verification is being built
+3. replace desktop replay-based proxy verification with real target-model token verification
 4. only then move down into `:lib` to expose real local draft tokens on Android
 5. keep ordinary remote fallback active throughout
 

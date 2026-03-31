@@ -31,6 +31,7 @@ Verifier modes:
 - `prompt_stub` keeps the current deterministic prompt-derived verifier
 - `llama_preview` prepares a llama-backed preview string at session start and now uses that preview text as the current accepted/correction target proxy
 - `llama_step_proxy` starts from the same llama-backed preview approach but can refresh the preview during `propose` when more target text is needed
+- `llama_replay_proxy` rebuilds the verifier target by replaying the already accepted assistant prefix back through `llama-cli` before each proposal step
 
 ## Preconditions
 
@@ -75,7 +76,7 @@ python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculati
 If you want the closest current proxy to future token verification:
 
 ```powershell
-python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculative-verifier-mode llama_step_proxy
+python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculative-verifier-mode llama_replay_proxy
 ```
 
 ## Health Check
@@ -221,6 +222,13 @@ When running in `llama_step_proxy` mode:
 - `targetPreviewText` still starts as a llama-backed preview string
 - if `propose` needs more target coverage than the current preview contains, the desktop service can refresh the preview before computing accepted/correction semantics
 - this is still a preview-text proxy, not real target-model token-by-token verification
+
+When running in `llama_replay_proxy` mode:
+
+- `startSession` prepares the first llama-backed target continuation preview
+- before later `propose` calls, the desktop service replays the currently accepted assistant prefix back into `llama-cli`
+- the verifier then compares the phone proposal against that replay-derived continuation and returns `accepted_by_llama_replay` or `corrected_by_llama_replay`
+- this is the closest current verifier harness to real target continuation checking, but it is still not a persistent target-model token session yet
 
 Finally close the session:
 
