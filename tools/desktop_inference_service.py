@@ -6,6 +6,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ DEFAULT_THREADS = 2
 DEFAULT_MAX_TOKENS = 64
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.9
+PROTOCOL_VERSION = 1
 
 
 def read_gradle_local_properties() -> dict[str, str]:
@@ -144,6 +146,28 @@ class ServiceConfig:
     ld_library_path: str
     threads: int
     request_log_path: Path
+
+
+@dataclass
+class SpeculativeSession:
+    session_id: str
+    request_id: str
+    protocol_version: int
+    draft_model: str
+    target_model: str
+    system_prompt: str
+    user_prompt: str
+    temperature: float
+    top_p: float
+    status: str
+    draft_step: int
+    accepted_token_ids: list[int]
+    accepted_token_count: int
+    mismatch_count: int
+    correction_token_ids: list[int]
+    last_finish_reason: str
+    created_at_ms: int
+    updated_at_ms: int
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -356,6 +380,195 @@ def run_generation(config: ServiceConfig, payload: dict[str, Any]) -> dict[str, 
     }
 
 
+def parse_int_list(name: str, value: Any) -> list[int]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be an array of integers.")
+
+    parsed: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise ValueError(f"{name} must contain only integers.")
+        parsed.append(int(item))
+    return parsed
+
+
+def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) -> SpeculativeSession:
+    session_id = str(payload.get("sessionId") or uuid.uuid4())
+    request_id = str(payload.get("requestId") or uuid.uuid4())
+    protocol_version = int(payload.get("protocolVersion") or PROTOCOL_VERSION)
+    sampling = payload.get("sampling") if isinstance(payload.get("sampling"), dict) else {}
+    temperature = float(sampling.get("temperature") or payload.get("temperature") or DEFAULT_TEMPERATURE)
+    top_p = float(sampling.get("topP") or payload.get("topP") or DEFAULT_TOP_P)
+    target_model = str(payload.get("targetModel") or config.model_path.name)
+    draft_model = str(payload.get("draftModel") or "")
+    system_prompt = str(payload.get("systemPrompt") or "")
+    user_prompt = str(payload.get("userPrompt") or "")
+    if not user_prompt.strip():
+        raise ValueError("userPrompt must not be blank.")
+
+    now_ms = int(time.time() * 1000)
+    return SpeculativeSession(
+        session_id=session_id,
+        request_id=request_id,
+        protocol_version=protocol_version,
+        draft_model=draft_model,
+        target_model=target_model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=temperature,
+        top_p=top_p,
+        status="ready",
+        draft_step=0,
+        accepted_token_ids=[],
+        accepted_token_count=0,
+        mismatch_count=0,
+        correction_token_ids=[],
+        last_finish_reason="",
+        created_at_ms=now_ms,
+        updated_at_ms=now_ms,
+    )
+
+
+def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
+    session = build_speculative_session(payload, server.config)
+    with server.sessions_lock:
+        server.sessions[session.session_id] = session
+
+    return {
+        "protocolVersion": session.protocol_version,
+        "type": "startSessionResult",
+        "sessionId": session.session_id,
+        "requestId": session.request_id,
+        "status": session.status,
+        "targetModel": session.target_model,
+        "draftModel": session.draft_model,
+        "acceptedTokenCount": session.accepted_token_count,
+        "mismatchCount": session.mismatch_count,
+        "fallbackAvailable": True,
+        "error": "",
+    }
+
+
+def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
+    session_id = str(payload.get("sessionId") or "")
+    if not session_id:
+        raise ValueError("sessionId is required.")
+
+    with server.sessions_lock:
+        session = server.sessions.get(session_id)
+    if session is None:
+        raise ValueError(f"Unknown speculative session: {session_id}")
+
+    draft_step = int(payload.get("draftStep") or 0)
+    proposed_token_ids = parse_int_list("proposedTokenIds", payload.get("proposedTokenIds"))
+    max_correction_tokens = max(1, int(payload.get("maxCorrectionTokens") or 1))
+
+    accepted_token_ids = list(proposed_token_ids)
+    accepted_count = len(accepted_token_ids)
+    correction_token_ids: list[int] = []
+    finish_reason = ""
+
+    session.draft_step = draft_step
+    session.accepted_token_ids.extend(accepted_token_ids)
+    session.accepted_token_count = len(session.accepted_token_ids)
+    session.correction_token_ids = correction_token_ids[:max_correction_tokens]
+    session.last_finish_reason = finish_reason
+    session.updated_at_ms = int(time.time() * 1000)
+
+    return {
+        "protocolVersion": session.protocol_version,
+        "type": "verifyDraftResult",
+        "sessionId": session.session_id,
+        "requestId": session.request_id,
+        "draftStep": draft_step,
+        "acceptedCount": accepted_count,
+        "acceptedTokenIds": accepted_token_ids,
+        "rejectedFromIndex": -1,
+        "correctionTokenIds": correction_token_ids,
+        "targetTextDelta": str(payload.get("proposedText") or ""),
+        "finishReason": finish_reason,
+        "acceptedTokenCount": session.accepted_token_count,
+        "mismatchCount": session.mismatch_count,
+        "status": "accepted_as_stub",
+        "warning": (
+            "Desktop speculative verification is currently a lifecycle stub. "
+            "It records proposals and accepts the provided token ids without target-model token verification yet."
+        ),
+        "error": "",
+    }
+
+
+def fallback_speculative_session(
+    server: "InferenceServer",
+    payload: dict[str, Any],
+) -> tuple[HTTPStatus, dict[str, Any]]:
+    session_id = str(payload.get("sessionId") or "")
+    if not session_id:
+        raise ValueError("sessionId is required.")
+
+    with server.sessions_lock:
+        session = server.sessions.get(session_id)
+    if session is None:
+        raise ValueError(f"Unknown speculative session: {session_id}")
+
+    reason = str(payload.get("reason") or "manual_fallback")
+    remaining_max_tokens = int(payload.get("remainingMaxTokens") or DEFAULT_MAX_TOKENS)
+    request_payload = {
+        "requestId": str(payload.get("requestId") or session.request_id),
+        "model": payload.get("targetModel") or session.target_model,
+        "systemPrompt": payload.get("systemPrompt") or session.system_prompt,
+        "userPrompt": payload.get("userPrompt") or session.user_prompt,
+        "maxTokens": remaining_max_tokens,
+        "temperature": payload.get("temperature") or session.temperature,
+        "topP": payload.get("topP") or session.top_p,
+    }
+    response = run_generation(server.config, request_payload)
+    session.status = "fallback_completed" if not response["error"] else "fallback_error"
+    session.last_finish_reason = response.get("finishReason") or ""
+    session.updated_at_ms = int(time.time() * 1000)
+
+    wrapped = {
+        "protocolVersion": session.protocol_version,
+        "type": "fallbackGenerateResult",
+        "sessionId": session.session_id,
+        "requestId": session.request_id,
+        "reason": reason,
+        "fallbackMode": "ordinary_remote_resume",
+        "status": session.status,
+        "generation": response,
+        "error": response.get("error", ""),
+    }
+    status = HTTPStatus.OK if not response["error"] else HTTPStatus.BAD_GATEWAY
+    return status, wrapped
+
+
+def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
+    session_id = str(payload.get("sessionId") or "")
+    if not session_id:
+        raise ValueError("sessionId is required.")
+
+    reason = str(payload.get("reason") or "completed")
+    with server.sessions_lock:
+        session = server.sessions.pop(session_id, None)
+    if session is None:
+        raise ValueError(f"Unknown speculative session: {session_id}")
+
+    return {
+        "protocolVersion": session.protocol_version,
+        "type": "closeSessionResult",
+        "sessionId": session.session_id,
+        "requestId": session.request_id,
+        "status": "closed",
+        "reason": reason,
+        "acceptedTokenCount": session.accepted_token_count,
+        "mismatchCount": session.mismatch_count,
+        "lastFinishReason": session.last_finish_reason,
+        "error": "",
+    }
+
+
 class InferenceRequestHandler(BaseHTTPRequestHandler):
     server: "InferenceServer"
 
@@ -367,6 +580,8 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "modelPath": str(self.server.config.model_path),
                 "requestLogPath": str(self.server.config.request_log_path),
                 "ipv4Addresses": detect_ipv4_addresses(),
+                "speculativeSessionCount": self.server.session_count(),
+                "speculativeProtocolVersion": PROTOCOL_VERSION,
             }
             self._write_json(HTTPStatus.OK, payload)
             self._record_request(HTTPStatus.OK, payload)
@@ -381,6 +596,7 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "serverPort": self.server.config.port,
                 "requestLogPath": str(self.server.config.request_log_path),
                 "ipv4Addresses": detect_ipv4_addresses(),
+                "speculativeSessionCount": self.server.session_count(),
             }
             self._write_json(HTTPStatus.OK, payload)
             self._record_request(HTTPStatus.OK, payload)
@@ -391,7 +607,13 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
             return
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/v1/generate":
+        if self.path not in {
+            "/v1/generate",
+            "/v1/speculative/start",
+            "/v1/speculative/propose",
+            "/v1/speculative/fallback",
+            "/v1/speculative/close",
+        }:
             self.send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint.")
             return
 
@@ -399,8 +621,20 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
             content_length = int(self.headers.get("Content-Length", "0"))
             raw_body = self.rfile.read(content_length)
             payload = json.loads(raw_body.decode("utf-8"))
-            response = run_generation(self.server.config, payload)
-            status = HTTPStatus.OK if not response["error"] else HTTPStatus.BAD_GATEWAY
+            if self.path == "/v1/generate":
+                response = run_generation(self.server.config, payload)
+                status = HTTPStatus.OK if not response["error"] else HTTPStatus.BAD_GATEWAY
+            elif self.path == "/v1/speculative/start":
+                response = start_speculative_session(self.server, payload)
+                status = HTTPStatus.OK
+            elif self.path == "/v1/speculative/propose":
+                response = propose_speculative_tokens(self.server, payload)
+                status = HTTPStatus.OK
+            elif self.path == "/v1/speculative/fallback":
+                status, response = fallback_speculative_session(self.server, payload)
+            else:
+                response = close_speculative_session(self.server, payload)
+                status = HTTPStatus.OK
             self._write_json(status, response)
             self._record_request(status, response, payload)
         except ValueError as exc:
@@ -469,6 +703,12 @@ class InferenceServer(ThreadingHTTPServer):
     def __init__(self, server_address: tuple[str, int], config: ServiceConfig) -> None:
         super().__init__(server_address, InferenceRequestHandler)
         self.config = config
+        self.sessions: dict[str, SpeculativeSession] = {}
+        self.sessions_lock = threading.Lock()
+
+    def session_count(self) -> int:
+        with self.sessions_lock:
+            return len(self.sessions)
 
 
 def main() -> int:

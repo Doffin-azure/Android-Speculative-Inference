@@ -25,7 +25,8 @@ Current real stage:
 - the project now also has a dedicated remote connectivity probe path with desktop-side request logging
 - the Android-to-desktop normal remote path has now completed a successful end-to-end validation run
 - the project now has a first draft of the speculative decoding protocol
-- the next active stage is implementing the first speculative session flow on top of the proven local and ordinary remote baselines
+- the desktop service now exposes a first speculative session lifecycle stub on top of the proven local and ordinary remote baselines
+- the next active stage is connecting phone-side speculative session state to that desktop lifecycle
 
 ## Active Technical Findings
 
@@ -56,6 +57,8 @@ Current strongest conclusion:
 - the project now has a separate network probe path so connectivity can be tested without involving model generation
 - the ordinary remote path has now also been validated from the Android device over the LAN against the desktop service
 - the speculative layer now has a first explicit message-set and state-machine draft instead of only a high-level goal
+- the desktop service now exposes `start / propose / fallback / close` speculative endpoints with request logging
+- the current desktop speculative implementation is intentionally still a lifecycle stub and does not yet perform target-model token verification
 
 ## Important Files
 
@@ -83,7 +86,8 @@ Primary blocker:
 
 - the next blocker is no longer Android local correctness
 - the next blocker is no longer basic phone-to-computer reachability
-- the next blocker is translating the protocol draft into the first working speculative session endpoints and client state
+- the next blocker is no longer the absence of desktop speculative endpoints
+- the next blocker is wiring phone-side speculative state and then replacing the desktop stub acceptance path with real token verification
 
 Secondary blocker:
 
@@ -103,8 +107,8 @@ Use this order unless a new runtime failure appears:
 
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
 2. use `docs/project/speculative-decoding-protocol-draft.md` as the protocol reference
-3. add the smallest speculative session lifecycle on the desktop side first
-4. add phone-side speculative session state without removing the ordinary remote fallback
+3. connect phone-side speculative session state to the desktop stub endpoints
+4. replace stub acceptance with real token verification on the desktop side
 5. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
@@ -128,6 +132,10 @@ The next node is complete when all of the following are true:
 - ordinary remote fallback remains available
 - the local Android baseline remains the fallback reference while the remote path is added
 - the close-out includes the required git-sync explanation and markdown summary update
+
+The desktop-side portion of that node is now complete.
+
+The remaining completion work is phone-side session wiring.
 
 ## After That
 
