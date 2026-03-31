@@ -32,6 +32,7 @@ Verifier modes:
 - `llama_preview` prepares a llama-backed preview string at session start and now uses that preview text as the current accepted/correction target proxy
 - `llama_step_proxy` starts from the same llama-backed preview approach but can refresh the preview during `propose` when more target text is needed
 - `llama_replay_proxy` rebuilds the verifier target by replaying the already accepted assistant prefix back through `llama-cli` before each proposal step
+- `llama_true_step` uses the real target model for next-token checks on each speculative comparison step
 
 ## Preconditions
 
@@ -77,6 +78,12 @@ If you want the closest current proxy to future token verification:
 
 ```powershell
 python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculative-verifier-mode llama_replay_proxy
+```
+
+If you want the first true-target verifier node:
+
+```powershell
+python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculative-verifier-mode llama_true_step
 ```
 
 ## Health Check
@@ -229,6 +236,14 @@ When running in `llama_replay_proxy` mode:
 - before later `propose` calls, the desktop service replays the currently accepted assistant prefix back into `llama-cli`
 - the verifier then compares the phone proposal against that replay-derived continuation and returns `accepted_by_llama_replay` or `corrected_by_llama_replay`
 - this is the closest current verifier harness to real target continuation checking, but it is still not a persistent target-model token session yet
+
+When running in `llama_true_step` mode:
+
+- `startSession` keeps the current HTTP shape and target-session boundary
+- `propose` now asks the real target model for the next token on each speculative comparison step
+- the service returns `accepted_by_llama_true_step` or `corrected_by_llama_true_step`
+- `verifierStage` is now `true_target`
+- this is the first real desktop verifier node, but it still replays the prompt through `llama-cli` instead of holding a persistent in-memory target runtime session
 
 Finally close the session:
 

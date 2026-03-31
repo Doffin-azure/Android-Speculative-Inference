@@ -32,6 +32,8 @@ The minimum boundary for the first real desktop verifier is now also written dow
 
 The desktop service now also has the first explicit internal target-session boundary, so the next node can replace proxy verification without first redesigning session ownership.
 
+The project now also has a first true desktop verifier mode, so the remaining verifier work is no longer "get to true target at all" but "make the first true target mode stronger and more persistent."
+
 ## Milestone 1: Android Local Baseline
 
 Already complete:
@@ -283,6 +285,20 @@ Why it matters:
 
 - the next node can swap the current proxy verifier engine for a real target verifier with much less churn to the surrounding request lifecycle
 
+## Milestone 16: First True Desktop Verifier
+
+Already complete:
+
+- the desktop service now exposes `llama_true_step`
+- `llama_true_step` moves `verifierStage` to `true_target`
+- speculative `propose` now has a real verifier path that asks the target model for the next token on each comparison step
+- local validation confirmed that this true-verifier path can produce accepted-prefix and correction-token semantics
+
+Why it matters:
+
+- the project now has a first real target-model verification mode instead of only proxy modes
+- the next verifier work can focus on making this true mode more efficient and more persistent rather than still debating whether the verifier is real
+
 ## What Is Proven Right Now
 
 These statements should now be treated as established:
@@ -303,9 +319,9 @@ These statements should now be treated as established:
 These parts are still not the final implementation:
 
 - Android draft tokens are still placeholder prompt-derived token ids
-- desktop speculative verification is still not based on target-model token-by-token verification
+- the default desktop speculative path still uses proxy modes unless `llama_true_step` is selected
 - `llama_preview`, `llama_step_proxy`, and `llama_replay_proxy` are still proxy verifiers, not full target token verification
-- the new target-session boundary is still fed by proxy verifier state rather than a true persistent target-model runtime session
+- `llama_true_step` uses real next-token target checks, but it still replays prompts through `llama-cli` instead of holding a persistent in-memory target runtime session
 - speculative sessions are still debug-first, not performance-first
 
 ## Current Main Technical Gap

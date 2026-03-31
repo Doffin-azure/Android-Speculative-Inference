@@ -26,6 +26,7 @@ PROTOCOL_VERSION = 1
 DEFAULT_SPECULATIVE_VERIFIER_MODE = "prompt_stub"
 DEFAULT_LLAMA_PREVIEW_MAX_TOKENS = 8
 DEFAULT_LLAMA_REPLAY_MAX_TOKENS = 8
+DEFAULT_TRUE_VERIFY_MAX_TOKENS = 1
 
 
 def read_gradle_local_properties() -> dict[str, str]:
@@ -277,6 +278,8 @@ class VerifyComputation:
 def infer_verifier_stage(verifier_mode: str) -> str:
     if verifier_mode == "prompt_stub":
         return "prompt_stub"
+    if verifier_mode == "llama_true_step":
+        return "true_target"
     if verifier_mode in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
         return "proxy_target"
     return "unknown"
@@ -323,7 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--speculative-verifier-mode",
-        choices=("prompt_stub", "llama_preview", "llama_step_proxy", "llama_replay_proxy"),
+        choices=("prompt_stub", "llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step"),
         default=DEFAULT_SPECULATIVE_VERIFIER_MODE,
         help="Verifier mode for speculative propose handling.",
     )
@@ -590,6 +593,30 @@ def run_generation_from_full_prompt(
     }
 
 
+def run_true_target_next_text(
+    config: ServiceConfig,
+    *,
+    request_id: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    accepted_text: str,
+) -> dict[str, Any]:
+    replay_prompt = build_replay_prompt(system_prompt, user_prompt, accepted_text)
+    response = run_generation_from_full_prompt(
+        config,
+        request_id=request_id,
+        model=model,
+        full_prompt=replay_prompt,
+        max_tokens=DEFAULT_TRUE_VERIFY_MAX_TOKENS,
+        temperature=0.0,
+        top_p=1.0,
+    )
+    response.setdefault("debug", {})
+    response["debug"]["replayPrompt"] = replay_prompt
+    return response
+
+
 def parse_int_list(name: str, value: Any) -> list[int]:
     if value is None:
         return []
@@ -627,8 +654,21 @@ def build_target_preview_text(
     temperature: float,
     top_p: float,
 ) -> tuple[str, str]:
-    if verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
+    if verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step"}:
         return "", ""
+
+    if verifier_mode == "llama_true_step":
+        response = run_true_target_next_text(
+            config,
+            request_id=f"{request_id}-true-preview",
+            model=target_model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            accepted_text=accepted_text,
+        )
+        return str(response.get("outputText") or "").strip(), str(
+            response.get("debug", {}).get("replayPrompt") or ""
+        )
 
     if verifier_mode == "llama_replay_proxy":
         replay_prompt = build_replay_prompt(system_prompt, user_prompt, accepted_text)
@@ -675,6 +715,8 @@ def resolve_target_token_ids(
         if target_preview_text.strip():
             return prefix_token_ids + token_ids_from_text(target_preview_text)
         return prefix_token_ids or [0]
+    if verifier_mode == "llama_true_step":
+        return accepted_token_ids[:] if accepted_token_ids else [0]
     if verifier_mode in {"llama_preview", "llama_step_proxy"} and target_preview_text.strip():
         return token_ids_from_text(target_preview_text)
     return build_stub_target_token_ids(system_prompt, user_prompt)
@@ -709,7 +751,21 @@ def refresh_llama_proxy_preview_for_target_session(
     accepted_token_ids: list[int],
     min_target_chars: int,
 ) -> None:
-    if target_session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
+    if target_session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step"}:
+        return
+
+    if target_session.verifier_mode == "llama_true_step":
+        next_response = run_true_target_next_text(
+            config,
+            request_id=f"{target_session.request_id}-true-refresh-{target_session.accepted_token_count}",
+            model=target_session.target_model,
+            system_prompt=target_session.system_prompt,
+            user_prompt=target_session.user_prompt,
+            accepted_text=target_session.accepted_text,
+        )
+        target_session.last_replay_prompt = str(next_response.get("debug", {}).get("replayPrompt") or "")
+        target_session.target_preview_text = str(next_response.get("outputText") or "").strip()
+        target_session.target_token_ids = accepted_token_ids[:]
         return
 
     current_chars = max(0, len(target_session.target_token_ids) - target_session.accepted_token_count)
@@ -896,6 +952,77 @@ def compute_proxy_verifier_result(
     )
 
 
+def compute_true_verifier_result(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    *,
+    accepted_token_ids: list[int],
+    accepted_token_count: int,
+    proposed_token_ids: list[int],
+    max_correction_tokens: int,
+) -> VerifyComputation:
+    accepted_step_token_ids: list[int] = []
+    correction_token_ids: list[int] = []
+    rejected_from_index = -1
+    target_index = accepted_token_count
+    working_prefix = target_session.accepted_text
+    preview_debug_parts: list[str] = []
+
+    for index, proposed_token_id in enumerate(proposed_token_ids):
+        next_response = run_true_target_next_text(
+            config,
+            request_id=f"{target_session.request_id}-true-step-{target_index + index}",
+            model=target_session.target_model,
+            system_prompt=target_session.system_prompt,
+            user_prompt=target_session.user_prompt,
+            accepted_text=working_prefix,
+        )
+        if next_response.get("error"):
+            rejected_from_index = index
+            correction_token_ids = []
+            break
+
+        next_text = str(next_response.get("outputText") or "")
+        target_session.last_replay_prompt = str(next_response.get("debug", {}).get("replayPrompt") or "")
+        target_session.target_preview_text = next_text
+        if next_text:
+            preview_debug_parts.append(next_text[:1])
+
+        if not next_text:
+            rejected_from_index = index
+            break
+
+        expected_token_id = ord(next_text[0])
+        if proposed_token_id == expected_token_id:
+            accepted_step_token_ids.append(proposed_token_id)
+            if 32 <= proposed_token_id <= 126:
+                working_prefix += chr(proposed_token_id)
+            else:
+                working_prefix += token_ids_to_debug_text([proposed_token_id])
+            continue
+
+        rejected_from_index = index
+        correction_token_ids = [expected_token_id][:max_correction_tokens]
+        break
+
+    committed_token_ids = accepted_step_token_ids + correction_token_ids
+    target_text_delta = token_ids_to_debug_text(committed_token_ids)
+    finish_reason = ""
+    if correction_token_ids:
+        finish_reason = ""
+
+    return VerifyComputation(
+        accepted_token_ids=accepted_step_token_ids,
+        correction_token_ids=correction_token_ids,
+        rejected_from_index=rejected_from_index,
+        target_text_delta=target_text_delta,
+        finish_reason=finish_reason,
+        target_index_before_step=target_index,
+        target_remaining_count=len(preview_debug_parts),
+        target_preview_debug="".join(preview_debug_parts) or target_session.target_preview_text[:16],
+    )
+
+
 def apply_verify_computation_to_sessions(
     session: SpeculativeSession,
     target_session: TargetSessionState,
@@ -922,6 +1049,7 @@ def apply_verify_computation_to_sessions(
     target_session.accepted_token_count = session.accepted_token_count
     target_session.mismatch_count = session.mismatch_count
     target_session.last_target_text_delta = computation.target_text_delta
+    target_session.target_token_ids = session.accepted_token_ids[:]
     target_session.updated_at_ms = session.updated_at_ms
     sync_target_session_state(target_session, session)
 
@@ -1042,13 +1170,23 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     )
     apply_target_session_state_to_session(session, target_session)
 
-    computation = compute_proxy_verifier_result(
-        target_session,
-        accepted_token_ids=session.accepted_token_ids,
-        accepted_token_count=session.accepted_token_count,
-        proposed_token_ids=proposed_token_ids,
-        max_correction_tokens=max_correction_tokens,
-    )
+    if session.verifier_mode == "llama_true_step":
+        computation = compute_true_verifier_result(
+            server.config,
+            target_session,
+            accepted_token_ids=session.accepted_token_ids,
+            accepted_token_count=session.accepted_token_count,
+            proposed_token_ids=proposed_token_ids,
+            max_correction_tokens=max_correction_tokens,
+        )
+    else:
+        computation = compute_proxy_verifier_result(
+            target_session,
+            accepted_token_ids=session.accepted_token_ids,
+            accepted_token_count=session.accepted_token_count,
+            proposed_token_ids=proposed_token_ids,
+            max_correction_tokens=max_correction_tokens,
+        )
     accepted_count = len(computation.accepted_token_ids)
     apply_verify_computation_to_sessions(
         session,
@@ -1065,6 +1203,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     base_status = "accepted" if not computation.correction_token_ids and computation.rejected_from_index == -1 else "corrected"
     if session.verifier_mode == "llama_replay_proxy":
         status = f"{base_status}_by_llama_replay"
+    elif session.verifier_mode == "llama_true_step":
+        status = f"{base_status}_by_llama_true_step"
     elif session.verifier_mode in {"llama_preview", "llama_step_proxy"}:
         status = f"{base_status}_by_llama_preview"
     else:
@@ -1075,6 +1215,10 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "Desktop speculative verification is currently replaying the accepted assistant prefix into llama-cli and using the resulting continuation as a target proxy. "
         "This is closer to true target verification than fixed preview text, but it still does not verify target-model tokens directly inside a persistent model session yet."
         if session.verifier_mode == "llama_replay_proxy"
+        else
+        "Desktop speculative verification is now using the real target model for next-token checks through llama-cli on each speculative comparison step. "
+        "This is the first true-target verifier stage, but it still replays the prompt through llama-cli instead of holding a persistent in-memory target runtime session."
+        if session.verifier_mode == "llama_true_step"
         else
         "Desktop speculative verification is currently using llama preview text as a target proxy. "
         "It now computes accepted prefixes and correction tokens from the preview text, but it still does not run true target-model token verification yet."
