@@ -38,6 +38,7 @@ Current real stage:
 - the Android speculative stub client now runs a short multi-step session loop instead of stopping after a single `propose`
 - the desktop speculative session now also persists explicit `acceptedText`, `lastReplayPrompt`, and `lastTargetTextDelta` state for replay-based verifier debugging
 - the replay verifier now prefers explicit `acceptedText` over token-id debug reconstruction when building the next replay prompt, and the Android diagnostics now surface that replay-session state
+- the first minimum boundary for a real desktop target verifier is now written down so the next implementation node can switch verifier stage without reopening protocol design
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -144,6 +145,7 @@ Practical interpretation:
 - do not jump straight into speculative decoding protocol work
 - do not replace the proven local path while introducing the remote path
 - use `docs/project/project-progress-summary.md` when you need the milestone-level view of everything completed so far
+- use `docs/project/desktop-true-verifier-minimum-boundary.md` when deciding what the first real desktop verifier is allowed to change
 - use `docs/project/computer-inference-service-boundary.md` for architecture boundaries
 - use `docs/project/desktop-inference-service-runbook.md` for the working desktop-service baseline
 - use `docs/project/speculative-decoding-protocol-draft.md` for the first speculative message set

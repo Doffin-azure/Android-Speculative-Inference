@@ -240,6 +240,14 @@ class SpeculativeSession:
     updated_at_ms: int
 
 
+def infer_verifier_stage(verifier_mode: str) -> str:
+    if verifier_mode == "prompt_stub":
+        return "prompt_stub"
+    if verifier_mode in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
+        return "proxy_target"
+    return "unknown"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Serve a minimal desktop llama.cpp HTTP inference endpoint via WSL llama-cli."
@@ -764,6 +772,7 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "targetModel": session.target_model,
         "draftModel": session.draft_model,
         "verifierMode": session.verifier_mode,
+        "verifierStage": infer_verifier_stage(session.verifier_mode),
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
         "fallbackAvailable": True,
@@ -882,6 +891,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
         "status": status,
+        "verifierStage": infer_verifier_stage(session.verifier_mode),
         "warning": warning,
         "acceptedText": session.accepted_text,
         "error": "",
@@ -960,6 +970,7 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "status": "closed",
         "reason": reason,
         "verifierMode": session.verifier_mode,
+        "verifierStage": infer_verifier_stage(session.verifier_mode),
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
         "acceptedText": session.accepted_text,
@@ -979,11 +990,12 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "backendLabel": "desktop-llama.cpp-wsl-cli",
                 "modelPath": str(self.server.config.model_path),
                 "requestLogPath": str(self.server.config.request_log_path),
-                "ipv4Addresses": detect_ipv4_addresses(),
-                "speculativeSessionCount": self.server.session_count(),
-                "speculativeProtocolVersion": PROTOCOL_VERSION,
-                "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
-            }
+                  "ipv4Addresses": detect_ipv4_addresses(),
+                  "speculativeSessionCount": self.server.session_count(),
+                  "speculativeProtocolVersion": PROTOCOL_VERSION,
+                  "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
+                  "speculativeVerifierStage": infer_verifier_stage(self.server.config.speculative_verifier_mode),
+              }
             self._write_json(HTTPStatus.OK, payload)
             self._record_request(HTTPStatus.OK, payload)
             return
@@ -995,11 +1007,12 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "clientAddress": self.client_address[0],
                 "serverHost": self.server.config.host,
                 "serverPort": self.server.config.port,
-                "requestLogPath": str(self.server.config.request_log_path),
-                "ipv4Addresses": detect_ipv4_addresses(),
-                "speculativeSessionCount": self.server.session_count(),
-                "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
-            }
+                  "requestLogPath": str(self.server.config.request_log_path),
+                  "ipv4Addresses": detect_ipv4_addresses(),
+                  "speculativeSessionCount": self.server.session_count(),
+                  "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
+                  "speculativeVerifierStage": infer_verifier_stage(self.server.config.speculative_verifier_mode),
+              }
             self._write_json(HTTPStatus.OK, payload)
             self._record_request(HTTPStatus.OK, payload)
             return

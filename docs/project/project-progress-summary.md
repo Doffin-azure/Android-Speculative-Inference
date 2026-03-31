@@ -28,6 +28,8 @@ The remaining unfinished work is no longer baseline bring-up.
 
 The remaining unfinished work is replacing stub speculative verification and stub draft-token production with real token-level implementations.
 
+The minimum boundary for the first real desktop verifier is now also written down, so the next node can move into true verification without reopening the whole protocol shape.
+
 ## Milestone 1: Android Local Baseline
 
 Already complete:
@@ -295,6 +297,7 @@ Core Android path:
 Protocol and planning:
 
 - `docs/project/current-status.md`
+- `docs/project/desktop-true-verifier-minimum-boundary.md`
 - `docs/project/speculative-decoding-protocol-draft.md`
 - `docs/project/speculative-decoding-implementation-guide-zh.md`
 
