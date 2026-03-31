@@ -41,6 +41,8 @@ Instead:
 
 - `project/current-status.md`
   Use this first when resuming technical work and deciding what to do next.
+- `project/project-progress-summary.md`
+  Use this when you want a single milestone summary of everything that has already been completed so far.
 - `project/android-local-baseline-checklist.md`
   Use this when rerunning the proven Android local model-load and generation baseline on device.
 - `project/computer-inference-service-boundary.md`
@@ -64,6 +66,8 @@ Instead:
   The supplemental environment record for the computer-side GGUF inspection and desktop `llama.cpp` runtime attempt.
 - `docs/project/current-status.md`
   The shortest technical handoff for what is done, what is blocked, and what the current next step should be.
+- `docs/project/project-progress-summary.md`
+  The milestone-level summary of all completed work so far across Android local, ordinary remote, and speculative debugging.
 - `docs/project/android-local-baseline-checklist.md`
   The repeatable on-device checklist for re-confirming the Android local runtime baseline.
 - `docs/project/computer-inference-service-boundary.md`
