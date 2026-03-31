@@ -32,6 +32,8 @@ The current code below covers the present speculative scheme:
 4. desktop `propose` mode dispatch
 5. Android speculative multi-step regression loop
 6. Android draft-session interface boundary
+7. Android first local draft-session runtime
+8. Desktop first tree-shaped true verifier
 
 ## 1. Desktop Target-Session State
 
@@ -341,6 +343,172 @@ Why this is core:
 
 - Before this boundary existed, the codebase only had one-shot `generate(...)` semantics.
 - Real speculative draft work needs `start / draft / apply / close` semantics, and this is the first code-level seam for that transition.
+
+## 7. Android First Local Draft-Session Runtime
+
+Files:
+
+- `lib/src/main/java/com/example/myapplication/llama/internal/InferenceEngineImpl.kt`
+- `lib/src/main/cpp/ai_chat.cpp`
+- `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
+
+Core code:
+
+```kotlin
+override suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> = withContext(llamaDispatcher) {
+    val runtime = draftSessions[sessionId]
+        ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+    require(maxTokens > 0) { "maxTokens must be > 0." }
+    resetDraftRuntime(runtime)
+    generateDraftTokenIds(maxTokens).toList()
+}
+
+override suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle = withContext(llamaDispatcher) {
+    val runtime = draftSessions[sessionId]
+        ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+
+    val appendedText = codePointIdsToString(tokenIds)
+    val updatedRuntime = runtime.copy(acceptedText = runtime.acceptedText + appendedText)
+    resetDraftRuntime(updatedRuntime)
+    draftSessions[sessionId] = updatedRuntime
+    DraftSessionHandle(
+        sessionId = updatedRuntime.sessionId,
+        runtimeLabel = "ai-chat draft session",
+        acceptedText = updatedRuntime.acceptedText,
+        acceptedTokenCount = updatedRuntime.acceptedText.codePointCount(0, updatedRuntime.acceptedText.length)
+    )
+}
+```
+
+```cpp
+JNIEXPORT jint JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_resetDraftContext(...) {
+    reset_long_term_states();
+    reset_short_term_states();
+
+    const int system_result = process_prompt_text(system, ROLE_SYSTEM, true);
+    const int user_result = process_prompt_text(user, ROLE_USER, false, true);
+    const int assistant_result = process_prompt_text(assistant, ROLE_ASSISTANT, false);
+
+    stop_generation_position = current_position + std::max(1, (int) predict_length);
+    return 0;
+}
+
+JNIEXPORT jintArray JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftTokenIds(...) {
+    const auto new_token_id = common_sampler_sample(g_sampler, g_context, -1);
+    common_sampler_accept(g_sampler, new_token_id, true);
+    ...
+    auto new_token_chars = common_token_to_piece(g_context, new_token_id);
+    cached_token_chars += new_token_chars;
+    ...
+    draft_ids.push_back((jint) codepoint);
+}
+```
+
+```kotlin
+val baseTokens = if (activeLocalDraftSessionId != null) {
+    localLlm.draftNextTokenIds(
+        sessionId = activeLocalDraftSessionId,
+        maxTokens = SPECULATIVE_STUB_MAX_DRAFT_TOKENS
+    )
+} else {
+    buildStubProposalSlice(
+        seedTokens = draftSeedTokens,
+        committedCount = committedTokenIds.size
+    )
+}
+```
+
+Explanation:
+
+- Android now has a first real local draft-session runtime instead of only an `unsupported` boundary.
+- Kotlin stores the local draft-session metadata and rebuilds the native runtime from the current verified assistant prefix before each draft step.
+- Native code samples from the real local model path and converts emitted UTF-8 text into codepoint ids so the current desktop verifier protocol can consume the result without a wire-format break.
+- `applyVerifiedTokens(...)` advances the accepted assistant prefix, which means later draft steps are conditioned on what desktop actually accepted and corrected.
+- `MainViewModel` now prefers this local draft session whenever the engine reports support, and only falls back to the old stub proposal path when the local draft runtime is unavailable.
+
+Why this is core:
+
+- This is the first point where Android speculative proposals can come from the local model runtime instead of only from a prompt-derived UI stub.
+- It is not yet true libllama token-id drafting or rollback-capable speculative runtime, but it is the first real draft-runtime implementation node and the bridge we need before deeper EAGLE-style session work.
+
+## 8. Desktop First Tree-Shaped True Verifier
+
+File:
+
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```python
+def fetch_target_top_candidates(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    *,
+    prefix_text: str,
+    step_index: int,
+    branch_factor: int,
+) -> dict[str, Any]:
+    response = run_generation_from_server_completion(
+        config,
+        request_id=f"{target_session.request_id}-true-tree-{step_index}",
+        model=target_session.target_model,
+        full_prompt=replay_prompt,
+        max_tokens=1,
+        temperature=0.0,
+        top_p=1.0,
+        slot_id=target_session.llama_server_slot_id,
+        cache_prompt=True,
+        n_probs=max(1, branch_factor),
+        post_sampling_probs=True,
+    )
+```
+
+```python
+def build_true_tree_computation(...):
+    for depth in range(total_depth):
+        top_result = fetch_target_top_candidates(...)
+        candidates = list(top_result.get("candidates") or [])
+        best_candidate = candidates[0]
+        best_token_id = int(best_candidate.get("tokenId", -1))
+        best_path_token_ids.append(best_token_id)
+
+        if depth < len(proposed_token_ids):
+            if proposed_token_id == best_token_id:
+                accepted_step_token_ids.append(best_token_id)
+                working_prefix += chr(best_token_id)
+                continue
+
+            rejected_from_index = depth
+            correction_token_ids = [best_token_id]
+            working_prefix += chr(best_token_id)
+            continue
+```
+
+```python
+elif session.verifier_mode == "llama_true_tree":
+    computation = compute_true_tree_verifier_result(
+        server.config,
+        target_session,
+        accepted_token_ids=session.accepted_token_ids,
+        accepted_token_count=session.accepted_token_count,
+        proposed_token_ids=proposed_token_ids,
+        max_correction_tokens=max_correction_tokens,
+    )
+```
+
+Explanation:
+
+- The verifier now has a new `llama_true_tree` mode that keeps the existing `proposedTokenIds` wire format but internally expands each target-side prefix into a shallow candidate tree.
+- Candidate expansion comes from `llama-server` top-k probability results, not from Android sending a tree proposal.
+- The first version scores a best path by target top-1 at each level and maps that tree result back into the current accepted/correction protocol.
+- The returned debug payload now exposes tree visibility fields such as candidate count, branch factor, depth evaluated, best path token ids, and a compact tree summary string.
+
+Why this is core:
+
+- This is the first verifier node that moves beyond linear chunk comparison and starts approximating the “one target evaluation looks at multiple candidate continuations” idea behind EAGLE-style verification.
+- It does so without breaking the current Android regression client or forcing an immediate protocol redesign.
 
 ## 5. Android Speculative Multi-Step Regression Loop
 

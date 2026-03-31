@@ -26,7 +26,7 @@ At this point, the project has three established layers:
 
 The remaining unfinished work is no longer baseline bring-up.
 
-The remaining unfinished work is replacing stub speculative verification and stub draft-token production with real token-level implementations.
+The remaining unfinished work is replacing replay-heavy speculative verification and codepoint-compatible draft-token production with stronger token/runtime-level implementations.
 
 The minimum boundary for the first real desktop verifier is now also written down, so the next node can move into true verification without reopening the whole protocol shape.
 
@@ -36,7 +36,9 @@ The project now also has a first true desktop verifier mode, so the remaining ve
 
 The desktop true verifier can now also route target continuation fetches through a configured `llama-server` slot, which is the first runtime step away from pure standalone `llama-cli` replay.
 
-The Android and `:lib` layers now also have an explicit draft-session interface boundary, so true draft work is no longer blocked on discovering where to place the API surface.
+The Android and `:lib` layers now also have an explicit draft-session interface boundary, and that boundary now has a first real local draft runtime behind it, so true draft work is no longer blocked on discovering where to place the API surface.
+
+The desktop verifier now also has a first tree-shaped true-target mode, `llama_true_tree`, which expands a shallow target-side candidate tree from `llama-server` top-k results without changing the Android wire protocol.
 
 ## Milestone 1: Android Local Baseline
 

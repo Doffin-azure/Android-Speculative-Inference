@@ -426,6 +426,57 @@ static int decode_tokens_in_batches(
         llama_batch &batch,
         const llama_tokens &tokens,
         const llama_pos start_pos,
+        const bool compute_last_logit);
+
+static int process_prompt_text(
+        const std::string &text,
+        const std::string &role,
+        const bool update_system_position,
+        const bool compute_last_logit = false) {
+    if (text.empty()) {
+        return 0;
+    }
+
+    std::string formatted_prompt(text);
+    const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
+    if (has_chat_template) {
+        formatted_prompt = chat_add_and_format(role, text);
+    }
+
+    auto tokens = common_tokenize(
+            g_context,
+            formatted_prompt,
+            has_chat_template,
+            has_chat_template);
+
+    const int token_count = (int) tokens.size();
+    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;
+    if (token_count > max_batch_size) {
+        LOGe("%s: %s text too long for context! %d tokens, max: %d",
+             __func__,
+             role.c_str(),
+             token_count,
+             max_batch_size);
+        return 1;
+    }
+
+    if (decode_tokens_in_batches(g_context, g_batch, tokens, current_position, compute_last_logit)) {
+        LOGe("%s: llama_decode() failed for role=%s", __func__, role.c_str());
+        return 2;
+    }
+
+    current_position += token_count;
+    if (update_system_position) {
+        system_prompt_position = current_position;
+    }
+    return 0;
+}
+
+static int decode_tokens_in_batches(
+        llama_context *context,
+        llama_batch &batch,
+        const llama_tokens &tokens,
+        const llama_pos start_pos,
         const bool compute_last_logit = false) {
     LOGd("%s: Decode %d tokens starting at position %d", __func__, (int) tokens.size(), start_pos);
     for (int i = 0; i < (int) tokens.size(); i += BATCH_SIZE) {
@@ -630,6 +681,134 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateNextTo
         LOGv("id: %d,\tappend to cache", new_token_id);
         result = env->NewStringUTF("");
     }
+    return result;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_resetDraftContext(
+        JNIEnv *env,
+        jobject /* unused */,
+        jstring jsystem_prompt,
+        jstring juser_prompt,
+        jstring jassistant_text,
+        jint predict_length) {
+    reset_long_term_states();
+    reset_short_term_states();
+
+    const auto *system_prompt = env->GetStringUTFChars(jsystem_prompt, nullptr);
+    const auto *user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
+    const auto *assistant_text = env->GetStringUTFChars(jassistant_text, nullptr);
+
+    const std::string system(system_prompt ? system_prompt : "");
+    const std::string user(user_prompt ? user_prompt : "");
+    const std::string assistant(assistant_text ? assistant_text : "");
+
+    if (system_prompt != nullptr) {
+        env->ReleaseStringUTFChars(jsystem_prompt, system_prompt);
+    }
+    if (user_prompt != nullptr) {
+        env->ReleaseStringUTFChars(juser_prompt, user_prompt);
+    }
+    if (assistant_text != nullptr) {
+        env->ReleaseStringUTFChars(jassistant_text, assistant_text);
+    }
+
+    const int system_result = process_prompt_text(system, ROLE_SYSTEM, true);
+    if (system_result != 0) {
+        return 10 + system_result;
+    }
+
+    const int user_result = process_prompt_text(user, ROLE_USER, false, true);
+    if (user_result != 0) {
+        return 20 + user_result;
+    }
+
+    const int assistant_result = process_prompt_text(assistant, ROLE_ASSISTANT, false);
+    if (assistant_result != 0) {
+        return 30 + assistant_result;
+    }
+
+    stop_generation_position = current_position + std::max(1, (int) predict_length);
+    return 0;
+}
+
+extern "C"
+JNIEXPORT jintArray JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftTokenIds(
+        JNIEnv *env,
+        jobject /* unused */,
+        jint max_tokens) {
+    std::vector<jint> draft_ids;
+    draft_ids.reserve(std::max(0, (int) max_tokens));
+
+    for (int step = 0; step < max_tokens; ++step) {
+        if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+            shift_context();
+        }
+
+        if (current_position >= stop_generation_position) {
+            break;
+        }
+
+        const auto new_token_id = common_sampler_sample(g_sampler, g_context, -1);
+        common_sampler_accept(g_sampler, new_token_id, true);
+
+        common_batch_clear(g_batch);
+        common_batch_add(g_batch, new_token_id, current_position, {0}, true);
+        if (llama_decode(g_context, g_batch) != 0) {
+            LOGe("%s: llama_decode() failed for draft token", __func__);
+            break;
+        }
+
+        current_position++;
+
+        if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
+            chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
+            break;
+        }
+
+        auto new_token_chars = common_token_to_piece(g_context, new_token_id);
+        cached_token_chars += new_token_chars;
+        if (is_valid_utf8(cached_token_chars.c_str())) {
+            const std::string emitted = cached_token_chars;
+            assistant_ss << emitted;
+            for (size_t i = 0; i < emitted.size();) {
+                uint32_t codepoint = 0;
+                const unsigned char lead = static_cast<unsigned char>(emitted[i]);
+                int length = 1;
+                if ((lead & 0x80u) == 0) {
+                    codepoint = lead;
+                } else if ((lead & 0xE0u) == 0xC0u && i + 1 < emitted.size()) {
+                    codepoint = ((lead & 0x1Fu) << 6) |
+                                (static_cast<unsigned char>(emitted[i + 1]) & 0x3Fu);
+                    length = 2;
+                } else if ((lead & 0xF0u) == 0xE0u && i + 2 < emitted.size()) {
+                    codepoint = ((lead & 0x0Fu) << 12) |
+                                ((static_cast<unsigned char>(emitted[i + 1]) & 0x3Fu) << 6) |
+                                (static_cast<unsigned char>(emitted[i + 2]) & 0x3Fu);
+                    length = 3;
+                } else if ((lead & 0xF8u) == 0xF0u && i + 3 < emitted.size()) {
+                    codepoint = ((lead & 0x07u) << 18) |
+                                ((static_cast<unsigned char>(emitted[i + 1]) & 0x3Fu) << 12) |
+                                ((static_cast<unsigned char>(emitted[i + 2]) & 0x3Fu) << 6) |
+                                (static_cast<unsigned char>(emitted[i + 3]) & 0x3Fu);
+                    length = 4;
+                } else {
+                    codepoint = lead;
+                }
+                draft_ids.push_back((jint) codepoint);
+                i += length;
+            }
+            cached_token_chars.clear();
+        }
+    }
+
+    jintArray result = env->NewIntArray((jsize) draft_ids.size());
+    if (result == nullptr || draft_ids.empty()) {
+        return result;
+    }
+    env->SetIntArrayRegion(result, 0, (jsize) draft_ids.size(), draft_ids.data());
     return result;
 }
 
