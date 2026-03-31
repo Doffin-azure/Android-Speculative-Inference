@@ -22,6 +22,7 @@ Current real stage:
 - the immediate blocker is no longer "can Android load and run a real model locally"
 - the project now has a first working desktop HTTP inference service skeleton
 - the Android app now contains a first normal remote client path and local/remote mode switch
+- the project now also has a dedicated remote connectivity probe path with desktop-side request logging
 - the next active stage is verifying the Android-to-desktop remote path in Android Studio / on device
 
 ## Active Technical Findings
@@ -50,6 +51,7 @@ Current strongest conclusion:
 - the Android local baseline should now be treated as established rather than tentative
 - the first desktop `POST /v1/generate` baseline is now working locally through the new service skeleton
 - the codebase now has the minimum Android-side pieces needed to call that remote service
+- the project now has a separate network probe path so connectivity can be tested without involving model generation
 
 ## Important Files
 
@@ -69,6 +71,7 @@ Desktop GGUF validation path:
 - `.venv-gguf/` (ignored)
 - `C:\Users\JXZ\AndroidStudioProjects\llama.cpp`
 - `C:\Users\JXZ\AndroidStudioProjects\llama.cpp\build-wsl-cli`
+- `logs/desktop-inference-service.log` (local, ignored)
 
 ## Current Blockers
 
@@ -86,7 +89,7 @@ Secondary blocker:
 The next step should focus on one of these:
 
 1. verify the new Android remote client path against the desktop service from Android Studio / on device
-2. confirm the remote mode UI surfaces success and failure clearly
+2. use the new probe path first to confirm network reachability before generation
 3. keep the local path intact as fallback while remote validation proceeds
 
 ## Immediate Execution Order
@@ -95,9 +98,10 @@ Use this order unless a new runtime failure appears:
 
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
 2. start the desktop service locally
-3. run the app in remote mode and point it at the correct service URL for the test environment
-4. capture remote success or failure through the existing diagnostics surfaces
-5. only after the ordinary remote path works end to end, plan speculative decoding on top of it
+3. use the Android-side remote connectivity probe and confirm a matching line appears in the desktop request log
+4. only after the probe succeeds, run the full remote generation path
+5. capture remote success or failure through the existing diagnostics surfaces
+6. only after the ordinary remote path works end to end, plan speculative decoding on top of it
 
 Practical interpretation:
 
@@ -107,12 +111,14 @@ Practical interpretation:
 - use `docs/project/computer-inference-service-boundary.md` for architecture boundaries
 - use `docs/project/desktop-inference-service-runbook.md` for the working desktop-service baseline
 - remember that the Android app currently uses ordinary HTTP, so the desktop service host must be reachable from the device or emulator
+- use the probe endpoint and desktop request log first when debugging "cannot connect" failures
 
 ## Definition Of Done For The Next Node
 
 The next node is complete when all of the following are true:
 
 - Android can call the working desktop service through the new normal request path
+- the Android-side probe can confirm basic network reachability and the desktop request log records the attempt
 - the app can surface remote success or remote failure clearly
 - the local Android baseline remains the fallback reference while the remote path is added
 - the close-out includes the required git-sync explanation and markdown summary update
@@ -131,6 +137,7 @@ For the next validation node:
 
 - confirm the app still syncs and indexes after the remote-client additions
 - start the desktop service using `docs/project/desktop-inference-service-runbook.md`
+- use the remote probe before trying full generation
 - test remote mode from the app with a reachable service URL
 - confirm both success and failure states are readable through the app UI and diagnostic snapshot
 

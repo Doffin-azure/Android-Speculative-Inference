@@ -19,6 +19,7 @@ Service entry point:
 Endpoints:
 
 - `GET /health`
+- `GET /probe`
 - `POST /v1/generate`
 
 ## Preconditions
@@ -68,6 +69,26 @@ Expected result:
 - `status` is `ok`
 - `backendLabel` is `desktop-llama.cpp-wsl-cli`
 
+## Network Probe
+
+Use this before trying model generation from the phone:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/probe
+```
+
+Expected result:
+
+- `status` is `reachable`
+- `clientAddress` is present
+- `requestLogPath` points to the local desktop request log
+
+The service also appends a local request log line to:
+
+- `logs/desktop-inference-service.log`
+
+This is useful when checking whether the phone actually reached the desktop service at all.
+
 ## Example Generate Request
 
 ```powershell
@@ -110,6 +131,6 @@ Current limitations:
 
 Once local desktop service verification succeeds:
 
-1. add a minimal Android client for `POST /v1/generate`
-2. add a simple app-level local/remote mode distinction
+1. use the Android-side remote connectivity probe before trying full generation
+2. add or validate the Android client for `POST /v1/generate`
 3. keep speculative decoding work out of scope until the ordinary remote path is stable

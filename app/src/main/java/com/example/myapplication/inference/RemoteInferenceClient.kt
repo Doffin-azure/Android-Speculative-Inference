@@ -28,6 +28,14 @@ data class RemoteGenerateResponse(
     val error: String
 )
 
+data class RemoteProbeResponse(
+    val status: String,
+    val message: String,
+    val clientAddress: String,
+    val requestLogPath: String,
+    val ipv4Addresses: List<String>
+)
+
 class RemoteInferenceClient {
     suspend fun health(baseUrl: String): String = withContext(Dispatchers.IO) {
         val connection = openJsonConnection(baseUrl.trimEnd('/') + "/health", "GET")
@@ -36,6 +44,33 @@ class RemoteInferenceClient {
             val body = readResponseBody(connection, statusCode)
             require(statusCode in 200..299) { "Health check failed: HTTP $statusCode ${body.ifBlank { "" }}".trim() }
             JSONObject(body).optString("status", "unknown")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    suspend fun probe(baseUrl: String): RemoteProbeResponse = withContext(Dispatchers.IO) {
+        val connection = openJsonConnection(baseUrl.trimEnd('/') + "/probe", "GET")
+        try {
+            val statusCode = connection.responseCode
+            val body = readResponseBody(connection, statusCode)
+            require(statusCode in 200..299) { "Probe failed: HTTP $statusCode ${body.ifBlank { "" }}".trim() }
+            val json = JSONObject(body)
+            val addressArray = json.optJSONArray("ipv4Addresses")
+            val addresses = buildList {
+                if (addressArray != null) {
+                    for (index in 0 until addressArray.length()) {
+                        add(addressArray.optString(index))
+                    }
+                }
+            }
+            RemoteProbeResponse(
+                status = json.optString("status", "unknown"),
+                message = json.optString("message"),
+                clientAddress = json.optString("clientAddress"),
+                requestLogPath = json.optString("requestLogPath"),
+                ipv4Addresses = addresses
+            )
         } finally {
             connection.disconnect()
         }

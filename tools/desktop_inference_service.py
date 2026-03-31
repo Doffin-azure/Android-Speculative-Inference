@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shlex
+import socket
 import subprocess
 import sys
 import time
@@ -143,6 +143,7 @@ class ServiceConfig:
     llama_cli_wsl_path: str
     ld_library_path: str
     threads: int
+    request_log_path: Path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -178,6 +179,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate local configuration and exit without starting the server.",
     )
+    parser.add_argument(
+        "--request-log-path",
+        type=Path,
+        default=REPO_ROOT / "logs" / "desktop-inference-service.log",
+        help="Path to the local request log file.",
+    )
     return parser
 
 
@@ -202,7 +209,29 @@ def validate_args(args: argparse.Namespace) -> ServiceConfig:
         llama_cli_wsl_path=args.llama_cli_wsl_path,
         ld_library_path=ld_library_path,
         threads=max(1, int(args.threads)),
+        request_log_path=args.request_log_path.resolve(),
     )
+
+
+def detect_ipv4_addresses() -> list[str]:
+    addresses = {"127.0.0.1"}
+    try:
+        host_entries = socket.gethostbyname_ex(socket.gethostname())[2]
+        addresses.update(ip for ip in host_entries if "." in ip)
+    except OSError:
+        pass
+    return sorted(addresses)
+
+
+def append_request_log(config: ServiceConfig, event: dict[str, Any]) -> None:
+    config.request_log_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "timestampMs": int(time.time() * 1000),
+        **event,
+    }
+    with config.request_log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=True))
+        handle.write("\n")
 
 
 def run_configuration_check(config: ServiceConfig) -> int:
@@ -210,6 +239,7 @@ def run_configuration_check(config: ServiceConfig) -> int:
     print(f"llama_cli_wsl_path={config.llama_cli_wsl_path}")
     print(f"ld_library_path={config.ld_library_path}")
     print(f"threads={config.threads}")
+    print(f"request_log_path={config.request_log_path}")
 
     check_command = (
         "test -f {model} && test -x {cli} && echo OK || echo MISSING"
@@ -330,18 +360,35 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
     server: "InferenceServer"
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path != "/health":
-            self.send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint.")
-            return
-
-        self._write_json(
-            HTTPStatus.OK,
-            {
+        if self.path == "/health":
+            payload = {
                 "status": "ok",
                 "backendLabel": "desktop-llama.cpp-wsl-cli",
                 "modelPath": str(self.server.config.model_path),
-            },
-        )
+                "requestLogPath": str(self.server.config.request_log_path),
+                "ipv4Addresses": detect_ipv4_addresses(),
+            }
+            self._write_json(HTTPStatus.OK, payload)
+            self._record_request(HTTPStatus.OK, payload)
+            return
+
+        if self.path == "/probe":
+            payload = {
+                "status": "reachable",
+                "message": "desktop inference service probe reached successfully",
+                "clientAddress": self.client_address[0],
+                "serverHost": self.server.config.host,
+                "serverPort": self.server.config.port,
+                "requestLogPath": str(self.server.config.request_log_path),
+                "ipv4Addresses": detect_ipv4_addresses(),
+            }
+            self._write_json(HTTPStatus.OK, payload)
+            self._record_request(HTTPStatus.OK, payload)
+            return
+
+        if self.path != "/health":
+            self.send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint.")
+            return
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/v1/generate":
@@ -355,27 +402,34 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
             response = run_generation(self.server.config, payload)
             status = HTTPStatus.OK if not response["error"] else HTTPStatus.BAD_GATEWAY
             self._write_json(status, response)
+            self._record_request(status, response, payload)
         except ValueError as exc:
+            payload = {
+                "error": str(exc),
+            }
             self._write_json(
                 HTTPStatus.BAD_REQUEST,
-                {
-                    "error": str(exc),
-                },
+                payload,
             )
+            self._record_request(HTTPStatus.BAD_REQUEST, payload)
         except json.JSONDecodeError as exc:
+            payload = {
+                "error": f"Invalid JSON body: {exc.msg}",
+            }
             self._write_json(
                 HTTPStatus.BAD_REQUEST,
-                {
-                    "error": f"Invalid JSON body: {exc.msg}",
-                },
+                payload,
             )
+            self._record_request(HTTPStatus.BAD_REQUEST, payload)
         except Exception as exc:  # pragma: no cover - runtime safety
+            payload = {
+                "error": f"Unexpected server error: {exc}",
+            }
             self._write_json(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
-                {
-                    "error": f"Unexpected server error: {exc}",
-                },
+                payload,
             )
+            self._record_request(HTTPStatus.INTERNAL_SERVER_ERROR, payload)
 
     def log_message(self, fmt: str, *args: object) -> None:
         message = fmt % args
@@ -388,6 +442,27 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _record_request(
+        self,
+        status: HTTPStatus,
+        response: dict[str, Any],
+        request_payload: dict[str, Any] | None = None,
+    ) -> None:
+        append_request_log(
+            self.server.config,
+            {
+                "clientAddress": self.client_address[0],
+                "method": self.command,
+                "path": self.path,
+                "status": int(status),
+                "request": request_payload or {},
+                "responsePreview": {
+                    key: response.get(key)
+                    for key in ("status", "message", "requestId", "finishReason", "error")
+                },
+            },
+        )
 
 
 class InferenceServer(ThreadingHTTPServer):
