@@ -32,6 +32,7 @@ fun MainScreen(
     remoteResultSummary: String,
     speculativeSessionSummary: String,
     speculativeForceMismatch: Boolean,
+    speculativeVerifierMode: String,
     statusMessage: String,
     output: String,
     lastError: String,
@@ -93,6 +94,13 @@ fun MainScreen(
             text = "Active mode: ${inferenceMode.name}",
             modifier = Modifier.padding(top = 8.dp)
         )
+
+        if (speculativeVerifierMode.isNotBlank()) {
+            Text(
+                text = "Speculative verifier mode: $speculativeVerifierMode",
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
 
         if (inferenceMode != MainViewModel.InferenceMode.LOCAL) {
             OutlinedTextField(

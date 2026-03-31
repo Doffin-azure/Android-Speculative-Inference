@@ -31,6 +31,7 @@ Current real stage:
 - the Android speculative mode now includes a force-mismatch debug path so correction-token behavior can be exercised from the device UI
 - the desktop service now exposes an explicit speculative verifier mode so the current prompt-stub harness and a future llama-backed verifier can share the same protocol boundary
 - the Android app now surfaces the active speculative verifier mode and target preview text returned by desktop session start
+- the Android UI now also surfaces the active speculative verifier mode directly outside the session summary so verifier-mode changes are easier to spot during testing
 - the next active stage is replacing that deterministic verify stub with real target-model token verification
 
 ## Active Technical Findings
