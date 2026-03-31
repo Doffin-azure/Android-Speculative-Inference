@@ -21,7 +21,8 @@ Current real stage:
 - the Android local baseline has been re-confirmed through the repeat validation checklist
 - the immediate blocker is no longer "can Android load and run a real model locally"
 - the project now has a first working desktop HTTP inference service skeleton
-- the next active stage is connecting Android to that ordinary remote service path
+- the Android app now contains a first normal remote client path and local/remote mode switch
+- the next active stage is verifying the Android-to-desktop remote path in Android Studio / on device
 
 ## Active Technical Findings
 
@@ -48,6 +49,7 @@ Current strongest conclusion:
 - the earlier Android failure was specifically caused by backend-loading configuration, not by the model artifact
 - the Android local baseline should now be treated as established rather than tentative
 - the first desktop `POST /v1/generate` baseline is now working locally through the new service skeleton
+- the codebase now has the minimum Android-side pieces needed to call that remote service
 
 ## Important Files
 
@@ -55,6 +57,8 @@ Android runtime path:
 
 - `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
 - `app/src/main/java/com/example/myapplication/inference/LocalLlmImpl.kt`
+- `app/src/main/java/com/example/myapplication/inference/RemoteInferenceClient.kt`
+- `app/src/main/java/com/example/myapplication/ui/MainScreen.kt`
 - `lib/src/main/java/com/example/myapplication/llama/internal/InferenceEngineImpl.kt`
 - `lib/src/main/cpp/ai_chat.cpp`
 
@@ -71,7 +75,7 @@ Desktop GGUF validation path:
 Primary blocker:
 
 - the next blocker is no longer Android local correctness
-- the next blocker is adding the Android-side client path for the now-proven desktop service
+- the next blocker is verifying the new Android remote client path against the working desktop service
 
 Secondary blocker:
 
@@ -81,18 +85,19 @@ Secondary blocker:
 
 The next step should focus on one of these:
 
-1. add the Android-side normal remote request client for `POST /v1/generate`
-2. add a simple app-level distinction between local and remote inference mode
-3. preserve the local path as fallback while validating the remote path
+1. verify the new Android remote client path against the desktop service from Android Studio / on device
+2. confirm the remote mode UI surfaces success and failure clearly
+3. keep the local path intact as fallback while remote validation proceeds
 
 ## Immediate Execution Order
 
 Use this order unless a new runtime failure appears:
 
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
-2. add the smallest Android client that can call `POST /v1/generate`
-3. expose a minimal local/remote mode choice in the app without replacing the local baseline
-4. only after the ordinary remote path works end to end, plan speculative decoding on top of it
+2. start the desktop service locally
+3. run the app in remote mode and point it at the correct service URL for the test environment
+4. capture remote success or failure through the existing diagnostics surfaces
+5. only after the ordinary remote path works end to end, plan speculative decoding on top of it
 
 Practical interpretation:
 
@@ -101,12 +106,13 @@ Practical interpretation:
 - do not replace the proven local path while introducing the remote path
 - use `docs/project/computer-inference-service-boundary.md` for architecture boundaries
 - use `docs/project/desktop-inference-service-runbook.md` for the working desktop-service baseline
+- remember that the Android app currently uses ordinary HTTP, so the desktop service host must be reachable from the device or emulator
 
 ## Definition Of Done For The Next Node
 
 The next node is complete when all of the following are true:
 
-- Android can call the working desktop service through a normal request path
+- Android can call the working desktop service through the new normal request path
 - the app can surface remote success or remote failure clearly
 - the local Android baseline remains the fallback reference while the remote path is added
 - the close-out includes the required git-sync explanation and markdown summary update
@@ -118,6 +124,15 @@ Once the ordinary remote boundary is defined, the next architectural step is:
 1. add the Android-to-computer normal request path
 2. validate the full local-network or localhost-bridge flow
 3. treat speculative decoding as a later layer on top of that ordinary remote path
+
+## Android Studio Verification Needed By User
+
+For the next validation node:
+
+- confirm the app still syncs and indexes after the remote-client additions
+- start the desktop service using `docs/project/desktop-inference-service-runbook.md`
+- test remote mode from the app with a reachable service URL
+- confirm both success and failure states are readable through the app UI and diagnostic snapshot
 
 ## What Not To Reopen
 

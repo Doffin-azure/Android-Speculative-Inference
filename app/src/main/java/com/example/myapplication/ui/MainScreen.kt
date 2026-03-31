@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
@@ -23,6 +24,9 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun MainScreen(
     backendLabel: String,
+    inferenceMode: MainViewModel.InferenceMode,
+    remoteServerUrl: String,
+    remoteBackendLabel: String,
     statusMessage: String,
     output: String,
     lastError: String,
@@ -35,6 +39,8 @@ fun MainScreen(
     modelCandidates: List<MainViewModel.ModelCandidate>,
     loadedModelPath: String,
     onPickModelDirectory: () -> Unit,
+    onSetInferenceMode: (MainViewModel.InferenceMode) -> Unit,
+    onRemoteServerUrlChange: (String) -> Unit,
     onSelectModelCandidate: (String) -> Unit,
     onLoadModel: () -> Unit,
     onRun: (String) -> Unit
@@ -51,8 +57,53 @@ fun MainScreen(
     ) {
         Text(text = "Backend: $backendLabel")
 
+        Row(modifier = Modifier.padding(top = 16.dp)) {
+            Button(
+                onClick = { onSetInferenceMode(MainViewModel.InferenceMode.LOCAL) },
+                enabled = !busy && inferenceMode != MainViewModel.InferenceMode.LOCAL
+            ) {
+                Text("Local Mode")
+            }
+
+            OutlinedButton(
+                onClick = { onSetInferenceMode(MainViewModel.InferenceMode.REMOTE) },
+                enabled = !busy && inferenceMode != MainViewModel.InferenceMode.REMOTE,
+                modifier = Modifier.padding(start = 8.dp)
+            ) {
+                Text("Remote Mode")
+            }
+        }
+
         Text(
-            text = if (isModelLoaded) "Model: Loaded" else "Model: Not loaded",
+            text = "Active mode: ${inferenceMode.name}",
+            modifier = Modifier.padding(top = 8.dp)
+        )
+
+        if (inferenceMode == MainViewModel.InferenceMode.REMOTE) {
+            OutlinedTextField(
+                value = remoteServerUrl,
+                onValueChange = onRemoteServerUrlChange,
+                label = { Text("Remote Service URL (LAN IP on device)") },
+                enabled = !busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+            )
+
+            if (remoteBackendLabel.isNotBlank()) {
+                Text(
+                    text = "Remote backend: $remoteBackendLabel",
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+
+        Text(
+            text = if (inferenceMode == MainViewModel.InferenceMode.LOCAL) {
+                if (isModelLoaded) "Model: Loaded" else "Model: Not loaded"
+            } else {
+                "Model: Remote service managed"
+            },
             modifier = Modifier.padding(top = 8.dp)
         )
 
@@ -86,62 +137,72 @@ fun MainScreen(
             )
         }
 
-        TextField(
-            value = modelPath,
-            onValueChange = {},
-            label = { Text("Model File Path") },
-            readOnly = true,
-            enabled = true,
-            modifier = Modifier.padding(top = 16.dp)
-        )
-
-        Button(
-            onClick = onPickModelDirectory,
-            enabled = !busy,
-            modifier = Modifier.padding(top = 16.dp)
-        ) {
-            Text("Pick Model Directory")
-        }
-
-        if (modelCandidates.size > 1) {
-            Text(
-                text = "Models found in directory:",
+        if (inferenceMode == MainViewModel.InferenceMode.LOCAL) {
+            TextField(
+                value = modelPath,
+                onValueChange = {},
+                label = { Text("Model File Path") },
+                readOnly = true,
+                enabled = true,
                 modifier = Modifier.padding(top = 16.dp)
             )
 
-            modelCandidates.forEach { candidate ->
-                Button(
-                    onClick = { onSelectModelCandidate(candidate.contentUri) },
-                    enabled = !busy,
-                    modifier = Modifier.padding(top = 8.dp)
-                ) {
-                    Text(candidate.name)
+            Button(
+                onClick = onPickModelDirectory,
+                enabled = !busy,
+                modifier = Modifier.padding(top = 16.dp)
+            ) {
+                Text("Pick Model Directory")
+            }
+
+            if (modelCandidates.size > 1) {
+                Text(
+                    text = "Models found in directory:",
+                    modifier = Modifier.padding(top = 16.dp)
+                )
+
+                modelCandidates.forEach { candidate ->
+                    Button(
+                        onClick = { onSelectModelCandidate(candidate.contentUri) },
+                        enabled = !busy,
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) {
+                        Text(candidate.name)
+                    }
                 }
             }
-        }
 
-        Button(
-            onClick = onLoadModel,
-            enabled = !busy && modelPath.isNotBlank(),
-            modifier = Modifier.padding(top = 16.dp)
-        ) {
-            Text(if (isLoadingModel) "Loading..." else "Load Model")
+            Button(
+                onClick = onLoadModel,
+                enabled = !busy && modelPath.isNotBlank(),
+                modifier = Modifier.padding(top = 16.dp)
+            ) {
+                Text(if (isLoadingModel) "Loading..." else "Load Model")
+            }
         }
 
         TextField(
             value = prompt,
             onValueChange = { prompt = it },
             label = { Text("Prompt") },
-            enabled = !busy && isModelLoaded,
+            enabled = !busy && (isModelLoaded || inferenceMode == MainViewModel.InferenceMode.REMOTE),
             modifier = Modifier.padding(top = 16.dp)
         )
 
         Button(
             onClick = { onRun(prompt) },
-            enabled = !busy && isModelLoaded,
+            enabled = !busy && (isModelLoaded || inferenceMode == MainViewModel.InferenceMode.REMOTE),
             modifier = Modifier.padding(top = 16.dp)
         ) {
-            Text(if (isGenerating) "Running..." else "Run Local")
+            Text(
+                if (isGenerating) {
+                    "Running..."
+                } else if (inferenceMode == MainViewModel.InferenceMode.LOCAL) {
+                    "Run Local"
+                } else {
+                    "Run Remote"
+                }
+            )
         }
 
         CopyableReadOnlyField(
