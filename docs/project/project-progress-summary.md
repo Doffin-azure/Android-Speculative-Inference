@@ -226,6 +226,7 @@ Already complete:
 - local smoke validation already confirmed clean `start -> propose -> close` behavior with `accepted_by_llama_replay`
 - replay-mode preview text is now filtered cleanly enough to surface the real continuation instead of banner noise
 - replay-mode sessions now keep explicit `acceptedText`, `lastReplayPrompt`, and `lastTargetTextDelta` fields for verifier-state debugging
+- replay-mode prompt construction now prefers explicit accepted text state instead of relying only on token-id debug reconstruction, and Android diagnostics surface that replay-session text state
 
 Why it matters:
 

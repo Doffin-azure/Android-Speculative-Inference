@@ -581,7 +581,7 @@ def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession
         replay_prompt = build_replay_prompt(
             session.system_prompt,
             session.user_prompt,
-            token_ids_to_debug_text(session.accepted_token_ids),
+            current_assistant_prefix_text(session),
         )
         session.last_replay_prompt = replay_prompt
         preview_response = run_generation_from_full_prompt(
@@ -646,7 +646,7 @@ def refresh_llama_proxy_preview(
         replay_prompt = build_replay_prompt(
             session.system_prompt,
             session.user_prompt,
-            token_ids_to_debug_text(session.accepted_token_ids),
+            current_assistant_prefix_text(session),
         )
         session.last_replay_prompt = replay_prompt
         replay_response = run_generation_from_full_prompt(
@@ -695,6 +695,14 @@ def token_ids_to_debug_text(token_ids: list[int]) -> str:
         else:
             chars.append(f"<{token_id}>")
     return "".join(chars)
+
+
+def current_assistant_prefix_text(session: SpeculativeSession) -> str:
+    if session.accepted_text:
+        return session.accepted_text
+    if session.accepted_token_ids:
+        return token_ids_to_debug_text(session.accepted_token_ids)
+    return ""
 
 
 def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) -> SpeculativeSession:

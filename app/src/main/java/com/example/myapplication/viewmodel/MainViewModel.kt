@@ -34,6 +34,8 @@ class MainViewModel(
         val rejectedFromIndex: Int,
         val correctionTokenIds: List<Int>,
         val targetTextDelta: String,
+        val acceptedText: String,
+        val lastReplayPrompt: String,
         val status: String,
         val finishReason: String
     )
@@ -512,6 +514,8 @@ class MainViewModel(
                         rejectedFromIndex = proposeResponse.rejectedFromIndex,
                         correctionTokenIds = proposeResponse.correctionTokenIds,
                         targetTextDelta = proposeResponse.targetTextDelta,
+                        acceptedText = proposeResponse.acceptedText,
+                        lastReplayPrompt = proposeResponse.lastReplayPrompt,
                         status = proposeResponse.status,
                         finishReason = proposeResponse.finishReason
                     )
@@ -542,6 +546,10 @@ class MainViewModel(
                     appendLine("Start status: ${startResponse.status}")
                     appendLine("Verifier mode: ${startResponse.verifierMode}")
                     appendLine("Target preview text: ${startResponse.targetPreviewText}")
+                    appendLine("Start accepted text: ${startResponse.acceptedText}")
+                    if (startResponse.lastReplayPrompt.isNotBlank()) {
+                        appendLine("Start replay prompt: ${startResponse.lastReplayPrompt}")
+                    }
                     appendLine("Draft seed text: $draftSeedText")
                     appendLine("Draft steps completed: ${stepTraces.size}")
                     appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
@@ -552,8 +560,14 @@ class MainViewModel(
                         appendLine("Final rejected from index: ${finalStep.rejectedFromIndex}")
                         appendLine("Final correction token ids: ${finalStep.correctionTokenIds.joinToString()}")
                         appendLine("Final target text delta: ${finalStep.targetTextDelta}")
+                        appendLine("Final accepted text: ${finalStep.acceptedText}")
+                        if (finalStep.lastReplayPrompt.isNotBlank()) {
+                            appendLine("Final replay prompt: ${finalStep.lastReplayPrompt}")
+                        }
                     }
                     appendLine("Close status: ${closeResponse.status}")
+                    appendLine("Close accepted text: ${closeResponse.acceptedText}")
+                    appendLine("Close last target text delta: ${closeResponse.lastTargetTextDelta}")
                     appendLine("Fallback available: ${startResponse.fallbackAvailable}")
                     appendLine("Force mismatch: ${_speculativeForceMismatch.value}")
                     if (stepTraces.isNotEmpty()) {
@@ -577,6 +591,7 @@ class MainViewModel(
                     appendLine("Final rejected from index: ${finalStep?.rejectedFromIndex ?: -1}")
                     appendLine("Final correction count: ${finalStep?.correctionTokenIds?.size ?: 0}")
                     appendLine("Committed token count: ${committedTokenIds.size}")
+                    appendLine("Close accepted text: ${closeResponse.acceptedText}")
                     appendLine("Finish reason: ${lastFinishReason.ifBlank { "stub" }}")
                     appendLine("Close reason: ${closeResponse.reason}")
                 }.trim()
@@ -584,6 +599,7 @@ class MainViewModel(
                     appendLine("Speculative multi-step stub completed.")
                     appendLine("Verifier mode: ${startResponse.verifierMode}")
                     appendLine("Target preview text: ${startResponse.targetPreviewText}")
+                    appendLine("Start accepted text: ${startResponse.acceptedText}")
                     appendLine("Draft seed text: $draftSeedText")
                     appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
                     appendLine("Committed text: ${tokenIdsToReadableText(committedTokenIds)}")
@@ -591,10 +607,12 @@ class MainViewModel(
                         appendLine("Step details:")
                         stepTraces.forEach { trace ->
                             appendLine(
-                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta}"
+                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText}"
                             )
                         }
                     }
+                    appendLine("Close accepted text: ${closeResponse.acceptedText}")
+                    appendLine("Close last target text delta: ${closeResponse.lastTargetTextDelta}")
                     if (lastWarning.isNotBlank()) {
                         appendLine()
                         appendLine(lastWarning)
