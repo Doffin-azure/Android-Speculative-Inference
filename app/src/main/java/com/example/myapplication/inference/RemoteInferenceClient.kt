@@ -25,7 +25,8 @@ data class RemoteGenerateResponse(
     val outputText: String,
     val finishReason: String,
     val backendLabel: String,
-    val error: String
+    val error: String,
+    val generationMs: Long
 )
 
 data class RemoteProbeResponse(
@@ -107,7 +108,8 @@ class RemoteInferenceClient {
                     outputText = json.optString("outputText"),
                     finishReason = json.optString("finishReason", "unknown"),
                     backendLabel = json.optString("backendLabel", "remote"),
-                    error = error
+                    error = error,
+                    generationMs = json.optJSONObject("timings")?.optLong("generationMs") ?: -1L
                 )
             } finally {
                 connection.disconnect()

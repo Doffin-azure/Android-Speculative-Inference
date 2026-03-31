@@ -28,6 +28,7 @@ fun MainScreen(
     remoteServerUrl: String,
     remoteBackendLabel: String,
     remoteProbeSummary: String,
+    remoteResultSummary: String,
     statusMessage: String,
     output: String,
     lastError: String,
@@ -112,6 +113,15 @@ fun MainScreen(
                     label = "Remote Probe",
                     value = remoteProbeSummary,
                     onCopy = { clipboardManager.setText(AnnotatedString(remoteProbeSummary)) },
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+
+            if (remoteResultSummary.isNotBlank()) {
+                CopyableReadOnlyField(
+                    label = "Remote Result",
+                    value = remoteResultSummary,
+                    onCopy = { clipboardManager.setText(AnnotatedString(remoteResultSummary)) },
                     modifier = Modifier.padding(top = 8.dp)
                 )
             }
