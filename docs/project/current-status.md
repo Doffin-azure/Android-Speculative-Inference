@@ -36,6 +36,7 @@ Current real stage:
 - the desktop service now also exposes a `llama_step_proxy` verifier mode that refreshes llama preview text on demand when a proposal needs more target coverage
 - the desktop service now also exposes a `llama_replay_proxy` verifier mode that replays the already accepted assistant prefix back into llama-cli before verifying the next proposal chunk
 - the Android speculative stub client now runs a short multi-step session loop instead of stopping after a single `propose`
+- the desktop speculative session now also persists explicit `acceptedText`, `lastReplayPrompt`, and `lastTargetTextDelta` state for replay-based verifier debugging
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -77,6 +78,7 @@ Current strongest conclusion:
 - the new `llama_step_proxy` mode keeps the same preview-text proxy model but can refresh the preview when `propose` needs more target text than session start originally prepared
 - the new `llama_replay_proxy` mode now rebuilds target proxy text from the currently accepted assistant prefix, which is closer to true continuation verification than fixed preview text
 - the Android speculative harness can now record a short accepted/correction trace across multiple draft steps in the same session
+- the desktop session now keeps explicit replay-verifier state that can later map more cleanly onto a persistent target session implementation
 
 ## Important Files
 

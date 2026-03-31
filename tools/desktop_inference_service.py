@@ -232,6 +232,9 @@ class SpeculativeSession:
     correction_token_ids: list[int]
     target_token_ids: list[int]
     target_preview_text: str
+    accepted_text: str
+    last_replay_prompt: str
+    last_target_text_delta: str
     last_finish_reason: str
     created_at_ms: int
     updated_at_ms: int
@@ -580,6 +583,7 @@ def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession
             session.user_prompt,
             token_ids_to_debug_text(session.accepted_token_ids),
         )
+        session.last_replay_prompt = replay_prompt
         preview_response = run_generation_from_full_prompt(
             config,
             request_id=f"{session.request_id}-replay-preview",
@@ -644,6 +648,7 @@ def refresh_llama_proxy_preview(
             session.user_prompt,
             token_ids_to_debug_text(session.accepted_token_ids),
         )
+        session.last_replay_prompt = replay_prompt
         replay_response = run_generation_from_full_prompt(
             config,
             request_id=f"{session.request_id}-replay-refresh-{desired_tokens}",
@@ -726,6 +731,9 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
         correction_token_ids=[],
         target_token_ids=build_stub_target_token_ids(system_prompt, user_prompt),
         target_preview_text="",
+        accepted_text="",
+        last_replay_prompt="",
+        last_target_text_delta="",
         last_finish_reason="",
         created_at_ms=now_ms,
         updated_at_ms=now_ms,
@@ -752,6 +760,10 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "mismatchCount": session.mismatch_count,
         "fallbackAvailable": True,
         "targetPreviewText": session.target_preview_text,
+        "acceptedText": session.accepted_text,
+        "debug": {
+            "lastReplayPrompt": session.last_replay_prompt,
+        },
         "error": "",
     }
 
@@ -810,6 +822,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
 
     committed_token_ids = accepted_token_ids + correction_token_ids
     accepted_count = len(accepted_token_ids)
+    target_text_delta = token_ids_to_debug_text(committed_token_ids)
     finish_reason = ""
     if target_index + len(committed_token_ids) >= len(session.target_token_ids):
         finish_reason = "stub_target_complete"
@@ -818,6 +831,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     session.accepted_token_ids.extend(committed_token_ids)
     session.accepted_token_count = len(session.accepted_token_ids)
     session.correction_token_ids = correction_token_ids[:max_correction_tokens]
+    session.accepted_text = token_ids_to_debug_text(session.accepted_token_ids)
+    session.last_target_text_delta = target_text_delta
     session.last_finish_reason = finish_reason
     session.status = "verifying"
     session.updated_at_ms = int(time.time() * 1000)
@@ -854,12 +869,13 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "acceptedTokenIds": accepted_token_ids,
         "rejectedFromIndex": rejected_from_index,
         "correctionTokenIds": correction_token_ids,
-        "targetTextDelta": token_ids_to_debug_text(committed_token_ids),
+        "targetTextDelta": target_text_delta,
         "finishReason": finish_reason,
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
         "status": status,
         "warning": warning,
+        "acceptedText": session.accepted_text,
         "error": "",
         "debug": {
             "verifierMode": session.verifier_mode,
@@ -867,6 +883,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             "targetRemainingCount": len(target_remaining),
             "targetPreview": token_ids_to_debug_text(target_remaining[:16]),
             "llamaPreviewText": session.target_preview_text,
+            "acceptedText": session.accepted_text,
+            "lastReplayPrompt": session.last_replay_prompt,
         },
     }
 
@@ -936,6 +954,8 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "verifierMode": session.verifier_mode,
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
+        "acceptedText": session.accepted_text,
+        "lastTargetTextDelta": session.last_target_text_delta,
         "lastFinishReason": session.last_finish_reason,
         "error": "",
     }

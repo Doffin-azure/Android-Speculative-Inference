@@ -225,11 +225,13 @@ Already complete:
 - this mode rebuilds the verifier target from the currently accepted assistant prefix instead of only relying on a fixed preview buffer
 - local smoke validation already confirmed clean `start -> propose -> close` behavior with `accepted_by_llama_replay`
 - replay-mode preview text is now filtered cleanly enough to surface the real continuation instead of banner noise
+- replay-mode sessions now keep explicit `acceptedText`, `lastReplayPrompt`, and `lastTargetTextDelta` fields for verifier-state debugging
 
 Why it matters:
 
 - this is the closest current verifier bridge to true target continuation checking without changing the Android-side protocol
 - it lets desktop verification depend on the speculative session's already accepted output, not just on the original prompt or a one-shot preview
+- it also gives the project an explicit state shape that is closer to what a future persistent target verifier session will need
 
 ## What Is Proven Right Now
 
