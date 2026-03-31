@@ -50,7 +50,9 @@ Current real stage:
 - the first true verifier is no longer limited to one-token proof behavior; it now fetches a small target continuation chunk and can accept more than one token from a single verifier call
 - the first true verifier can now also use a configured `llama-server` backend with a fixed slot and prompt-cache reuse, which is the first step away from pure standalone `llama-cli` replay
 - the Android app now also surfaces the desktop true-verifier runtime backend, server slot, and chunk-position debug fields
-- the `:lib` and app local-inference layers now expose an explicit draft-session interface boundary, although the implementation still intentionally reports `unsupported`
+- the `:lib` and app local-inference layers now expose an explicit draft-session interface boundary
+- the Android local runtime now also has a first real draft-session implementation that rebuilds native state from the verified assistant prefix and samples model-driven draft codepoint ids for the existing speculative wire format
+- the desktop service now also exposes a first `llama_true_tree` verifier mode, which keeps the wire protocol unchanged while building a shallow target-side candidate tree from `llama-server` top-k results
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -100,7 +102,9 @@ Current strongest conclusion:
 - the current true verifier now also records call count and last expected token state, which improves desktop-side debugging before a persistent target runtime session exists
 - the current true verifier can now route chunk fetches through `llama-server` `/completion`, so desktop-side true verification is no longer limited to repeated standalone `llama-cli` invocations
 - the Android-side debug harness can now expose whether true verification is using `llama-cli` replay or a `llama-server` slot-backed runtime
-- the codebase now has an explicit local draft-session boundary (`supportsDraftSession / startDraftSession / draftNextTokenIds / applyVerifiedTokens / closeDraftSession`), which is the first code seam for true draft work
+- the codebase now has an explicit local draft-session boundary (`supportsDraftSession / startDraftSession / draftNextTokenIds / applyVerifiedTokens / closeDraftSession`)
+- that draft-session boundary now has a first real implementation in the Android local runtime, although it still returns codepoint-compatible draft ids instead of true libllama token ids
+- the new `llama_true_tree` verifier now uses target-side top-k candidates from `llama-server` to score a shallow best path and map that result back into the existing accepted/correction protocol
 
 ## Important Files
 
@@ -135,8 +139,8 @@ Primary blocker:
 - the next blocker is no longer replay-free target continuation
 - the next blocker is no longer the absence of a desktop target-session boundary
 - the next blocker is no longer the absence of any true verifier mode
-- the next blocker is strengthening the new `llama-server`-backed true verifier path beyond prompt-cache reuse and toward a fuller persistent target runtime session implementation
-- the next blocker after that is replacing the new Android draft-session boundary's `unsupported` implementation with a real local draft runtime
+- the next blocker is strengthening the new `llama-server`-backed true verifier path beyond prompt-cache reuse and shallow target-side tree scoring toward a fuller persistent target runtime session implementation
+- the next blocker after that is upgrading the new Android local draft runtime from codepoint-compatible draft ids to true token/runtime semantics with less replay and stronger state continuity
 
 Secondary blocker:
 

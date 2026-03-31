@@ -797,6 +797,108 @@ Why this is core:
 - This is the first explicit local runtime boundary for true draft work.
 - It turns Android speculative draft from an implicit future idea into a concrete code seam that later native work can implement.
 
+## 37. Android First Local Draft Runtime
+
+Commit:
+
+- current sync node
+
+Core code:
+
+```kotlin
+override suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> = withContext(llamaDispatcher) {
+    val runtime = draftSessions[sessionId]
+        ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+    resetDraftRuntime(runtime)
+    generateDraftTokenIds(maxTokens).toList()
+}
+
+override suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle = withContext(llamaDispatcher) {
+    val runtime = draftSessions[sessionId]
+        ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+    val updatedRuntime = runtime.copy(acceptedText = runtime.acceptedText + codePointIdsToString(tokenIds))
+    resetDraftRuntime(updatedRuntime)
+    draftSessions[sessionId] = updatedRuntime
+    DraftSessionHandle(
+        sessionId = updatedRuntime.sessionId,
+        runtimeLabel = "ai-chat draft session",
+        acceptedText = updatedRuntime.acceptedText,
+        acceptedTokenCount = updatedRuntime.acceptedText.codePointCount(0, updatedRuntime.acceptedText.length)
+    )
+}
+```
+
+```cpp
+JNIEXPORT jint JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_resetDraftContext(...) {
+    reset_long_term_states();
+    reset_short_term_states();
+    process_prompt_text(system, ROLE_SYSTEM, true);
+    process_prompt_text(user, ROLE_USER, false, true);
+    process_prompt_text(assistant, ROLE_ASSISTANT, false);
+    stop_generation_position = current_position + std::max(1, (int) predict_length);
+    return 0;
+}
+
+JNIEXPORT jintArray JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftTokenIds(...) {
+    const auto new_token_id = common_sampler_sample(g_sampler, g_context, -1);
+    common_sampler_accept(g_sampler, new_token_id, true);
+    ...
+    auto new_token_chars = common_token_to_piece(g_context, new_token_id);
+    cached_token_chars += new_token_chars;
+    ...
+    draft_ids.push_back((jint) codepoint);
+}
+```
+
+Why this is core:
+
+- This is the first point where Android speculative proposals can come from the real local model runtime rather than only from prompt-derived stub text.
+- The implementation still rebuilds native state from the verified prefix and still returns codepoint-compatible ids for wire compatibility, but it is the first real draft-runtime node in the project history.
+
+## 38. Desktop Tree-Shaped True Verifier First Cut
+
+Commit:
+
+- current sync node
+
+Core code:
+
+```python
+def fetch_target_top_candidates(...):
+    response = run_generation_from_server_completion(
+        config,
+        request_id=f"{target_session.request_id}-true-tree-{step_index}",
+        model=target_session.target_model,
+        full_prompt=replay_prompt,
+        max_tokens=1,
+        temperature=0.0,
+        top_p=1.0,
+        slot_id=target_session.llama_server_slot_id,
+        cache_prompt=True,
+        n_probs=max(1, branch_factor),
+        post_sampling_probs=True,
+    )
+```
+
+```python
+elif session.verifier_mode == "llama_true_tree":
+    computation = compute_true_tree_verifier_result(
+        server.config,
+        target_session,
+        accepted_token_ids=session.accepted_token_ids,
+        accepted_token_count=session.accepted_token_count,
+        proposed_token_ids=proposed_token_ids,
+        max_correction_tokens=max_correction_tokens,
+    )
+```
+
+Why this is core:
+
+- This is the first verifier node that expands a shallow target-side candidate tree from `llama-server` top-k probabilities while keeping the current Android wire protocol unchanged.
+- It is the first concrete step from linear true verification toward an EAGLE-inspired multi-candidate verifier shape.
+
 ## Reviewed But Not Listed As Feature Nodes
 
 These commits were reviewed during the git pass but were not promoted to the main feature list because they were documentation-only, ignore-only, template-only, or cleanup-only:

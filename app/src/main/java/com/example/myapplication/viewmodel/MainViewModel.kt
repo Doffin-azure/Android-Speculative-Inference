@@ -43,6 +43,11 @@ class MainViewModel(
         val lastTrueChunkConsumed: Int,
         val trueCacheHitStreak: Int,
         val trueFetchStreak: Int,
+        val treeCandidateCount: Int,
+        val treeBestPathTokenIds: List<Int>,
+        val treeBranchFactor: Int,
+        val treeDepthEvaluated: Int,
+        val treeDebugSummary: String,
         val status: String,
         val finishReason: String
     )
@@ -444,6 +449,7 @@ class MainViewModel(
             _speculativeSessionSummary.value = ""
 
             var activeSessionId: String? = null
+            var activeLocalDraftSessionId: String? = null
             try {
                 appendLog("Speculative health check requested for $baseUrl")
                 val health = remoteClient.health(baseUrl)
@@ -465,6 +471,22 @@ class MainViewModel(
                     "Speculative session started. sessionId=${startResponse.sessionId}, requestId=${startResponse.requestId}, status=${startResponse.status}, verifierMode=${startResponse.verifierMode}"
                 )
 
+                val localDraftSupported = runCatching { localLlm.supportsDraftSession() }.getOrDefault(false)
+                if (localDraftSupported) {
+                    appendLog("Opening local draft session for speculative run.")
+                    val localDraftSession = localLlm.startDraftSession(
+                        systemPrompt = "",
+                        userPrompt = prompt,
+                        predictLength = SPECULATIVE_STUB_MAX_STEPS * SPECULATIVE_STUB_MAX_DRAFT_TOKENS
+                    )
+                    activeLocalDraftSessionId = localDraftSession.sessionId
+                    appendLog(
+                        "Local draft session started. sessionId=${localDraftSession.sessionId}, acceptedTokenCount=${localDraftSession.acceptedTokenCount}"
+                    )
+                } else {
+                    appendLog("Local draft session unsupported; speculative run will use stub draft tokens.")
+                }
+
                 val draftSeedText = selectSpeculativeStubSeedText(
                     prompt = prompt,
                     verifierMode = startResponse.verifierMode,
@@ -478,12 +500,23 @@ class MainViewModel(
                 var lastFinishReason = ""
 
                 for (draftStep in 1..SPECULATIVE_STUB_MAX_STEPS) {
-                    val baseTokens = buildStubProposalSlice(
-                        seedTokens = draftSeedTokens,
-                        committedCount = committedTokenIds.size
-                    )
+                    val baseTokens = if (activeLocalDraftSessionId != null) {
+                        runCatching {
+                            localLlm.draftNextTokenIds(
+                                sessionId = activeLocalDraftSessionId,
+                                maxTokens = SPECULATIVE_STUB_MAX_DRAFT_TOKENS
+                            )
+                        }.onFailure { draftError ->
+                            appendLog("Local draft session fetch failed: ${draftError.message ?: "unknown error"}")
+                        }.getOrElse { emptyList() }
+                    } else {
+                        buildStubProposalSlice(
+                            seedTokens = draftSeedTokens,
+                            committedCount = committedTokenIds.size
+                        )
+                    }
                     if (baseTokens.isEmpty()) {
-                        appendLog("Speculative stub loop stopped: no more draft tokens available for step $draftStep.")
+                        appendLog("Speculative loop stopped: no more draft tokens available for step $draftStep.")
                         break
                     }
 
@@ -509,6 +542,21 @@ class MainViewModel(
 
                     committedTokenIds += proposeResponse.acceptedTokenIds
                     committedTokenIds += proposeResponse.correctionTokenIds
+                    if (activeLocalDraftSessionId != null) {
+                        val verifiedTokens = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
+                        runCatching {
+                            localLlm.applyVerifiedTokens(
+                                sessionId = activeLocalDraftSessionId,
+                                tokenIds = verifiedTokens
+                            )
+                        }.onSuccess { handle ->
+                            appendLog(
+                                "Local draft session advanced. sessionId=${handle.sessionId}, acceptedTokenCount=${handle.acceptedTokenCount}"
+                            )
+                        }.onFailure { applyError ->
+                            appendLog("Local draft apply failed: ${applyError.message ?: "unknown error"}")
+                        }
+                    }
                     lastWarning = proposeResponse.warning
                     lastRequestId = proposeResponse.requestId
                     lastFinishReason = proposeResponse.finishReason
@@ -530,6 +578,11 @@ class MainViewModel(
                         lastTrueChunkConsumed = proposeResponse.lastTrueChunkConsumed,
                         trueCacheHitStreak = proposeResponse.trueCacheHitStreak,
                         trueFetchStreak = proposeResponse.trueFetchStreak,
+                        treeCandidateCount = proposeResponse.treeCandidateCount,
+                        treeBestPathTokenIds = proposeResponse.treeBestPathTokenIds,
+                        treeBranchFactor = proposeResponse.treeBranchFactor,
+                        treeDepthEvaluated = proposeResponse.treeDepthEvaluated,
+                        treeDebugSummary = proposeResponse.treeDebugSummary,
                         status = proposeResponse.status,
                         finishReason = proposeResponse.finishReason
                     )
@@ -573,6 +626,8 @@ class MainViewModel(
                         appendLine("Start replay prompt: ${startResponse.lastReplayPrompt}")
                     }
                     appendLine("Draft seed text: $draftSeedText")
+                    appendLine("Local draft session supported: $localDraftSupported")
+                    appendLine("Local draft session active: ${activeLocalDraftSessionId ?: ""}")
                     appendLine("Draft steps completed: ${stepTraces.size}")
                     appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
                     appendLine("Committed text: ${tokenIdsToReadableText(committedTokenIds)}")
@@ -598,6 +653,13 @@ class MainViewModel(
                         }
                         if (finalStep.lastReplayPrompt.isNotBlank()) {
                             appendLine("Final replay prompt: ${finalStep.lastReplayPrompt}")
+                        }
+                        if (finalStep.treeCandidateCount > 0) {
+                            appendLine("Final tree candidate count: ${finalStep.treeCandidateCount}")
+                            appendLine("Final tree branch factor: ${finalStep.treeBranchFactor}")
+                            appendLine("Final tree depth evaluated: ${finalStep.treeDepthEvaluated}")
+                            appendLine("Final tree best path: ${finalStep.treeBestPathTokenIds.joinToString()}")
+                            appendLine("Final tree debug: ${finalStep.treeDebugSummary}")
                         }
                     }
                     appendLine("Close status: ${closeResponse.status}")
@@ -639,7 +701,10 @@ class MainViewModel(
                     appendLine("Final accepted count: ${finalStep?.acceptedCount ?: 0}")
                     appendLine("Final rejected from index: ${finalStep?.rejectedFromIndex ?: -1}")
                     appendLine("Final correction count: ${finalStep?.correctionTokenIds?.size ?: 0}")
+                    appendLine("Tree candidate count: ${finalStep?.treeCandidateCount ?: 0}")
+                    appendLine("Tree depth evaluated: ${finalStep?.treeDepthEvaluated ?: 0}")
                     appendLine("Committed token count: ${committedTokenIds.size}")
+                    appendLine("Local draft session supported: $localDraftSupported")
                     appendLine("Close accepted text: ${closeResponse.acceptedText}")
                     appendLine("Finish reason: ${lastFinishReason.ifBlank { "stub" }}")
                     appendLine("Close reason: ${closeResponse.reason}")
@@ -657,14 +722,19 @@ class MainViewModel(
                     appendLine("Target preview text: ${startResponse.targetPreviewText}")
                     appendLine("Start accepted text: ${startResponse.acceptedText}")
                     appendLine("Draft seed text: $draftSeedText")
+                    appendLine("Local draft session supported: $localDraftSupported")
+                    appendLine("Local draft session id: ${activeLocalDraftSessionId ?: ""}")
                     appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
                     appendLine("Committed text: ${tokenIdsToReadableText(committedTokenIds)}")
                     if (stepTraces.isNotEmpty()) {
                         appendLine("Step details:")
                         stepTraces.forEach { trace ->
                             appendLine(
-                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText} verifierStage=${trace.verifierStage} runtime=${trace.trueRuntimeBackend} slot=${trace.llamaServerSlotId} chunkStart=${trace.lastTrueChunkStart} chunkConsumed=${trace.lastTrueChunkConsumed}"
+                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText} verifierStage=${trace.verifierStage} runtime=${trace.trueRuntimeBackend} slot=${trace.llamaServerSlotId} chunkStart=${trace.lastTrueChunkStart} chunkConsumed=${trace.lastTrueChunkConsumed} treeCandidates=${trace.treeCandidateCount} treeBestPath=${trace.treeBestPathTokenIds.joinToString()}"
                             )
+                            if (trace.treeDebugSummary.isNotBlank()) {
+                                appendLine("  treeDebug=${trace.treeDebugSummary}")
+                            }
                         }
                     }
                     appendLine("Close accepted text: ${closeResponse.acceptedText}")
@@ -684,11 +754,12 @@ class MainViewModel(
                 _statusMessage.value = "Speculative run error: ${e.message}"
                 appendLog("Speculative run error: ${e.message ?: "unknown error"}")
                 if (activeSessionId != null) {
+                    val sessionIdToClose = activeSessionId
                     runCatching {
                         remoteClient.closeSpeculativeSession(
                             baseUrl = baseUrl,
                             request = SpeculativeCloseRequest(
-                                sessionId = activeSessionId,
+                                sessionId = sessionIdToClose,
                                 reason = "error_cleanup"
                             )
                         )
@@ -698,7 +769,21 @@ class MainViewModel(
                         appendLog("Speculative cleanup close failed: ${closeError.message ?: "unknown error"}")
                     }
                 }
+                if (activeLocalDraftSessionId != null) {
+                    val localSessionIdToClose = activeLocalDraftSessionId
+                    runCatching {
+                        localLlm.closeDraftSession(localSessionIdToClose)
+                    }.onSuccess {
+                        appendLog("Local draft session cleanup close succeeded. sessionId=$localSessionIdToClose")
+                    }.onFailure { closeError ->
+                        appendLog("Local draft session cleanup close failed: ${closeError.message ?: "unknown error"}")
+                    }
+                }
             } finally {
+                if (activeLocalDraftSessionId != null) {
+                    val localSessionIdToClose = activeLocalDraftSessionId
+                    runCatching { localLlm.closeDraftSession(localSessionIdToClose) }
+                }
                 _isGenerating.value = false
                 persistDiagnosticSnapshot()
             }

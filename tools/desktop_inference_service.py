@@ -30,6 +30,7 @@ DEFAULT_SPECULATIVE_VERIFIER_MODE = "prompt_stub"
 DEFAULT_LLAMA_PREVIEW_MAX_TOKENS = 8
 DEFAULT_LLAMA_REPLAY_MAX_TOKENS = 8
 DEFAULT_TRUE_VERIFY_MAX_TOKENS = 8
+DEFAULT_TRUE_TREE_BRANCH_FACTOR = 3
 
 
 def read_gradle_local_properties() -> dict[str, str]:
@@ -296,12 +297,41 @@ class VerifyComputation:
     target_index_before_step: int
     target_remaining_count: int
     target_preview_debug: str
+    tree_candidate_count: int = 0
+    tree_best_path_token_ids: list[int] | None = None
+    tree_branch_factor: int = 0
+    tree_depth_evaluated: int = 0
+    tree_debug_summary: str = ""
+
+
+@dataclass
+class TreeCandidateNode:
+    token_id: int
+    depth: int
+    parent_index: int
+    prefix_text: str
+    score: float
+    token_text: str
+    draft_selected_prob: float | None = None
+
+
+@dataclass
+class TreeVerifyComputation:
+    accepted_token_ids: list[int]
+    correction_token_ids: list[int]
+    rejected_from_index: int
+    target_text_delta: str
+    candidate_count: int
+    best_path_token_ids: list[int]
+    tree_debug_summary: str
+    tree_branch_factor: int
+    tree_depth_evaluated: int
 
 
 def infer_verifier_stage(verifier_mode: str) -> str:
     if verifier_mode == "prompt_stub":
         return "prompt_stub"
-    if verifier_mode == "llama_true_step":
+    if verifier_mode in {"llama_true_step", "llama_true_tree"}:
         return "true_target"
     if verifier_mode in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
         return "proxy_target"
@@ -359,7 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--speculative-verifier-mode",
-        choices=("prompt_stub", "llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step"),
+        choices=("prompt_stub", "llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree"),
         default=DEFAULT_SPECULATIVE_VERIFIER_MODE,
         help="Verifier mode for speculative propose handling.",
     )
@@ -526,22 +556,30 @@ def run_generation_from_server_completion(
     top_p: float,
     slot_id: int,
     cache_prompt: bool,
+    n_probs: int = 0,
+    post_sampling_probs: bool = False,
 ) -> dict[str, Any]:
     started = time.perf_counter()
+    request_payload = {
+        "prompt": full_prompt,
+        "n_predict": max(1, max_tokens),
+        "temperature": temperature,
+        "top_p": top_p,
+        "cache_prompt": cache_prompt,
+        "id_slot": slot_id,
+        "return_tokens": True,
+        "stream": False,
+        "n_keep": -1,
+    }
+    if n_probs > 0:
+        request_payload["n_probs"] = int(n_probs)
+    if post_sampling_probs:
+        request_payload["post_sampling_probs"] = True
+
     response = request_json(
         "POST",
         f"{config.llama_server_base_url}/completion",
-        {
-            "prompt": full_prompt,
-            "n_predict": max(1, max_tokens),
-            "temperature": temperature,
-            "top_p": top_p,
-            "cache_prompt": cache_prompt,
-            "id_slot": slot_id,
-            "return_tokens": True,
-            "stream": False,
-            "n_keep": -1,
-        },
+        request_payload,
         timeout_seconds=120.0,
     )
     elapsed_ms = round((time.perf_counter() - started) * 1000)
@@ -568,6 +606,7 @@ def run_generation_from_server_completion(
             "serverBaseUrl": config.llama_server_base_url,
             "stop": response.get("stop"),
             "tokensPredicted": completion_tokens,
+            "completionProbabilities": response.get("completion_probabilities") or [],
         },
     }
 
@@ -843,6 +882,11 @@ def token_ids_from_text(text: str) -> list[int]:
     return token_ids or [0]
 
 
+def first_wire_token_id_from_text(text: str) -> int:
+    token_ids = token_ids_from_text(text)
+    return token_ids[0] if token_ids else -1
+
+
 def build_target_preview_text(
     config: ServiceConfig,
     *,
@@ -855,10 +899,10 @@ def build_target_preview_text(
     temperature: float,
     top_p: float,
 ) -> tuple[str, str]:
-    if verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step"}:
+    if verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree"}:
         return "", ""
 
-    if verifier_mode == "llama_true_step":
+    if verifier_mode in {"llama_true_step", "llama_true_tree"}:
         response = run_true_target_chunk_text(
             config,
             request_id=f"{request_id}-true-preview",
@@ -918,7 +962,7 @@ def resolve_target_token_ids(
         if target_preview_text.strip():
             return prefix_token_ids + token_ids_from_text(target_preview_text)
         return prefix_token_ids or [0]
-    if verifier_mode == "llama_true_step":
+    if verifier_mode in {"llama_true_step", "llama_true_tree"}:
         return accepted_token_ids[:] if accepted_token_ids else [0]
     if verifier_mode in {"llama_preview", "llama_step_proxy"} and target_preview_text.strip():
         return token_ids_from_text(target_preview_text)
@@ -954,10 +998,10 @@ def refresh_llama_proxy_preview_for_target_session(
     accepted_token_ids: list[int],
     min_target_chars: int,
 ) -> None:
-    if target_session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step"}:
+    if target_session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree"}:
         return
 
-    if target_session.verifier_mode == "llama_true_step":
+    if target_session.verifier_mode in {"llama_true_step", "llama_true_tree"}:
         return
 
     current_chars = max(0, len(target_session.target_token_ids) - target_session.accepted_token_count)
@@ -1045,7 +1089,7 @@ def build_target_session_state(session: SpeculativeSession) -> TargetSessionStat
         last_true_expected_token_id=-1,
         last_true_expected_token_text="",
         true_prefix_cache={},
-        true_runtime_backend="llama_server_slot" if session.verifier_mode == "llama_true_step" else "proxy_target",
+        true_runtime_backend="llama_server_slot" if session.verifier_mode in {"llama_true_step", "llama_true_tree"} else "proxy_target",
         llama_server_slot_id=-1,
         last_true_chunk_start=0,
         last_true_chunk_consumed=0,
@@ -1247,6 +1291,46 @@ def compute_true_verifier_result(
     )
 
 
+def compute_true_tree_verifier_result(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    *,
+    accepted_token_ids: list[int],
+    accepted_token_count: int,
+    proposed_token_ids: list[int],
+    max_correction_tokens: int,
+) -> VerifyComputation:
+    target_index = accepted_token_count
+    tree = build_true_tree_computation(
+        config,
+        target_session,
+        target_index=target_index,
+        proposed_token_ids=proposed_token_ids,
+        max_correction_tokens=max_correction_tokens,
+    )
+    target_session.last_true_chunk_start = target_index
+    target_session.last_true_chunk_consumed = len(tree.accepted_token_ids) + len(tree.correction_token_ids)
+    if tree.best_path_token_ids:
+        target_session.last_true_expected_token_id = tree.best_path_token_ids[0]
+        target_session.last_true_expected_token_text = token_ids_to_debug_text([tree.best_path_token_ids[0]])
+    target_session.true_verifier_call_count += 1
+    return VerifyComputation(
+        accepted_token_ids=tree.accepted_token_ids,
+        correction_token_ids=tree.correction_token_ids,
+        rejected_from_index=tree.rejected_from_index,
+        target_text_delta=tree.target_text_delta,
+        finish_reason="",
+        target_index_before_step=target_index,
+        target_remaining_count=tree.tree_depth_evaluated,
+        target_preview_debug=token_ids_to_debug_text(tree.best_path_token_ids[:16]),
+        tree_candidate_count=tree.candidate_count,
+        tree_best_path_token_ids=tree.best_path_token_ids,
+        tree_branch_factor=tree.tree_branch_factor,
+        tree_depth_evaluated=tree.tree_depth_evaluated,
+        tree_debug_summary=tree.tree_debug_summary,
+    )
+
+
 def apply_verify_computation_to_sessions(
     session: SpeculativeSession,
     target_session: TargetSessionState,
@@ -1329,6 +1413,181 @@ def get_or_fetch_true_target_chunk_text(
     return response
 
 
+def fetch_target_top_candidates(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    *,
+    prefix_text: str,
+    step_index: int,
+    branch_factor: int,
+) -> dict[str, Any]:
+    if config.llama_server_base_url and target_session.llama_server_slot_id >= 0:
+        replay_prompt = build_replay_prompt(
+            target_session.system_prompt,
+            target_session.user_prompt,
+            prefix_text,
+        )
+        response = run_generation_from_server_completion(
+            config,
+            request_id=f"{target_session.request_id}-true-tree-{step_index}",
+            model=target_session.target_model,
+            full_prompt=replay_prompt,
+            max_tokens=1,
+            temperature=0.0,
+            top_p=1.0,
+            slot_id=target_session.llama_server_slot_id,
+            cache_prompt=True,
+            n_probs=max(1, branch_factor),
+            post_sampling_probs=True,
+        )
+        completion_probabilities = response.get("debug", {}).get("completionProbabilities") or []
+        first_entry = completion_probabilities[0] if completion_probabilities else {}
+        top_probs = []
+        if isinstance(first_entry, dict):
+            top_probs = first_entry.get("top_probs") or first_entry.get("top_logprobs") or []
+        candidates: list[dict[str, Any]] = []
+        for item in top_probs[: max(1, branch_factor)]:
+            if not isinstance(item, dict):
+                continue
+            token_text = str(item.get("token") or "")
+            token_id = first_wire_token_id_from_text(token_text) if token_text else -1
+            prob = float(item.get("prob", 0.0) or 0.0)
+            logprob = float(item.get("logprob", 0.0) or 0.0)
+            score = prob if prob > 0.0 else logprob
+            candidates.append(
+                {
+                    "tokenId": token_id,
+                    "tokenText": token_text,
+                    "score": score,
+                    "prob": prob,
+                    "logprob": logprob,
+                }
+            )
+        if candidates:
+            return {
+                "selectedContent": str(first_entry.get("content") or response.get("outputText") or ""),
+                "candidates": candidates,
+                "runtimeBackend": "llama_server_slot",
+                "replayPrompt": replay_prompt,
+            }
+
+    chunk_response = get_or_fetch_true_target_chunk_text(
+        config,
+        target_session,
+        prefix_text=prefix_text,
+        step_index=step_index,
+        desired_tokens=1,
+    )
+    next_text = str(chunk_response.get("outputText") or "")
+    next_token_ids = token_ids_from_text(next_text) if next_text else []
+    selected_token_id = next_token_ids[0] if next_token_ids else -1
+    return {
+        "selectedContent": next_text[:1],
+        "candidates": [
+            {
+                "tokenId": selected_token_id,
+                "tokenText": next_text[:1],
+                "score": 1.0 if selected_token_id >= 0 else 0.0,
+                "prob": 1.0 if selected_token_id >= 0 else 0.0,
+                "logprob": 0.0,
+            }
+        ] if selected_token_id >= 0 else [],
+        "runtimeBackend": str(chunk_response.get("debug", {}).get("runtimeBackend") or target_session.true_runtime_backend),
+        "replayPrompt": str(chunk_response.get("debug", {}).get("replayPrompt") or target_session.last_replay_prompt),
+    }
+
+
+def build_true_tree_computation(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    *,
+    target_index: int,
+    proposed_token_ids: list[int],
+    max_correction_tokens: int,
+    branch_factor: int = DEFAULT_TRUE_TREE_BRANCH_FACTOR,
+) -> TreeVerifyComputation:
+    accepted_step_token_ids: list[int] = []
+    correction_token_ids: list[int] = []
+    best_path_token_ids: list[int] = []
+    tree_nodes: list[TreeCandidateNode] = []
+    debug_lines: list[str] = []
+    rejected_from_index = -1
+    working_prefix = target_session.accepted_text
+    parent_index = -1
+
+    total_depth = len(proposed_token_ids) + max(0, max_correction_tokens)
+    for depth in range(total_depth):
+        top_result = fetch_target_top_candidates(
+            config,
+            target_session,
+            prefix_text=working_prefix,
+            step_index=target_index + depth,
+            branch_factor=branch_factor,
+        )
+        target_session.true_runtime_backend = str(top_result.get("runtimeBackend") or target_session.true_runtime_backend)
+        target_session.last_replay_prompt = str(top_result.get("replayPrompt") or target_session.last_replay_prompt)
+        candidates = list(top_result.get("candidates") or [])
+        if not candidates:
+            if depth < len(proposed_token_ids):
+                rejected_from_index = depth
+            break
+
+        current_parent_index = parent_index
+        for candidate in candidates:
+            tree_nodes.append(
+                TreeCandidateNode(
+                    token_id=int(candidate.get("tokenId", -1)),
+                    depth=depth,
+                    parent_index=current_parent_index,
+                    prefix_text=working_prefix,
+                    score=float(candidate.get("score", 0.0) or 0.0),
+                    token_text=str(candidate.get("tokenText") or ""),
+                )
+            )
+
+        best_candidate = candidates[0]
+        best_token_id = int(best_candidate.get("tokenId", -1))
+        best_path_token_ids.append(best_token_id)
+        proposed_token_id = proposed_token_ids[depth] if depth < len(proposed_token_ids) else None
+        proposal_in_topk = proposed_token_id in {int(item.get("tokenId", -1)) for item in candidates}
+        debug_lines.append(
+            f"d{depth}:best={best_token_id} proposal={proposed_token_id if proposed_token_id is not None else '-'} inTopK={proposal_in_topk}"
+        )
+
+        if depth < len(proposed_token_ids):
+            if proposed_token_id == best_token_id:
+                accepted_step_token_ids.append(best_token_id)
+                working_prefix += chr(best_token_id) if best_token_id >= 0 else ""
+                parent_index = len(tree_nodes) - len(candidates)
+                continue
+
+            rejected_from_index = depth
+            correction_token_ids = [best_token_id] if best_token_id >= 0 else []
+            working_prefix += chr(best_token_id) if best_token_id >= 0 else ""
+            parent_index = len(tree_nodes) - len(candidates)
+            continue
+
+        if len(correction_token_ids) < max_correction_tokens and best_token_id >= 0:
+            correction_token_ids.append(best_token_id)
+            working_prefix += chr(best_token_id)
+            parent_index = len(tree_nodes) - len(candidates)
+            if len(correction_token_ids) >= max_correction_tokens:
+                break
+
+    target_text_delta = token_ids_to_debug_text(accepted_step_token_ids + correction_token_ids)
+    return TreeVerifyComputation(
+        accepted_token_ids=accepted_step_token_ids,
+        correction_token_ids=correction_token_ids[:max_correction_tokens],
+        rejected_from_index=rejected_from_index,
+        target_text_delta=target_text_delta,
+        candidate_count=len(tree_nodes),
+        best_path_token_ids=best_path_token_ids,
+        tree_debug_summary="; ".join(debug_lines),
+        tree_branch_factor=branch_factor,
+        tree_depth_evaluated=len(best_path_token_ids),
+    )
+
+
 def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) -> SpeculativeSession:
     session_id = str(payload.get("sessionId") or uuid.uuid4())
     request_id = str(payload.get("requestId") or uuid.uuid4())
@@ -1376,7 +1635,7 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
 def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
     session = build_speculative_session(payload, server.config)
     target_session = build_target_session_state(session)
-    if session.verifier_mode == "llama_true_step" and server.config.llama_server_base_url:
+    if session.verifier_mode in {"llama_true_step", "llama_true_tree"} and server.config.llama_server_base_url:
         target_session.true_runtime_backend = "llama_server_slot"
         target_session.llama_server_slot_id = choose_llama_server_slot(server.config.llama_server_base_url)
         true_preview = get_or_fetch_true_target_chunk_text(
@@ -1487,6 +1746,15 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             proposed_token_ids=proposed_token_ids,
             max_correction_tokens=max_correction_tokens,
         )
+    elif session.verifier_mode == "llama_true_tree":
+        computation = compute_true_tree_verifier_result(
+            server.config,
+            target_session,
+            accepted_token_ids=session.accepted_token_ids,
+            accepted_token_count=session.accepted_token_count,
+            proposed_token_ids=proposed_token_ids,
+            max_correction_tokens=max_correction_tokens,
+        )
     else:
         computation = compute_proxy_verifier_result(
             target_session,
@@ -1514,6 +1782,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         status = f"{base_status}_by_llama_replay"
     elif session.verifier_mode == "llama_true_step":
         status = f"{base_status}_by_llama_true_step"
+    elif session.verifier_mode == "llama_true_tree":
+        status = f"{base_status}_by_llama_true_tree"
     elif session.verifier_mode in {"llama_preview", "llama_step_proxy"}:
         status = f"{base_status}_by_llama_preview"
     else:
@@ -1529,6 +1799,11 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "This is the first true-target verifier stage. When llama-server is configured it now runs through a persistent server slot with prompt-cache reuse, "
         "but it still does not directly hold libllama state inside this Python process."
         if session.verifier_mode == "llama_true_step"
+        else
+        "Desktop speculative verification is now building a shallow target-side tree from llama-server top-k candidates. "
+        "This first tree verifier node keeps the wire protocol unchanged and uses target-side top-k expansion to score a best path, "
+        "but it is still not a full EAGLE-style posterior/KV-copy implementation."
+        if session.verifier_mode == "llama_true_tree"
         else
         "Desktop speculative verification is currently using llama preview text as a target proxy. "
         "It now computes accepted prefixes and correction tokens from the preview text, but it still does not run true target-model token verification yet."
@@ -1579,6 +1854,11 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             "lastTrueChunkConsumed": target_session.last_true_chunk_consumed,
             "trueCacheHitStreak": target_session.true_cache_hit_streak,
             "trueFetchStreak": target_session.true_fetch_streak,
+            "treeCandidateCount": computation.tree_candidate_count,
+            "treeBestPathTokenIds": computation.tree_best_path_token_ids or [],
+            "treeBranchFactor": computation.tree_branch_factor,
+            "treeDepthEvaluated": computation.tree_depth_evaluated,
+            "treeDebugSummary": computation.tree_debug_summary,
         },
     }
 
@@ -1641,7 +1921,7 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         target_session = server.target_sessions.pop(session.target_session_id, None)
     if (
         target_session is not None
-        and target_session.verifier_mode == "llama_true_step"
+        and target_session.verifier_mode in {"llama_true_step", "llama_true_tree"}
         and server.config.llama_server_base_url
         and target_session.llama_server_slot_id >= 0
     ):

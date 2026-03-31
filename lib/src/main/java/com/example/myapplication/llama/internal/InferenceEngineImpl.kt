@@ -2,10 +2,12 @@ package com.example.myapplication.llama.internal
 
 import android.content.Context
 import android.util.Log
+import com.example.myapplication.llama.DraftSessionHandle
 import com.example.myapplication.llama.InferenceEngine
 import dalvik.annotation.optimization.FastNative
 import java.io.File
 import java.io.IOException
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +28,14 @@ import kotlinx.coroutines.withContext
 internal class InferenceEngineImpl private constructor(
     private val nativeLibDir: String
 ) : InferenceEngine {
+
+    private data class DraftSessionRuntime(
+        val sessionId: String,
+        val systemPrompt: String,
+        val userPrompt: String,
+        val predictLength: Int,
+        val acceptedText: String = ""
+    )
 
     companion object {
         private const val TAG = "InferenceEngineImpl"
@@ -74,6 +84,17 @@ internal class InferenceEngineImpl private constructor(
     private external fun generateNextToken(): String?
 
     @FastNative
+    private external fun resetDraftContext(
+        systemPrompt: String,
+        userPrompt: String,
+        assistantText: String,
+        predictLength: Int
+    ): Int
+
+    @FastNative
+    private external fun generateDraftTokenIds(maxTokens: Int): IntArray
+
+    @FastNative
     private external fun unload()
 
     @FastNative
@@ -104,6 +125,7 @@ internal class InferenceEngineImpl private constructor(
     private var currentModelPath = ""
     private var currentError = ""
     private var readyForSystemPrompt = false
+    private val draftSessions = linkedMapOf<String, DraftSessionRuntime>()
 
     @Volatile
     private var cancelGeneration = false
@@ -268,6 +290,88 @@ internal class InferenceEngineImpl private constructor(
         output
     }
 
+    override fun supportsDraftSession(): Boolean = true
+
+    override suspend fun startDraftSession(
+        systemPrompt: String,
+        userPrompt: String,
+        predictLength: Int
+    ): DraftSessionHandle = withContext(llamaDispatcher) {
+        check(state.value is InferenceEngine.State.ModelReady) {
+            "Cannot start draft session in ${state.value.javaClass.simpleName}."
+        }
+
+        val sessionId = UUID.randomUUID().toString()
+        val runtime = DraftSessionRuntime(
+            sessionId = sessionId,
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
+            predictLength = predictLength
+        )
+        resetDraftRuntime(runtime)
+        draftSessions[sessionId] = runtime
+        DraftSessionHandle(
+            sessionId = sessionId,
+            runtimeLabel = "ai-chat draft session",
+            acceptedText = runtime.acceptedText,
+            acceptedTokenCount = runtime.acceptedText.codePointCount(0, runtime.acceptedText.length)
+        )
+    }
+
+    override suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> = withContext(llamaDispatcher) {
+        val runtime = draftSessions[sessionId]
+            ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+        require(maxTokens > 0) { "maxTokens must be > 0." }
+        resetDraftRuntime(runtime)
+        generateDraftTokenIds(maxTokens).toList()
+    }
+
+    override suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle = withContext(llamaDispatcher) {
+        val runtime = draftSessions[sessionId]
+            ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+
+        val appendedText = codePointIdsToString(tokenIds)
+        val updatedRuntime = runtime.copy(acceptedText = runtime.acceptedText + appendedText)
+        resetDraftRuntime(updatedRuntime)
+        draftSessions[sessionId] = updatedRuntime
+        DraftSessionHandle(
+            sessionId = updatedRuntime.sessionId,
+            runtimeLabel = "ai-chat draft session",
+            acceptedText = updatedRuntime.acceptedText,
+            acceptedTokenCount = updatedRuntime.acceptedText.codePointCount(0, updatedRuntime.acceptedText.length)
+        )
+    }
+
+    override suspend fun closeDraftSession(sessionId: String) {
+        withContext(llamaDispatcher) {
+            draftSessions.remove(sessionId)
+        }
+    }
+
+    private fun codePointIdsToString(tokenIds: List<Int>): String {
+        if (tokenIds.isEmpty()) {
+            return ""
+        }
+        val builder = StringBuilder()
+        tokenIds.filter { it >= 0 }.forEach { codePoint ->
+            builder.appendCodePoint(codePoint)
+        }
+        return builder.toString()
+    }
+
+    private fun resetDraftRuntime(runtime: DraftSessionRuntime) {
+        val result = resetDraftContext(
+            systemPrompt = runtime.systemPrompt,
+            userPrompt = runtime.userPrompt,
+            assistantText = runtime.acceptedText,
+            predictLength = runtime.predictLength
+        )
+        if (result != 0) {
+            currentError = "Failed to reset draft runtime: $result"
+            throw IOException(currentError)
+        }
+    }
+
     override fun cleanUp() {
         cancelGeneration = true
         runBlocking(llamaDispatcher) {
@@ -280,6 +384,7 @@ internal class InferenceEngineImpl private constructor(
                     currentModelPath = ""
                     currentError = ""
                     readyForSystemPrompt = false
+                    draftSessions.clear()
                     mutableState.value = InferenceEngine.State.Initialized
                 }
 
@@ -291,6 +396,7 @@ internal class InferenceEngineImpl private constructor(
                     currentModelPath = ""
                     currentError = ""
                     readyForSystemPrompt = false
+                    draftSessions.clear()
                     mutableState.value = InferenceEngine.State.Initialized
                 }
             }
@@ -311,6 +417,7 @@ internal class InferenceEngineImpl private constructor(
             }
             currentModelPath = ""
             currentError = ""
+            draftSessions.clear()
             mutableState.value = InferenceEngine.State.Uninitialized
         }
         llamaScope.cancel()

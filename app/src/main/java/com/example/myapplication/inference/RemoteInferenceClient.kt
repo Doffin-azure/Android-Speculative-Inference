@@ -96,6 +96,11 @@ data class SpeculativeProposeResponse(
     val lastTrueChunkConsumed: Int,
     val trueCacheHitStreak: Int,
     val trueFetchStreak: Int,
+    val treeCandidateCount: Int,
+    val treeBestPathTokenIds: List<Int>,
+    val treeBranchFactor: Int,
+    val treeDepthEvaluated: Int,
+    val treeDebugSummary: String,
     val warning: String,
     val finishReason: String,
     val error: String
@@ -305,6 +310,11 @@ class RemoteInferenceClient {
                 lastTrueChunkConsumed = json.optJSONObject("debug")?.optInt("lastTrueChunkConsumed", -1) ?: -1,
                 trueCacheHitStreak = json.optJSONObject("debug")?.optInt("trueCacheHitStreak", 0) ?: 0,
                 trueFetchStreak = json.optJSONObject("debug")?.optInt("trueFetchStreak", 0) ?: 0,
+                treeCandidateCount = json.optJSONObject("debug")?.optInt("treeCandidateCount", 0) ?: 0,
+                treeBestPathTokenIds = json.optJSONObject("debug")?.optJSONArray("treeBestPathTokenIds").toIntList(),
+                treeBranchFactor = json.optJSONObject("debug")?.optInt("treeBranchFactor", 0) ?: 0,
+                treeDepthEvaluated = json.optJSONObject("debug")?.optInt("treeDepthEvaluated", 0) ?: 0,
+                treeDebugSummary = json.optJSONObject("debug")?.optString("treeDebugSummary").orEmpty(),
                 warning = json.optString("warning"),
                 finishReason = json.optString("finishReason"),
                 error = error
