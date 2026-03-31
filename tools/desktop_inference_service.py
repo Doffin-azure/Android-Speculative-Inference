@@ -25,6 +25,7 @@ DEFAULT_TOP_P = 0.9
 PROTOCOL_VERSION = 1
 DEFAULT_SPECULATIVE_VERIFIER_MODE = "prompt_stub"
 DEFAULT_LLAMA_PREVIEW_MAX_TOKENS = 8
+DEFAULT_LLAMA_REPLAY_MAX_TOKENS = 8
 
 
 def read_gradle_local_properties() -> dict[str, str]:
@@ -134,6 +135,66 @@ def extract_response_text(stdout_text: str, user_prompt: str) -> str:
             continue
         if set(line) <= {"в", "–", "„", "€", "Ђ"}:
             continue
+        if line.startswith("> User:"):
+            continue
+        if line == "Assistant:":
+            continue
+        if not any(ch.isalnum() for ch in line):
+            continue
+        lines.append(line)
+
+    return "\n".join(lines).strip()
+
+
+def build_replay_prompt(system_prompt: str, user_prompt: str, assistant_prefix: str) -> str:
+    system_prompt = system_prompt.strip()
+    user_prompt = user_prompt.strip()
+    assistant_prefix = assistant_prefix or ""
+    if not user_prompt:
+        raise ValueError("userPrompt must not be blank.")
+
+    lines: list[str] = []
+    if system_prompt:
+        lines.append(f"System: {system_prompt}")
+    lines.append(f"User: {user_prompt}")
+    lines.append(f"Assistant: {assistant_prefix}")
+    return "\n".join(lines)
+
+
+def extract_response_text_without_marker(stdout_text: str) -> str:
+    text = stdout_text.replace("\r\n", "\n")
+
+    for tail_marker in ("\n[ Prompt:", "\nExiting...", "\nllama_"):
+        if tail_marker in text:
+            text = text.split(tail_marker, 1)[0]
+
+    lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line == "Loading model...":
+            continue
+        if line.startswith("build      :"):
+            continue
+        if line.startswith("model      :"):
+            continue
+        if line.startswith("modalities :"):
+            continue
+        if line.startswith("using custom system prompt"):
+            continue
+        if line.startswith("available commands:"):
+            continue
+        if line.startswith("/"):
+            continue
+        if all((not ch.isalnum()) and (not ch.isspace()) and ord(ch) > 127 for ch in line):
+            continue
+        if line.startswith("> User:"):
+            continue
+        if line == "Assistant:":
+            continue
+        if not any(ch.isalnum() for ch in line):
+            continue
         lines.append(line)
 
     return "\n".join(lines).strip()
@@ -217,7 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--speculative-verifier-mode",
-        choices=("prompt_stub", "llama_preview", "llama_step_proxy"),
+        choices=("prompt_stub", "llama_preview", "llama_step_proxy", "llama_replay_proxy"),
         default=DEFAULT_SPECULATIVE_VERIFIER_MODE,
         help="Verifier mode for speculative propose handling.",
     )
@@ -394,6 +455,96 @@ def run_generation(config: ServiceConfig, payload: dict[str, Any]) -> dict[str, 
     }
 
 
+def run_generation_from_full_prompt(
+    config: ServiceConfig,
+    *,
+    request_id: str,
+    model: str,
+    full_prompt: str,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+) -> dict[str, Any]:
+    model_path = config.model_path
+    if model and Path(model).is_absolute():
+        model_path = Path(model)
+
+    model_wsl_path = windows_to_wsl_path(model_path)
+    cli_command = [
+        shlex.quote(config.llama_cli_wsl_path),
+        "-m",
+        shlex.quote(model_wsl_path),
+        "-p",
+        shlex.quote(full_prompt),
+        "-n",
+        str(max(1, max_tokens)),
+        "--no-warmup",
+        "--simple-io",
+        "--no-display-prompt",
+        "-st",
+        "-t",
+        str(config.threads),
+        "--temp",
+        str(temperature),
+        "--top-p",
+        str(top_p),
+        "--log-disable",
+        "--no-perf",
+    ]
+    bash_command = (
+        f"export LD_LIBRARY_PATH={shlex.quote(config.ld_library_path)};"
+        f" {' '.join(cli_command)}"
+    )
+
+    started = time.perf_counter()
+    result = subprocess.run(
+        ["wsl.exe", "bash", "-lc", bash_command],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+
+    output_text = extract_response_text_without_marker(result.stdout)
+    stderr_text = result.stderr.strip()
+
+    if result.returncode != 0:
+        return {
+            "requestId": request_id,
+            "outputText": "",
+            "finishReason": "error",
+            "promptTokens": 0,
+            "completionTokens": 0,
+            "totalTokens": 0,
+            "backendLabel": "desktop-llama.cpp-wsl-cli",
+            "timings": {
+                "generationMs": elapsed_ms,
+            },
+            "error": stderr_text or f"llama-cli failed with exit code {result.returncode}",
+        }
+
+    completion_tokens = len(output_text.split())
+    prompt_tokens = len(full_prompt.split())
+    return {
+        "requestId": request_id,
+        "outputText": output_text,
+        "finishReason": "stop",
+        "promptTokens": prompt_tokens,
+        "completionTokens": completion_tokens,
+        "totalTokens": prompt_tokens + completion_tokens,
+        "backendLabel": "desktop-llama.cpp-wsl-cli",
+        "timings": {
+            "generationMs": elapsed_ms,
+        },
+        "error": "",
+        "debug": {
+            "stderr": stderr_text,
+            "model": model_path.name,
+        },
+    }
+
+
 def parse_int_list(name: str, value: Any) -> list[int]:
     if value is None:
         return []
@@ -420,8 +571,27 @@ def token_ids_from_text(text: str) -> list[int]:
 
 
 def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession) -> str:
-    if config.speculative_verifier_mode not in {"llama_preview", "llama_step_proxy"}:
+    if config.speculative_verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
         return ""
+
+    if config.speculative_verifier_mode == "llama_replay_proxy":
+        replay_prompt = build_replay_prompt(
+            session.system_prompt,
+            session.user_prompt,
+            token_ids_to_debug_text(session.accepted_token_ids),
+        )
+        preview_response = run_generation_from_full_prompt(
+            config,
+            request_id=f"{session.request_id}-replay-preview",
+            model=session.target_model,
+            full_prompt=replay_prompt,
+            max_tokens=DEFAULT_LLAMA_REPLAY_MAX_TOKENS,
+            temperature=session.temperature,
+            top_p=session.top_p,
+        )
+        if preview_response.get("error"):
+            return ""
+        return str(preview_response.get("outputText") or "").strip()
 
     preview_response = run_generation(
         config,
@@ -441,6 +611,11 @@ def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession
 
 
 def resolve_session_target_token_ids(session: SpeculativeSession) -> list[int]:
+    if session.verifier_mode == "llama_replay_proxy":
+        prefix_token_ids = session.accepted_token_ids[:]
+        if session.target_preview_text.strip():
+            return prefix_token_ids + token_ids_from_text(session.target_preview_text)
+        return prefix_token_ids or [0]
     if session.verifier_mode in {"llama_preview", "llama_step_proxy"} and session.target_preview_text.strip():
         return token_ids_from_text(session.target_preview_text)
     return build_stub_target_token_ids(session.system_prompt, session.user_prompt)
@@ -451,11 +626,37 @@ def refresh_llama_proxy_preview(
     session: SpeculativeSession,
     min_target_chars: int,
 ) -> None:
-    if session.verifier_mode not in {"llama_preview", "llama_step_proxy"}:
+    if session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
         return
 
-    current_chars = len(session.target_preview_text)
+    current_chars = max(0, len(session.target_token_ids) - session.accepted_token_count)
     if current_chars >= min_target_chars:
+        return
+
+    if session.verifier_mode == "llama_replay_proxy":
+        desired_tokens = max(
+            DEFAULT_LLAMA_REPLAY_MAX_TOKENS,
+            min_target_chars + 8,
+            current_chars + 8,
+        )
+        replay_prompt = build_replay_prompt(
+            session.system_prompt,
+            session.user_prompt,
+            token_ids_to_debug_text(session.accepted_token_ids),
+        )
+        replay_response = run_generation_from_full_prompt(
+            config,
+            request_id=f"{session.request_id}-replay-refresh-{desired_tokens}",
+            model=session.target_model,
+            full_prompt=replay_prompt,
+            max_tokens=desired_tokens,
+            temperature=session.temperature,
+            top_p=session.top_p,
+        )
+        refreshed_text = str(replay_response.get("outputText") or "").strip()
+        if refreshed_text:
+            session.target_preview_text = refreshed_text
+            session.target_token_ids = session.accepted_token_ids[:] + token_ids_from_text(refreshed_text)
         return
 
     desired_tokens = max(
@@ -622,13 +823,19 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     session.updated_at_ms = int(time.time() * 1000)
 
     base_status = "accepted" if not correction_token_ids and rejected_from_index == -1 else "corrected"
-    if session.verifier_mode in {"llama_preview", "llama_step_proxy"}:
+    if session.verifier_mode == "llama_replay_proxy":
+        status = f"{base_status}_by_llama_replay"
+    elif session.verifier_mode in {"llama_preview", "llama_step_proxy"}:
         status = f"{base_status}_by_llama_preview"
     else:
         status = f"{base_status}_by_prompt_stub"
     session.status = status
 
     warning = (
+        "Desktop speculative verification is currently replaying the accepted assistant prefix into llama-cli and using the resulting continuation as a target proxy. "
+        "This is closer to true target verification than fixed preview text, but it still does not verify target-model tokens directly inside a persistent model session yet."
+        if session.verifier_mode == "llama_replay_proxy"
+        else
         "Desktop speculative verification is currently using llama preview text as a target proxy. "
         "It now computes accepted prefixes and correction tokens from the preview text, but it still does not run true target-model token verification yet."
         if session.verifier_mode in {"llama_preview", "llama_step_proxy"}

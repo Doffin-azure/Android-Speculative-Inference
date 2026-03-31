@@ -34,7 +34,8 @@ Current real stage:
 - the Android UI now also surfaces the active speculative verifier mode directly outside the session summary so verifier-mode changes are easier to spot during testing
 - the `llama_preview` verifier mode now uses llama preview text to drive accepted/correction semantics during `propose`
 - the desktop service now also exposes a `llama_step_proxy` verifier mode that refreshes llama preview text on demand when a proposal needs more target coverage
-- the next active stage is replacing llama-preview proxy verification with real target-model token verification
+- the desktop service now also exposes a `llama_replay_proxy` verifier mode that replays the already accepted assistant prefix back into llama-cli before verifying the next proposal chunk
+- the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
 
@@ -73,6 +74,7 @@ Current strongest conclusion:
 - the desktop service now reports a `speculativeVerifierMode` and can optionally prepare a llama-backed preview text while keeping the current protocol stable
 - the `llama_preview` mode is no longer preview-only; it now uses preview text as the current target proxy for accepted-prefix and correction-token behavior
 - the new `llama_step_proxy` mode keeps the same preview-text proxy model but can refresh the preview when `propose` needs more target text than session start originally prepared
+- the new `llama_replay_proxy` mode now rebuilds target proxy text from the currently accepted assistant prefix, which is closer to true continuation verification than fixed preview text
 
 ## Important Files
 
@@ -104,7 +106,8 @@ Primary blocker:
 - the next blocker is no longer the absence of speculative verify semantics
 - the next blocker is no longer the lack of a llama-backed target proxy
 - the next blocker is no longer static llama preview coverage
-- the next blocker is replacing llama-preview proxy verification with real target-model token verification
+- the next blocker is no longer replay-free target continuation
+- the next blocker is replacing replay-based proxy verification with real target-model token verification
 
 Secondary blocker:
 
@@ -114,8 +117,8 @@ Secondary blocker:
 
 The next step should focus on one of these:
 
-1. keep `llama_step_proxy` as the regression harness for desktop-side speculative verification
-2. replace preview-text proxy verification with real target-model token verification
+1. keep `llama_replay_proxy` as the regression harness for desktop-side speculative verification
+2. replace replay-based proxy verification with real target-model token verification
 3. keep ordinary remote fallback active while the real verifier is introduced
 
 ## Immediate Execution Order
@@ -125,8 +128,8 @@ Use this order unless a new runtime failure appears:
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
 2. use `docs/project/speculative-decoding-protocol-draft.md` as the protocol reference
 3. keep the Android speculative stub path as the regression harness
-4. treat `llama_step_proxy` as the last preview-text proxy harness before real token verification
-5. replace llama-preview proxy verification with real token verification on the desktop side
+4. treat `llama_replay_proxy` as the closest current verifier harness before real token verification
+5. replace replay-based proxy verification with real token verification on the desktop side
 6. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
@@ -152,9 +155,9 @@ The next node is complete when all of the following are true:
 - the Android speculative debug harness remains usable as the regression client
 - the close-out includes the required git-sync explanation and markdown summary update
 
-The current desktop proxy-verifier ladder is now complete through `llama_step_proxy`.
+The current desktop proxy-verifier ladder is now complete through `llama_replay_proxy`.
 
-The remaining completion work for this node is replacing the proxy ladder with real target-model token verification.
+The remaining completion work for this node is replacing the proxy ladder with real target-model token verification inside a persistent target session.
 
 ## After That
 
@@ -168,7 +171,7 @@ That protocol-definition step is now complete at the draft level.
 
 The next implementation step is to turn it into the first real speculative session lifecycle.
 
-That lifecycle is now in place together with prompt-derived and llama-preview verifier proxies.
+That lifecycle is now in place together with prompt-derived, llama-preview, and llama-replay verifier proxies.
 
 The next implementation step is to replace those proxies with true target-model token verification.
 
@@ -176,8 +179,8 @@ The next implementation step is to replace those proxies with true target-model 
 
 For the next validation node:
 
-- run one `llama_step_proxy` speculative request and capture the session summary
-- keep one `llama_preview` or `prompt_stub` run available as a regression comparison
+- run one `llama_replay_proxy` speculative request and capture the session summary
+- keep one `llama_step_proxy` or `llama_preview` run available as a regression comparison
 - once real verifier work lands, run both a happy-path and correction-path speculative request from the app
 - keep one known-good ordinary remote run recorded as the fallback reference
 
