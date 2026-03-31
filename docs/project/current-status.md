@@ -78,6 +78,37 @@ The next step should focus on one of these:
 2. continue validating local generation behavior with a few more prompts so the baseline is not a one-shot fluke
 3. begin preparing the next stage above the local baseline instead of reopening backend-load triage
 
+## Immediate Execution Order
+
+Use this order unless a new runtime failure appears:
+
+1. preserve the current Android local-runtime success as the baseline milestone
+2. rerun a few small on-device prompt checks and capture diagnostics if anything regresses
+3. only after the baseline still looks healthy, start the next-stage design for the computer-side normal inference service
+
+Practical interpretation:
+
+- do not spend the next node reopening backend-load debugging unless a fresh device run fails again
+- do not spend the next node on UI polish unless it is needed to support runtime validation
+- treat desktop GGUF tooling as confirmation support, not the current mainline
+
+## Definition Of Done For The Next Node
+
+The next node is complete when all of the following are true:
+
+- the Android local-runtime success is explicitly recorded as a milestone in project documentation
+- the known-good test setup is preserved clearly enough that the same validation can be repeated later
+- at least a small set of repeat prompt checks has either succeeded again or produced captured diagnostics for the next debug pass
+- the close-out includes the required git-sync explanation and markdown summary update
+
+## After That
+
+Once the local baseline has been re-confirmed, the next architectural step is:
+
+1. define the computer-side normal inference service boundary
+2. define the Android-to-computer normal request path
+3. treat speculative decoding as a later layer on top of that ordinary remote path
+
 ## What Not To Reopen
 
 Do not go back to:
