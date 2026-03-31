@@ -30,6 +30,8 @@ The remaining unfinished work is replacing stub speculative verification and stu
 
 The minimum boundary for the first real desktop verifier is now also written down, so the next node can move into true verification without reopening the whole protocol shape.
 
+The desktop service now also has the first explicit internal target-session boundary, so the next node can replace proxy verification without first redesigning session ownership.
+
 ## Milestone 1: Android Local Baseline
 
 Already complete:
@@ -229,12 +231,44 @@ Already complete:
 - replay-mode preview text is now filtered cleanly enough to surface the real continuation instead of banner noise
 - replay-mode sessions now keep explicit `acceptedText`, `lastReplayPrompt`, and `lastTargetTextDelta` fields for verifier-state debugging
 - replay-mode prompt construction now prefers explicit accepted text state instead of relying only on token-id debug reconstruction, and Android diagnostics surface that replay-session text state
+- the desktop service now keeps a separate internal target-session map and returns `targetSessionId`, which is the first persistent target-session boundary for future real verifier work
+- desktop `propose` now refreshes and rehydrates target proxy state through that target-session layer instead of mutating verifier target state only inside the speculative-session record
 
 Why it matters:
 
 - this is the closest current verifier bridge to true target continuation checking without changing the Android-side protocol
 - it lets desktop verification depend on the speculative session's already accepted output, not just on the original prompt or a one-shot preview
 - it also gives the project an explicit state shape that is closer to what a future persistent target verifier session will need
+
+## Milestone 13: Desktop Target-Session Boundary
+
+Already complete:
+
+- the desktop service now creates a separate internal target-session state object for each speculative session
+- speculative lifecycle responses now include `targetSessionId`
+- health and probe responses now expose `targetSessionCount`
+- the target-session state mirrors verifier continuity fields such as:
+  - `acceptedText`
+  - `targetPreviewText`
+  - `lastReplayPrompt`
+  - `lastTargetTextDelta`
+
+Why it matters:
+
+- the verifier engine can now evolve separately from the speculative-session lifecycle shell
+- the next node can focus on moving `verifierStage` from `proxy_target` to `true_target` instead of first untangling session ownership
+
+## Milestone 14: Target-Session Driven Verifier State
+
+Already complete:
+
+- desktop verifier helpers now refresh proxy target state through `TargetSessionState`
+- speculative `propose` now rehydrates verifier target state from the target-session layer before computing accepted/correction semantics
+- target-session state is no longer passive bookkeeping; it is now the active handoff boundary for future real verifier work
+
+Why it matters:
+
+- the next true-verifier node can replace the verifier engine behind the target-session layer instead of rewriting speculative-session lifecycle code again
 
 ## What Is Proven Right Now
 
@@ -258,6 +292,7 @@ These parts are still not the final implementation:
 - Android draft tokens are still placeholder prompt-derived token ids
 - desktop speculative verification is still not based on target-model token-by-token verification
 - `llama_preview`, `llama_step_proxy`, and `llama_replay_proxy` are still proxy verifiers, not full target token verification
+- the new target-session boundary is still fed by proxy verifier state rather than a true persistent target-model runtime session
 - speculative sessions are still debug-first, not performance-first
 
 ## Current Main Technical Gap
