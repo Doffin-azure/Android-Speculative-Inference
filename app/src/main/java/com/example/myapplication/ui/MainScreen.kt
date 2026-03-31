@@ -29,6 +29,7 @@ fun MainScreen(
     remoteBackendLabel: String,
     remoteProbeSummary: String,
     remoteResultSummary: String,
+    speculativeSessionSummary: String,
     statusMessage: String,
     output: String,
     lastError: String,
@@ -75,6 +76,14 @@ fun MainScreen(
             ) {
                 Text("Remote Mode")
             }
+
+            OutlinedButton(
+                onClick = { onSetInferenceMode(MainViewModel.InferenceMode.SPECULATIVE) },
+                enabled = !busy && inferenceMode != MainViewModel.InferenceMode.SPECULATIVE,
+                modifier = Modifier.padding(start = 8.dp)
+            ) {
+                Text("Speculative Mode")
+            }
         }
 
         Text(
@@ -82,7 +91,7 @@ fun MainScreen(
             modifier = Modifier.padding(top = 8.dp)
         )
 
-        if (inferenceMode == MainViewModel.InferenceMode.REMOTE) {
+        if (inferenceMode != MainViewModel.InferenceMode.LOCAL) {
             OutlinedTextField(
                 value = remoteServerUrl,
                 onValueChange = onRemoteServerUrlChange,
@@ -125,13 +134,24 @@ fun MainScreen(
                     modifier = Modifier.padding(top = 8.dp)
                 )
             }
+
+            if (inferenceMode == MainViewModel.InferenceMode.SPECULATIVE && speculativeSessionSummary.isNotBlank()) {
+                CopyableReadOnlyField(
+                    label = "Speculative Session",
+                    value = speculativeSessionSummary,
+                    onCopy = { clipboardManager.setText(AnnotatedString(speculativeSessionSummary)) },
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
         }
 
         Text(
             text = if (inferenceMode == MainViewModel.InferenceMode.LOCAL) {
                 if (isModelLoaded) "Model: Loaded" else "Model: Not loaded"
-            } else {
+            } else if (inferenceMode == MainViewModel.InferenceMode.REMOTE) {
                 "Model: Remote service managed"
+            } else {
+                "Model: Local draft + remote verify"
             },
             modifier = Modifier.padding(top = 8.dp)
         )
@@ -214,13 +234,13 @@ fun MainScreen(
             value = prompt,
             onValueChange = { prompt = it },
             label = { Text("Prompt") },
-            enabled = !busy && (isModelLoaded || inferenceMode == MainViewModel.InferenceMode.REMOTE),
+            enabled = !busy && (isModelLoaded || inferenceMode != MainViewModel.InferenceMode.LOCAL),
             modifier = Modifier.padding(top = 16.dp)
         )
 
         Button(
             onClick = { onRun(prompt) },
-            enabled = !busy && (isModelLoaded || inferenceMode == MainViewModel.InferenceMode.REMOTE),
+            enabled = !busy && (isModelLoaded || inferenceMode != MainViewModel.InferenceMode.LOCAL),
             modifier = Modifier.padding(top = 16.dp)
         ) {
             Text(
@@ -228,8 +248,10 @@ fun MainScreen(
                     "Running..."
                 } else if (inferenceMode == MainViewModel.InferenceMode.LOCAL) {
                     "Run Local"
-                } else {
+                } else if (inferenceMode == MainViewModel.InferenceMode.REMOTE) {
                     "Run Remote"
+                } else {
+                    "Run Speculative"
                 }
             )
         }

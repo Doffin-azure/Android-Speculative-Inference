@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
             val remoteBackendLabel by viewModel.remoteBackendLabel.collectAsState()
             val remoteProbeSummary by viewModel.remoteProbeSummary.collectAsState()
             val remoteResultSummary by viewModel.remoteResultSummary.collectAsState()
+            val speculativeSessionSummary by viewModel.speculativeSessionSummary.collectAsState()
             val statusMessage by viewModel.statusMessage.collectAsState()
             val output by viewModel.output.collectAsState()
             val lastError by viewModel.lastError.collectAsState()
@@ -50,6 +51,7 @@ class MainActivity : ComponentActivity() {
                 remoteBackendLabel = remoteBackendLabel,
                 remoteProbeSummary = remoteProbeSummary,
                 remoteResultSummary = remoteResultSummary,
+                speculativeSessionSummary = speculativeSessionSummary,
                 statusMessage = statusMessage,
                 output = output,
                 lastError = lastError,
