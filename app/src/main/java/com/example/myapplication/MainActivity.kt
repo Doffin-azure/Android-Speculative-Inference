@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
             val remoteProbeSummary by viewModel.remoteProbeSummary.collectAsState()
             val remoteResultSummary by viewModel.remoteResultSummary.collectAsState()
             val speculativeSessionSummary by viewModel.speculativeSessionSummary.collectAsState()
+            val speculativeForceMismatch by viewModel.speculativeForceMismatch.collectAsState()
             val statusMessage by viewModel.statusMessage.collectAsState()
             val output by viewModel.output.collectAsState()
             val lastError by viewModel.lastError.collectAsState()
@@ -52,6 +53,7 @@ class MainActivity : ComponentActivity() {
                 remoteProbeSummary = remoteProbeSummary,
                 remoteResultSummary = remoteResultSummary,
                 speculativeSessionSummary = speculativeSessionSummary,
+                speculativeForceMismatch = speculativeForceMismatch,
                 statusMessage = statusMessage,
                 output = output,
                 lastError = lastError,
@@ -68,6 +70,7 @@ class MainActivity : ComponentActivity() {
                 },
                 onSetInferenceMode = viewModel::setInferenceMode,
                 onRemoteServerUrlChange = viewModel::setRemoteServerUrl,
+                onSetSpeculativeForceMismatch = viewModel::setSpeculativeForceMismatch,
                 onTestRemoteConnectivity = viewModel::testRemoteConnectivity,
                 onSelectModelCandidate = viewModel::selectModelCandidate,
                 onLoadModel = { viewModel.loadModel() },

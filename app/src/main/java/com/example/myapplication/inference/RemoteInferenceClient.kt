@@ -73,7 +73,9 @@ data class SpeculativeProposeResponse(
     val status: String,
     val acceptedCount: Int,
     val acceptedTokenIds: List<Int>,
+    val rejectedFromIndex: Int,
     val correctionTokenIds: List<Int>,
+    val targetTextDelta: String,
     val warning: String,
     val finishReason: String,
     val error: String
@@ -256,7 +258,9 @@ class RemoteInferenceClient {
                 status = json.optString("status", "unknown"),
                 acceptedCount = json.optInt("acceptedCount", 0),
                 acceptedTokenIds = json.optJSONArray("acceptedTokenIds").toIntList(),
+                rejectedFromIndex = json.optInt("rejectedFromIndex", -1),
                 correctionTokenIds = json.optJSONArray("correctionTokenIds").toIntList(),
+                targetTextDelta = json.optString("targetTextDelta"),
                 warning = json.optString("warning"),
                 finishReason = json.optString("finishReason"),
                 error = error
