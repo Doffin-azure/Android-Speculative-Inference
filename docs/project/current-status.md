@@ -41,6 +41,7 @@ Current real stage:
 - the first minimum boundary for a real desktop target verifier is now written down so the next implementation node can switch verifier stage without reopening protocol design
 - the desktop service now keeps a separate internal target-session state object alongside each speculative session, so verifier-state continuity is no longer fully implicit inside the speculative session record
 - the desktop verifier now reads and refreshes target proxy text through the dedicated target-session state instead of treating the speculative session as the only source of verifier truth
+- the desktop service now has an explicit verifier-driver shape around target sessions, so `propose` no longer hardcodes proxy verification as one monolithic block
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -85,6 +86,7 @@ Current strongest conclusion:
 - the desktop session now keeps explicit replay-verifier state that can later map more cleanly onto a persistent target session implementation
 - the desktop service now also keeps an explicit internal target-session map and returns `targetSessionId`, which establishes the first persistent target-session boundary needed before `verifierStage` can move from `proxy_target` to `true_target`
 - the new target-session boundary is no longer passive bookkeeping; desktop `propose` now refreshes and rehydrates verifier target state through that target-session layer
+- the current proxy verifier logic is now encapsulated behind target-session driver helpers and a dedicated verify-computation result shape, which is the direct replacement point for the first true verifier
 
 ## Important Files
 
@@ -143,7 +145,7 @@ Use this order unless a new runtime failure appears:
 5. treat `llama_replay_proxy` as the closest current verifier harness before real token verification
 6. use the new desktop target-session boundary as the implementation seam for real verifier work
 7. let desktop verifier state flow through target-session helpers instead of direct speculative-session mutation
-8. replace replay-based proxy verification with real token verification on the desktop side
+8. replace the current proxy verify driver with the first true target verifier on the desktop side
 9. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:

@@ -262,6 +262,18 @@ class TargetSessionState:
     updated_at_ms: int
 
 
+@dataclass
+class VerifyComputation:
+    accepted_token_ids: list[int]
+    correction_token_ids: list[int]
+    rejected_from_index: int
+    target_text_delta: str
+    finish_reason: str
+    target_index_before_step: int
+    target_remaining_count: int
+    target_preview_debug: str
+
+
 def infer_verifier_stage(verifier_mode: str) -> str:
     if verifier_mode == "prompt_stub":
         return "prompt_stub"
@@ -813,6 +825,107 @@ def apply_target_session_state_to_session(
     session.accepted_text = target_session.accepted_text
 
 
+def refresh_target_session_driver_state(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    accepted_token_ids: list[int],
+    accepted_token_count: int,
+    requested_token_span: int,
+) -> None:
+    refresh_llama_proxy_preview_for_target_session(
+        config,
+        target_session,
+        accepted_token_ids,
+        accepted_token_count + requested_token_span,
+    )
+
+
+def compute_proxy_verifier_result(
+    target_session: TargetSessionState,
+    *,
+    accepted_token_ids: list[int],
+    accepted_token_count: int,
+    proposed_token_ids: list[int],
+    max_correction_tokens: int,
+) -> VerifyComputation:
+    target_index = accepted_token_count
+    target_token_ids = target_session.target_token_ids
+    target_remaining = target_token_ids[target_index:]
+
+    accepted_step_token_ids: list[int] = []
+    correction_token_ids: list[int] = []
+    rejected_from_index = -1
+
+    for index, proposed_token_id in enumerate(proposed_token_ids):
+        current_target_index = target_index + index
+        if current_target_index >= len(target_token_ids):
+            rejected_from_index = index
+            break
+
+        expected_token_id = target_token_ids[current_target_index]
+        if proposed_token_id == expected_token_id:
+            accepted_step_token_ids.append(proposed_token_id)
+            continue
+
+        rejected_from_index = index
+        correction_token_ids = target_token_ids[
+            current_target_index:current_target_index + max_correction_tokens
+        ]
+        break
+
+    if rejected_from_index == -1 and len(accepted_step_token_ids) < len(proposed_token_ids):
+        correction_token_ids = target_token_ids[
+            target_index + len(accepted_step_token_ids):target_index + len(accepted_step_token_ids) + max_correction_tokens
+        ]
+
+    committed_token_ids = accepted_step_token_ids + correction_token_ids
+    target_text_delta = token_ids_to_debug_text(committed_token_ids)
+    finish_reason = ""
+    if target_index + len(committed_token_ids) >= len(target_token_ids):
+        finish_reason = "stub_target_complete"
+
+    return VerifyComputation(
+        accepted_token_ids=accepted_step_token_ids,
+        correction_token_ids=correction_token_ids,
+        rejected_from_index=rejected_from_index,
+        target_text_delta=target_text_delta,
+        finish_reason=finish_reason,
+        target_index_before_step=target_index,
+        target_remaining_count=len(target_remaining),
+        target_preview_debug=token_ids_to_debug_text(target_remaining[:16]),
+    )
+
+
+def apply_verify_computation_to_sessions(
+    session: SpeculativeSession,
+    target_session: TargetSessionState,
+    *,
+    draft_step: int,
+    computation: VerifyComputation,
+    max_correction_tokens: int,
+) -> None:
+    committed_token_ids = computation.accepted_token_ids + computation.correction_token_ids
+    if computation.correction_token_ids:
+        session.mismatch_count += 1
+
+    session.draft_step = draft_step
+    session.accepted_token_ids.extend(committed_token_ids)
+    session.accepted_token_count = len(session.accepted_token_ids)
+    session.correction_token_ids = computation.correction_token_ids[:max_correction_tokens]
+    session.accepted_text = token_ids_to_debug_text(session.accepted_token_ids)
+    session.last_target_text_delta = computation.target_text_delta
+    session.last_finish_reason = computation.finish_reason
+    session.status = "verifying"
+    session.updated_at_ms = int(time.time() * 1000)
+
+    target_session.accepted_text = session.accepted_text
+    target_session.accepted_token_count = session.accepted_token_count
+    target_session.mismatch_count = session.mismatch_count
+    target_session.last_target_text_delta = computation.target_text_delta
+    target_session.updated_at_ms = session.updated_at_ms
+    sync_target_session_state(target_session, session)
+
+
 def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) -> SpeculativeSession:
     session_id = str(payload.get("sessionId") or uuid.uuid4())
     request_id = str(payload.get("requestId") or uuid.uuid4())
@@ -920,66 +1033,36 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     if not proposed_token_ids:
         raise ValueError("proposedTokenIds must not be empty.")
 
-    refresh_llama_proxy_preview_for_target_session(
+    refresh_target_session_driver_state(
         server.config,
         target_session,
         session.accepted_token_ids,
-        session.accepted_token_count + len(proposed_token_ids) + max_correction_tokens,
+        session.accepted_token_count,
+        len(proposed_token_ids) + max_correction_tokens,
     )
     apply_target_session_state_to_session(session, target_session)
 
-    target_index = session.accepted_token_count
-    target_remaining = session.target_token_ids[target_index:]
-
-    accepted_token_ids: list[int] = []
-    correction_token_ids: list[int] = []
-    rejected_from_index = -1
-
-    for index, proposed_token_id in enumerate(proposed_token_ids):
-        current_target_index = target_index + index
-        if current_target_index >= len(session.target_token_ids):
-            rejected_from_index = index
-            break
-
-        expected_token_id = session.target_token_ids[current_target_index]
-        if proposed_token_id == expected_token_id:
-            accepted_token_ids.append(proposed_token_id)
-            continue
-
-        rejected_from_index = index
-        correction_token_ids = session.target_token_ids[
-            current_target_index:current_target_index + max_correction_tokens
-        ]
-        session.mismatch_count += 1
-        break
-
-    if rejected_from_index == -1 and len(accepted_token_ids) < len(proposed_token_ids):
-        correction_token_ids = session.target_token_ids[
-            target_index + len(accepted_token_ids):target_index + len(accepted_token_ids) + max_correction_tokens
-        ]
-
-    committed_token_ids = accepted_token_ids + correction_token_ids
-    accepted_count = len(accepted_token_ids)
-    target_text_delta = token_ids_to_debug_text(committed_token_ids)
-    finish_reason = ""
-    if target_index + len(committed_token_ids) >= len(session.target_token_ids):
-        finish_reason = "stub_target_complete"
-
-    session.draft_step = draft_step
-    session.accepted_token_ids.extend(committed_token_ids)
-    session.accepted_token_count = len(session.accepted_token_ids)
-    session.correction_token_ids = correction_token_ids[:max_correction_tokens]
-    session.accepted_text = token_ids_to_debug_text(session.accepted_token_ids)
-    session.last_target_text_delta = target_text_delta
-    session.last_finish_reason = finish_reason
-    session.status = "verifying"
-    session.updated_at_ms = int(time.time() * 1000)
+    computation = compute_proxy_verifier_result(
+        target_session,
+        accepted_token_ids=session.accepted_token_ids,
+        accepted_token_count=session.accepted_token_count,
+        proposed_token_ids=proposed_token_ids,
+        max_correction_tokens=max_correction_tokens,
+    )
+    accepted_count = len(computation.accepted_token_ids)
+    apply_verify_computation_to_sessions(
+        session,
+        target_session,
+        draft_step=draft_step,
+        computation=computation,
+        max_correction_tokens=max_correction_tokens,
+    )
     with server.sessions_lock:
         target_session = server.target_sessions.get(session.target_session_id)
         if target_session is not None:
             sync_target_session_state(target_session, session)
 
-    base_status = "accepted" if not correction_token_ids and rejected_from_index == -1 else "corrected"
+    base_status = "accepted" if not computation.correction_token_ids and computation.rejected_from_index == -1 else "corrected"
     if session.verifier_mode == "llama_replay_proxy":
         status = f"{base_status}_by_llama_replay"
     elif session.verifier_mode in {"llama_preview", "llama_step_proxy"}:
@@ -1009,11 +1092,11 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "targetSessionId": session.target_session_id,
         "draftStep": draft_step,
         "acceptedCount": accepted_count,
-        "acceptedTokenIds": accepted_token_ids,
-        "rejectedFromIndex": rejected_from_index,
-        "correctionTokenIds": correction_token_ids,
-        "targetTextDelta": target_text_delta,
-        "finishReason": finish_reason,
+        "acceptedTokenIds": computation.accepted_token_ids,
+        "rejectedFromIndex": computation.rejected_from_index,
+        "correctionTokenIds": computation.correction_token_ids,
+        "targetTextDelta": computation.target_text_delta,
+        "finishReason": computation.finish_reason,
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
         "status": status,
@@ -1024,9 +1107,9 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "debug": {
             "targetSessionId": session.target_session_id,
             "verifierMode": session.verifier_mode,
-            "targetIndexBeforeStep": target_index,
-            "targetRemainingCount": len(target_remaining),
-            "targetPreview": token_ids_to_debug_text(target_remaining[:16]),
+            "targetIndexBeforeStep": computation.target_index_before_step,
+            "targetRemainingCount": computation.target_remaining_count,
+            "targetPreview": computation.target_preview_debug,
             "llamaPreviewText": session.target_preview_text,
             "acceptedText": session.accepted_text,
             "lastReplayPrompt": session.last_replay_prompt,
