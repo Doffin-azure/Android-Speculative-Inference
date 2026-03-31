@@ -26,7 +26,7 @@ PROTOCOL_VERSION = 1
 DEFAULT_SPECULATIVE_VERIFIER_MODE = "prompt_stub"
 DEFAULT_LLAMA_PREVIEW_MAX_TOKENS = 8
 DEFAULT_LLAMA_REPLAY_MAX_TOKENS = 8
-DEFAULT_TRUE_VERIFY_MAX_TOKENS = 1
+DEFAULT_TRUE_VERIFY_MAX_TOKENS = 8
 
 
 def read_gradle_local_properties() -> dict[str, str]:
@@ -597,6 +597,31 @@ def run_generation_from_full_prompt(
     }
 
 
+def run_true_target_chunk_text(
+    config: ServiceConfig,
+    *,
+    request_id: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    accepted_text: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    replay_prompt = build_replay_prompt(system_prompt, user_prompt, accepted_text)
+    response = run_generation_from_full_prompt(
+        config,
+        request_id=request_id,
+        model=model,
+        full_prompt=replay_prompt,
+        max_tokens=max(1, max_tokens),
+        temperature=0.0,
+        top_p=1.0,
+    )
+    response.setdefault("debug", {})
+    response["debug"]["replayPrompt"] = replay_prompt
+    return response
+
+
 def run_true_target_next_text(
     config: ServiceConfig,
     *,
@@ -606,19 +631,15 @@ def run_true_target_next_text(
     user_prompt: str,
     accepted_text: str,
 ) -> dict[str, Any]:
-    replay_prompt = build_replay_prompt(system_prompt, user_prompt, accepted_text)
-    response = run_generation_from_full_prompt(
+    return run_true_target_chunk_text(
         config,
         request_id=request_id,
         model=model,
-        full_prompt=replay_prompt,
-        max_tokens=DEFAULT_TRUE_VERIFY_MAX_TOKENS,
-        temperature=0.0,
-        top_p=1.0,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        accepted_text=accepted_text,
+        max_tokens=1,
     )
-    response.setdefault("debug", {})
-    response["debug"]["replayPrompt"] = replay_prompt
-    return response
 
 
 def parse_int_list(name: str, value: Any) -> list[int]:
@@ -662,13 +683,14 @@ def build_target_preview_text(
         return "", ""
 
     if verifier_mode == "llama_true_step":
-        response = run_true_target_next_text(
+        response = run_true_target_chunk_text(
             config,
             request_id=f"{request_id}-true-preview",
             model=target_model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             accepted_text=accepted_text,
+            max_tokens=DEFAULT_TRUE_VERIFY_MAX_TOKENS,
         )
         return str(response.get("outputText") or "").strip(), str(
             response.get("debug", {}).get("replayPrompt") or ""
@@ -971,43 +993,53 @@ def compute_true_verifier_result(
     target_index = accepted_token_count
     working_prefix = target_session.accepted_text
     preview_debug_parts: list[str] = []
+    desired_tokens = len(proposed_token_ids) + max_correction_tokens
+    chunk_response = get_or_fetch_true_target_chunk_text(
+        config,
+        target_session,
+        prefix_text=working_prefix,
+        step_index=target_index,
+        desired_tokens=desired_tokens,
+    )
+    if chunk_response.get("error"):
+        return VerifyComputation(
+            accepted_token_ids=[],
+            correction_token_ids=[],
+            rejected_from_index=0,
+            target_text_delta="",
+            finish_reason="",
+            target_index_before_step=target_index,
+            target_remaining_count=0,
+            target_preview_debug="",
+        )
+
+    next_text = str(chunk_response.get("outputText") or "")
+    target_session.last_replay_prompt = str(chunk_response.get("debug", {}).get("replayPrompt") or "")
+    target_session.target_preview_text = next_text
+    if not bool(chunk_response.get("debug", {}).get("cacheHit")):
+        record_true_verifier_observation(target_session, prefix_text=working_prefix, next_text=next_text)
+
+    expected_token_ids = token_ids_from_text(next_text) if next_text else []
+    preview_debug_parts.extend(list(next_text[: min(len(next_text), 16)]))
 
     for index, proposed_token_id in enumerate(proposed_token_ids):
-        next_response = get_or_fetch_true_target_next_text(
-            config,
-            target_session,
-            prefix_text=working_prefix,
-            step_index=target_index + index,
-        )
-        if next_response.get("error"):
-            rejected_from_index = index
-            correction_token_ids = []
-            break
-
-        next_text = str(next_response.get("outputText") or "")
-        target_session.last_replay_prompt = str(next_response.get("debug", {}).get("replayPrompt") or "")
-        target_session.target_preview_text = next_text
-        if not bool(next_response.get("debug", {}).get("cacheHit")):
-            record_true_verifier_observation(target_session, prefix_text=working_prefix, next_text=next_text)
-        if next_text:
-            preview_debug_parts.append(next_text[:1])
-
-        if not next_text:
+        if index >= len(expected_token_ids):
             rejected_from_index = index
             break
 
-        expected_token_id = ord(next_text[0])
+        expected_token_id = expected_token_ids[index]
         if proposed_token_id == expected_token_id:
             accepted_step_token_ids.append(proposed_token_id)
-            if 32 <= proposed_token_id <= 126:
-                working_prefix += chr(proposed_token_id)
-            else:
-                working_prefix += token_ids_to_debug_text([proposed_token_id])
             continue
 
         rejected_from_index = index
-        correction_token_ids = [expected_token_id][:max_correction_tokens]
+        correction_token_ids = expected_token_ids[index:index + max_correction_tokens]
         break
+
+    if rejected_from_index == -1 and len(accepted_step_token_ids) < len(proposed_token_ids):
+        correction_token_ids = expected_token_ids[
+            len(accepted_step_token_ids):len(accepted_step_token_ids) + max_correction_tokens
+        ]
 
     committed_token_ids = accepted_step_token_ids + correction_token_ids
     target_text_delta = token_ids_to_debug_text(committed_token_ids)
@@ -1070,15 +1102,16 @@ def record_true_verifier_observation(
     target_session.true_prefix_cache[prefix_text] = next_text
 
 
-def get_or_fetch_true_target_next_text(
+def get_or_fetch_true_target_chunk_text(
     config: ServiceConfig,
     target_session: TargetSessionState,
     *,
     prefix_text: str,
     step_index: int,
+    desired_tokens: int,
 ) -> dict[str, Any]:
     cached_next_text = target_session.true_prefix_cache.get(prefix_text, "")
-    if cached_next_text:
+    if len(cached_next_text) >= max(1, desired_tokens):
         return {
             "outputText": cached_next_text,
             "error": "",
@@ -1088,13 +1121,14 @@ def get_or_fetch_true_target_next_text(
             },
         }
 
-    response = run_true_target_next_text(
+    response = run_true_target_chunk_text(
         config,
         request_id=f"{target_session.request_id}-true-step-{step_index}",
         model=target_session.target_model,
         system_prompt=target_session.system_prompt,
         user_prompt=target_session.user_prompt,
         accepted_text=prefix_text,
+        max_tokens=max(DEFAULT_TRUE_VERIFY_MAX_TOKENS, desired_tokens),
     )
     response.setdefault("debug", {})
     response["debug"]["cacheHit"] = False

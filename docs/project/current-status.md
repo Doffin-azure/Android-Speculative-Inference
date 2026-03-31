@@ -47,6 +47,7 @@ Current real stage:
 - the first true verifier mode now also caches the latest accepted-prefix -> next-token observation inside the desktop target session so repeated checks for the same prefix do not re-query the target model
 - the true verifier cache is now session-wide instead of single-entry, so previously seen prefixes can be reused across more than one speculative step
 - the true verifier cache state is now exposed through a shared helper instead of repeated inline cache-selection logic, which tightens the desktop target-session boundary a little further
+- the first true verifier is no longer limited to one-token proof behavior; it now fetches a small target continuation chunk and can accept more than one token from a single verifier call
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings

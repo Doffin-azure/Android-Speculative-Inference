@@ -195,6 +195,7 @@ Explanation:
 - If the same accepted prefix is checked again, the verifier can now reuse the cached next-token observation instead of calling the target model again.
 - The cache is now session-wide instead of single-entry, so multiple previously seen prefixes can be reused inside the same desktop target session.
 - The true verifier now also uses a dedicated helper to read the latest cache entry, so debug output no longer duplicates cache-selection logic in multiple response builders.
+- The true verifier now fetches a small continuation chunk for the current prefix and compares the proposal against that chunk, so one verifier call can now accept multiple tokens before returning a correction.
 
 Why this is core:
 
