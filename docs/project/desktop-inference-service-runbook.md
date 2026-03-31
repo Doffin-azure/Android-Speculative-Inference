@@ -26,6 +26,11 @@ Endpoints:
 - `POST /v1/speculative/fallback`
 - `POST /v1/speculative/close`
 
+Verifier modes:
+
+- `prompt_stub` keeps the current deterministic prompt-derived verifier
+- `llama_preview` keeps the same verifier semantics for now, but also prepares a llama-backed preview string at session start so the future target-model verifier can reuse the same session boundary
+
 ## Preconditions
 
 Before starting the service:
@@ -60,6 +65,12 @@ python tools\desktop_inference_service.py --host 127.0.0.1 --port 8080
 
 If you want the phone to reach the service over the local network later, bind a non-loopback host such as `0.0.0.0` after local verification succeeds.
 
+If you want to exercise the preparatory llama-backed verifier preview mode:
+
+```powershell
+python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculative-verifier-mode llama_preview
+```
+
 ## Health Check
 
 From another PowerShell window:
@@ -72,6 +83,7 @@ Expected result:
 
 - `status` is `ok`
 - `backendLabel` is `desktop-llama.cpp-wsl-cli`
+- `speculativeVerifierMode` shows the currently active verifier mode
 
 ## Network Probe
 

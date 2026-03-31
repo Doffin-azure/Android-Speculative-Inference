@@ -29,6 +29,7 @@ Current real stage:
 - the Android app codebase now contains a first speculative mode wired to that desktop lifecycle stub
 - the desktop `propose` path now computes accepted prefixes and correction tokens through a deterministic prompt-derived verify stub
 - the Android speculative mode now includes a force-mismatch debug path so correction-token behavior can be exercised from the device UI
+- the desktop service now exposes an explicit speculative verifier mode so the current prompt-stub harness and a future llama-backed verifier can share the same protocol boundary
 - the next active stage is replacing that deterministic verify stub with real target-model token verification
 
 ## Active Technical Findings
@@ -65,6 +66,7 @@ Current strongest conclusion:
 - the Android app now has a first speculative mode, remote client calls, and diagnostic summary fields for the desktop stub session flow
 - the desktop speculative `propose` step no longer accepts every proposal blindly; it now returns `acceptedCount`, `rejectedFromIndex`, and `correctionTokenIds`
 - the Android app can now deliberately trigger a mismatch and surface correction-token behavior directly in the speculative debug UI
+- the desktop service now reports a `speculativeVerifierMode` and can optionally prepare a llama-backed preview text while keeping the current protocol stable
 
 ## Important Files
 
