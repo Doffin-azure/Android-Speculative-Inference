@@ -262,6 +262,8 @@ class TargetSessionState:
     true_verifier_call_count: int
     last_true_expected_token_id: int
     last_true_expected_token_text: str
+    cached_true_prefix_text: str
+    cached_true_next_text: str
     created_at_ms: int
     updated_at_ms: int
 
@@ -844,6 +846,8 @@ def build_target_session_state(session: SpeculativeSession) -> TargetSessionStat
         true_verifier_call_count=0,
         last_true_expected_token_id=-1,
         last_true_expected_token_text="",
+        cached_true_prefix_text="",
+        cached_true_next_text="",
         created_at_ms=session.created_at_ms,
         updated_at_ms=session.updated_at_ms,
     )
@@ -964,13 +968,11 @@ def compute_true_verifier_result(
     preview_debug_parts: list[str] = []
 
     for index, proposed_token_id in enumerate(proposed_token_ids):
-        next_response = run_true_target_next_text(
+        next_response = get_or_fetch_true_target_next_text(
             config,
-            request_id=f"{target_session.request_id}-true-step-{target_index + index}",
-            model=target_session.target_model,
-            system_prompt=target_session.system_prompt,
-            user_prompt=target_session.user_prompt,
-            accepted_text=working_prefix,
+            target_session,
+            prefix_text=working_prefix,
+            step_index=target_index + index,
         )
         if next_response.get("error"):
             rejected_from_index = index
@@ -980,7 +982,8 @@ def compute_true_verifier_result(
         next_text = str(next_response.get("outputText") or "")
         target_session.last_replay_prompt = str(next_response.get("debug", {}).get("replayPrompt") or "")
         target_session.target_preview_text = next_text
-        record_true_verifier_observation(target_session, next_text=next_text)
+        if not bool(next_response.get("debug", {}).get("cacheHit")):
+            record_true_verifier_observation(target_session, prefix_text=working_prefix, next_text=next_text)
         if next_text:
             preview_debug_parts.append(next_text[:1])
 
@@ -1053,11 +1056,44 @@ def apply_verify_computation_to_sessions(
 def record_true_verifier_observation(
     target_session: TargetSessionState,
     *,
+    prefix_text: str,
     next_text: str,
 ) -> None:
     target_session.true_verifier_call_count += 1
     target_session.last_true_expected_token_text = next_text[:1]
     target_session.last_true_expected_token_id = ord(next_text[0]) if next_text else -1
+    target_session.cached_true_prefix_text = prefix_text
+    target_session.cached_true_next_text = next_text
+
+
+def get_or_fetch_true_target_next_text(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    *,
+    prefix_text: str,
+    step_index: int,
+) -> dict[str, Any]:
+    if target_session.cached_true_prefix_text == prefix_text and target_session.cached_true_next_text:
+        return {
+            "outputText": target_session.cached_true_next_text,
+            "error": "",
+            "debug": {
+                "replayPrompt": target_session.last_replay_prompt,
+                "cacheHit": True,
+            },
+        }
+
+    response = run_true_target_next_text(
+        config,
+        request_id=f"{target_session.request_id}-true-step-{step_index}",
+        model=target_session.target_model,
+        system_prompt=target_session.system_prompt,
+        user_prompt=target_session.user_prompt,
+        accepted_text=prefix_text,
+    )
+    response.setdefault("debug", {})
+    response["debug"]["cacheHit"] = False
+    return response
 
 
 def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) -> SpeculativeSession:
@@ -1146,6 +1182,8 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
             "trueVerifierCallCount": target_session.true_verifier_call_count,
             "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
             "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
+            "cachedTruePrefixText": target_session.cached_true_prefix_text,
+            "cachedTrueNextText": target_session.cached_true_next_text,
         },
         "error": "",
     }
@@ -1269,6 +1307,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             "trueVerifierCallCount": target_session.true_verifier_call_count,
             "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
             "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
+            "cachedTruePrefixText": target_session.cached_true_prefix_text,
+            "cachedTrueNextText": target_session.cached_true_next_text,
         },
     }
 
@@ -1348,6 +1388,8 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "trueVerifierCallCount": target_session.true_verifier_call_count if target_session is not None else 0,
         "lastTrueExpectedTokenId": target_session.last_true_expected_token_id if target_session is not None else -1,
         "lastTrueExpectedTokenText": target_session.last_true_expected_token_text if target_session is not None else "",
+        "cachedTruePrefixText": target_session.cached_true_prefix_text if target_session is not None else "",
+        "cachedTrueNextText": target_session.cached_true_next_text if target_session is not None else "",
         "targetSessionClosed": target_session is not None,
         "error": "",
     }
