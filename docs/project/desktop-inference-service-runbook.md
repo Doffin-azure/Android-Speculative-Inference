@@ -30,6 +30,7 @@ Verifier modes:
 
 - `prompt_stub` keeps the current deterministic prompt-derived verifier
 - `llama_preview` prepares a llama-backed preview string at session start and now uses that preview text as the current accepted/correction target proxy
+- `llama_step_proxy` starts from the same llama-backed preview approach but can refresh the preview during `propose` when more target text is needed
 
 ## Preconditions
 
@@ -69,6 +70,12 @@ If you want to exercise the preparatory llama-backed verifier preview mode:
 
 ```powershell
 python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculative-verifier-mode llama_preview
+```
+
+If you want the closest current proxy to future token verification:
+
+```powershell
+python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculative-verifier-mode llama_step_proxy
 ```
 
 ## Health Check
@@ -207,6 +214,13 @@ When running in `llama_preview` mode:
 - matching proposals against the preview text should return `accepted_by_llama_preview`
 - diverging proposals against the preview text should return `corrected_by_llama_preview`
 - `targetPreviewText` from session start is now the text proxy used for accepted/correction behavior
+
+When running in `llama_step_proxy` mode:
+
+- the same `accepted_by_llama_preview` and `corrected_by_llama_preview` status values are reused
+- `targetPreviewText` still starts as a llama-backed preview string
+- if `propose` needs more target coverage than the current preview contains, the desktop service can refresh the preview before computing accepted/correction semantics
+- this is still a preview-text proxy, not real target-model token-by-token verification
 
 Finally close the session:
 

@@ -33,7 +33,8 @@ Current real stage:
 - the Android app now surfaces the active speculative verifier mode and target preview text returned by desktop session start
 - the Android UI now also surfaces the active speculative verifier mode directly outside the session summary so verifier-mode changes are easier to spot during testing
 - the `llama_preview` verifier mode now uses llama preview text to drive accepted/correction semantics during `propose`
-- the next active stage is replacing preview-text proxy verification with real target-model token verification
+- the desktop service now also exposes a `llama_step_proxy` verifier mode that refreshes llama preview text on demand when a proposal needs more target coverage
+- the next active stage is replacing llama-preview proxy verification with real target-model token verification
 
 ## Active Technical Findings
 
@@ -71,6 +72,7 @@ Current strongest conclusion:
 - the Android app can now deliberately trigger a mismatch and surface correction-token behavior directly in the speculative debug UI
 - the desktop service now reports a `speculativeVerifierMode` and can optionally prepare a llama-backed preview text while keeping the current protocol stable
 - the `llama_preview` mode is no longer preview-only; it now uses preview text as the current target proxy for accepted-prefix and correction-token behavior
+- the new `llama_step_proxy` mode keeps the same preview-text proxy model but can refresh the preview when `propose` needs more target text than session start originally prepared
 
 ## Important Files
 
@@ -101,7 +103,8 @@ Primary blocker:
 - the next blocker is no longer the absence of desktop speculative endpoints
 - the next blocker is no longer the absence of speculative verify semantics
 - the next blocker is no longer the lack of a llama-backed target proxy
-- the next blocker is replacing preview-text proxy verification with real target-model token verification
+- the next blocker is no longer static llama preview coverage
+- the next blocker is replacing llama-preview proxy verification with real target-model token verification
 
 Secondary blocker:
 
@@ -111,9 +114,9 @@ Secondary blocker:
 
 The next step should focus on one of these:
 
-1. add the first speculative session endpoints to the desktop service
-2. add phone-side speculative session state above the existing local and remote paths
-3. keep ordinary remote fallback active while the speculative path is introduced
+1. keep `llama_step_proxy` as the regression harness for desktop-side speculative verification
+2. replace preview-text proxy verification with real target-model token verification
+3. keep ordinary remote fallback active while the real verifier is introduced
 
 ## Immediate Execution Order
 
@@ -122,8 +125,9 @@ Use this order unless a new runtime failure appears:
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
 2. use `docs/project/speculative-decoding-protocol-draft.md` as the protocol reference
 3. keep the Android speculative stub path as the regression harness
-4. replace preview-text proxy verification with real token verification on the desktop side
-5. only after the first speculative loop works, optimize chunking or transport
+4. treat `llama_step_proxy` as the last preview-text proxy harness before real token verification
+5. replace llama-preview proxy verification with real token verification on the desktop side
+6. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
 
@@ -142,17 +146,15 @@ Practical interpretation:
 
 The next node is complete when all of the following are true:
 
-- the desktop service exposes the first speculative session endpoints
-- the phone can open and close a speculative session cleanly
+- the desktop verifier no longer depends on prompt-derived or preview-text proxy token ids
+- the desktop `propose` path derives accepted/correction semantics from real target-model token work
 - ordinary remote fallback remains available
-- the local Android baseline remains the fallback reference while the remote path is added
+- the Android speculative debug harness remains usable as the regression client
 - the close-out includes the required git-sync explanation and markdown summary update
 
-The desktop-side portion of that node is now complete.
+The current desktop proxy-verifier ladder is now complete through `llama_step_proxy`.
 
-The phone-side wiring is now in the codebase.
-
-The remaining completion work is Android Studio verification of that path.
+The remaining completion work for this node is replacing the proxy ladder with real target-model token verification.
 
 ## After That
 
@@ -166,13 +168,17 @@ That protocol-definition step is now complete at the draft level.
 
 The next implementation step is to turn it into the first real speculative session lifecycle.
 
+That lifecycle is now in place together with prompt-derived and llama-preview verifier proxies.
+
+The next implementation step is to replace those proxies with true target-model token verification.
+
 ## Android Studio Verification Needed By User
 
 For the next validation node:
 
-- confirm the app still syncs and indexes after the new speculative mode additions
-- run one speculative stub request against the desktop service and capture the session summary
-- run one force-mismatch speculative request and capture the correction-token summary
+- run one `llama_step_proxy` speculative request and capture the session summary
+- keep one `llama_preview` or `prompt_stub` run available as a regression comparison
+- once real verifier work lands, run both a happy-path and correction-path speculative request from the app
 - keep one known-good ordinary remote run recorded as the fallback reference
 
 ## What Not To Reopen

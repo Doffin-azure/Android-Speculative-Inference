@@ -176,6 +176,7 @@ Already complete:
 - currently supported modes are:
   - `prompt_stub`
   - `llama_preview`
+  - `llama_step_proxy`
 - Android now surfaces the active verifier mode in probe results, session summaries, and dedicated UI state
 
 Why it matters:
@@ -196,8 +197,22 @@ Already complete:
 
 Current limitation:
 
-- `llama_preview` currently improves visibility only
+- `llama_preview` and `llama_step_proxy` still use preview text as a proxy target
 - the active `propose` verification path still does not use real target-model next-token verification
+
+## Milestone 11: Llama Step Proxy Bridge
+
+Already complete:
+
+- the desktop service now exposes `llama_step_proxy`
+- `startSession` still prepares a llama-backed preview string
+- `propose` can now refresh that preview when more target coverage is needed
+- local smoke validation has already confirmed that `llama_step_proxy` can start, verify a proposal, and close a session cleanly
+
+Why it matters:
+
+- this is the closest current verifier harness to real target verification without changing the Android protocol
+- it removes the earlier limitation where accepted/correction behavior could only see the fixed preview generated at session start
 
 ## What Is Proven Right Now
 
@@ -210,6 +225,7 @@ These statements should now be treated as established:
 - speculative accepted-prefix and correction-token semantics are proven through stubs
 - Android can deliberately trigger and display correction behavior
 - verifier mode and llama-backed preview visibility are proven
+- llama-backed preview refresh during speculative propose is proven
 
 ## What Is Still Stubbed
 
@@ -217,7 +233,7 @@ These parts are still not the final implementation:
 
 - Android draft tokens are still placeholder prompt-derived token ids
 - desktop speculative verification is still not based on target-model token-by-token verification
-- `llama_preview` provides preview text, not full target token verification
+- `llama_preview` and `llama_step_proxy` provide preview-text proxy verification, not full target token verification
 - speculative sessions are still debug-first, not performance-first
 
 ## Current Main Technical Gap
@@ -235,8 +251,8 @@ That ordering is still the lowest-risk path.
 ## Recommended Next Implementation Order
 
 1. keep the current Android speculative debug harness as the regression path
-2. upgrade desktop `llama_preview` from preview-only visibility to verification input
-3. replace desktop stub verification with real target-model token verification
+2. keep `llama_step_proxy` as the highest-fidelity regression harness while true verification is being built
+3. replace desktop preview-text proxy verification with real target-model token verification
 4. only then move down into `:lib` to expose real local draft tokens on Android
 5. keep ordinary remote fallback active throughout
 

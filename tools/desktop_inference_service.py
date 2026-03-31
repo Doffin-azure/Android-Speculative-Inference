@@ -24,6 +24,7 @@ DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.9
 PROTOCOL_VERSION = 1
 DEFAULT_SPECULATIVE_VERIFIER_MODE = "prompt_stub"
+DEFAULT_LLAMA_PREVIEW_MAX_TOKENS = 8
 
 
 def read_gradle_local_properties() -> dict[str, str]:
@@ -216,7 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--speculative-verifier-mode",
-        choices=("prompt_stub", "llama_preview"),
+        choices=("prompt_stub", "llama_preview", "llama_step_proxy"),
         default=DEFAULT_SPECULATIVE_VERIFIER_MODE,
         help="Verifier mode for speculative propose handling.",
     )
@@ -419,7 +420,7 @@ def token_ids_from_text(text: str) -> list[int]:
 
 
 def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession) -> str:
-    if config.speculative_verifier_mode != "llama_preview":
+    if config.speculative_verifier_mode not in {"llama_preview", "llama_step_proxy"}:
         return ""
 
     preview_response = run_generation(
@@ -429,7 +430,7 @@ def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession
             "model": session.target_model,
             "systemPrompt": session.system_prompt,
             "userPrompt": session.user_prompt,
-            "maxTokens": 8,
+            "maxTokens": DEFAULT_LLAMA_PREVIEW_MAX_TOKENS,
             "temperature": session.temperature,
             "topP": session.top_p,
         },
@@ -440,9 +441,44 @@ def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession
 
 
 def resolve_session_target_token_ids(session: SpeculativeSession) -> list[int]:
-    if session.verifier_mode == "llama_preview" and session.target_preview_text.strip():
+    if session.verifier_mode in {"llama_preview", "llama_step_proxy"} and session.target_preview_text.strip():
         return token_ids_from_text(session.target_preview_text)
     return build_stub_target_token_ids(session.system_prompt, session.user_prompt)
+
+
+def refresh_llama_proxy_preview(
+    config: ServiceConfig,
+    session: SpeculativeSession,
+    min_target_chars: int,
+) -> None:
+    if session.verifier_mode not in {"llama_preview", "llama_step_proxy"}:
+        return
+
+    current_chars = len(session.target_preview_text)
+    if current_chars >= min_target_chars:
+        return
+
+    desired_tokens = max(
+        DEFAULT_LLAMA_PREVIEW_MAX_TOKENS,
+        min_target_chars + 8,
+        current_chars + 8,
+    )
+    preview_response = run_generation(
+        config,
+        {
+            "requestId": f"{session.request_id}-preview-refresh-{desired_tokens}",
+            "model": session.target_model,
+            "systemPrompt": session.system_prompt,
+            "userPrompt": session.user_prompt,
+            "maxTokens": desired_tokens,
+            "temperature": session.temperature,
+            "topP": session.top_p,
+        },
+    )
+    refreshed_text = str(preview_response.get("outputText") or "").strip()
+    if refreshed_text:
+        session.target_preview_text = refreshed_text
+        session.target_token_ids = token_ids_from_text(refreshed_text)
 
 
 def token_ids_to_debug_text(token_ids: list[int]) -> str:
@@ -535,6 +571,12 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     if not proposed_token_ids:
         raise ValueError("proposedTokenIds must not be empty.")
 
+    refresh_llama_proxy_preview(
+        server.config,
+        session,
+        session.accepted_token_count + len(proposed_token_ids) + max_correction_tokens,
+    )
+
     target_index = session.accepted_token_count
     target_remaining = session.target_token_ids[target_index:]
 
@@ -580,7 +622,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     session.updated_at_ms = int(time.time() * 1000)
 
     base_status = "accepted" if not correction_token_ids and rejected_from_index == -1 else "corrected"
-    if session.verifier_mode == "llama_preview":
+    if session.verifier_mode in {"llama_preview", "llama_step_proxy"}:
         status = f"{base_status}_by_llama_preview"
     else:
         status = f"{base_status}_by_prompt_stub"
@@ -589,7 +631,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     warning = (
         "Desktop speculative verification is currently using llama preview text as a target proxy. "
         "It now computes accepted prefixes and correction tokens from the preview text, but it still does not run true target-model token verification yet."
-        if session.verifier_mode == "llama_preview"
+        if session.verifier_mode in {"llama_preview", "llama_step_proxy"}
         else
         "Desktop speculative verification is currently a deterministic prompt-derived stub. "
         "It now computes accepted prefixes and correction tokens, but it still does not run target-model token verification yet."
