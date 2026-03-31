@@ -296,6 +296,7 @@ Already complete:
 - the true-verifier path no longer spends a redundant refresh call before verification and now records explicit call-count / expected-token state in the target session
 - the true-verifier path now also caches the latest accepted-prefix -> next-token observation so repeated checks for the same prefix can reuse target results
 - the true-verifier cache is now session-wide, which is a closer fit to future persistent target-session behavior than the earlier single-entry cache
+- the true-verifier path can now use one chunk-sized target continuation fetch to validate more than one proposed token at a time
 
 Why it matters:
 
