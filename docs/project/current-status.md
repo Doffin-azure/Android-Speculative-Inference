@@ -27,7 +27,8 @@ Current real stage:
 - the project now has a first draft of the speculative decoding protocol
 - the desktop service now exposes a first speculative session lifecycle stub on top of the proven local and ordinary remote baselines
 - the Android app codebase now contains a first speculative mode wired to that desktop lifecycle stub
-- the next active stage is user-side Android Studio verification of that speculative stub path and then replacing stub acceptance with real token verification
+- the desktop `propose` path now computes accepted prefixes and correction tokens through a deterministic prompt-derived verify stub
+- the next active stage is replacing that deterministic verify stub with real target-model token verification
 
 ## Active Technical Findings
 
@@ -61,6 +62,7 @@ Current strongest conclusion:
 - the desktop service now exposes `start / propose / fallback / close` speculative endpoints with request logging
 - the current desktop speculative implementation is intentionally still a lifecycle stub and does not yet perform target-model token verification
 - the Android app now has a first speculative mode, remote client calls, and diagnostic summary fields for the desktop stub session flow
+- the desktop speculative `propose` step no longer accepts every proposal blindly; it now returns `acceptedCount`, `rejectedFromIndex`, and `correctionTokenIds`
 
 ## Important Files
 
@@ -89,7 +91,8 @@ Primary blocker:
 - the next blocker is no longer Android local correctness
 - the next blocker is no longer basic phone-to-computer reachability
 - the next blocker is no longer the absence of desktop speculative endpoints
-- the next blocker is validating the new Android speculative stub path in Android Studio and then replacing the desktop stub acceptance path with real token verification
+- the next blocker is no longer the absence of speculative verify semantics
+- the next blocker is replacing the deterministic prompt-derived verify stub with real target-model token verification
 
 Secondary blocker:
 
@@ -109,8 +112,8 @@ Use this order unless a new runtime failure appears:
 
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
 2. use `docs/project/speculative-decoding-protocol-draft.md` as the protocol reference
-3. verify the new Android speculative stub path against the desktop service
-4. replace stub acceptance with real token verification on the desktop side
+3. keep the Android speculative stub path as the regression harness
+4. replace deterministic prompt-derived verification with real token verification on the desktop side
 5. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
