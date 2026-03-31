@@ -118,6 +118,14 @@ Why this is core:
 - Before this function existed, verifier truth came from preview text or replay text proxies.
 - After this function was added, desktop gained a real target-model next-token check path.
 
+Current strengthening:
+
+- true-mode refresh no longer performs a redundant prefetch call before verification
+- the target session now records:
+  - `true_verifier_call_count`
+  - `last_true_expected_token_id`
+  - `last_true_expected_token_text`
+
 ## 3. Desktop True Verifier Comparison Loop
 
 File:
@@ -181,6 +189,7 @@ Explanation:
 - It compares Android-proposed tokens against the target model's next token, one step at a time.
 - Matching tokens are appended to the accepted prefix.
 - The first mismatch returns one correction token.
+- Each real verifier step now also records the latest expected token and increments the true-verifier call counter inside the target session.
 
 Why this is core:
 
