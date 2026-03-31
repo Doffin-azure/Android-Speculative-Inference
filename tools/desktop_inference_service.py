@@ -23,6 +23,7 @@ DEFAULT_MAX_TOKENS = 64
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.9
 PROTOCOL_VERSION = 1
+DEFAULT_SPECULATIVE_VERIFIER_MODE = "prompt_stub"
 
 
 def read_gradle_local_properties() -> dict[str, str]:
@@ -146,6 +147,7 @@ class ServiceConfig:
     ld_library_path: str
     threads: int
     request_log_path: Path
+    speculative_verifier_mode: str
 
 
 @dataclass
@@ -157,6 +159,7 @@ class SpeculativeSession:
     target_model: str
     system_prompt: str
     user_prompt: str
+    verifier_mode: str
     temperature: float
     top_p: float
     status: str
@@ -166,6 +169,7 @@ class SpeculativeSession:
     mismatch_count: int
     correction_token_ids: list[int]
     target_token_ids: list[int]
+    target_preview_text: str
     last_finish_reason: str
     created_at_ms: int
     updated_at_ms: int
@@ -210,6 +214,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=REPO_ROOT / "logs" / "desktop-inference-service.log",
         help="Path to the local request log file.",
     )
+    parser.add_argument(
+        "--speculative-verifier-mode",
+        choices=("prompt_stub", "llama_preview"),
+        default=DEFAULT_SPECULATIVE_VERIFIER_MODE,
+        help="Verifier mode for speculative propose handling.",
+    )
     return parser
 
 
@@ -235,6 +245,7 @@ def validate_args(args: argparse.Namespace) -> ServiceConfig:
         ld_library_path=ld_library_path,
         threads=max(1, int(args.threads)),
         request_log_path=args.request_log_path.resolve(),
+        speculative_verifier_mode=args.speculative_verifier_mode,
     )
 
 
@@ -265,6 +276,7 @@ def run_configuration_check(config: ServiceConfig) -> int:
     print(f"ld_library_path={config.ld_library_path}")
     print(f"threads={config.threads}")
     print(f"request_log_path={config.request_log_path}")
+    print(f"speculative_verifier_mode={config.speculative_verifier_mode}")
 
     check_command = (
         "test -f {model} && test -x {cli} && echo OK || echo MISSING"
@@ -401,6 +413,27 @@ def build_stub_target_token_ids(system_prompt: str, user_prompt: str) -> list[in
     return token_ids or [0]
 
 
+def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession) -> str:
+    if config.speculative_verifier_mode != "llama_preview":
+        return ""
+
+    preview_response = run_generation(
+        config,
+        {
+            "requestId": f"{session.request_id}-preview",
+            "model": session.target_model,
+            "systemPrompt": session.system_prompt,
+            "userPrompt": session.user_prompt,
+            "maxTokens": 8,
+            "temperature": session.temperature,
+            "topP": session.top_p,
+        },
+    )
+    if preview_response.get("error"):
+        return ""
+    return str(preview_response.get("outputText") or "").strip()
+
+
 def token_ids_to_debug_text(token_ids: list[int]) -> str:
     chars: list[str] = []
     for token_id in token_ids:
@@ -434,6 +467,7 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
         target_model=target_model,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
+        verifier_mode=config.speculative_verifier_mode,
         temperature=temperature,
         top_p=top_p,
         status="ready",
@@ -443,6 +477,7 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
         mismatch_count=0,
         correction_token_ids=[],
         target_token_ids=build_stub_target_token_ids(system_prompt, user_prompt),
+        target_preview_text="",
         last_finish_reason="",
         created_at_ms=now_ms,
         updated_at_ms=now_ms,
@@ -451,6 +486,7 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
 
 def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
     session = build_speculative_session(payload, server.config)
+    session.target_preview_text = build_target_preview_text(server.config, session)
     with server.sessions_lock:
         server.sessions[session.session_id] = session
 
@@ -462,9 +498,11 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "status": session.status,
         "targetModel": session.target_model,
         "draftModel": session.draft_model,
+        "verifierMode": session.verifier_mode,
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
         "fallbackAvailable": True,
+        "targetPreviewText": session.target_preview_text,
         "error": "",
     }
 
@@ -557,9 +595,11 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         ),
         "error": "",
         "debug": {
+            "verifierMode": session.verifier_mode,
             "targetIndexBeforeStep": target_index,
             "targetRemainingCount": len(target_remaining),
             "targetPreview": token_ids_to_debug_text(target_remaining[:16]),
+            "llamaPreviewText": session.target_preview_text,
         },
     }
 
@@ -626,6 +666,7 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "requestId": session.request_id,
         "status": "closed",
         "reason": reason,
+        "verifierMode": session.verifier_mode,
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
         "lastFinishReason": session.last_finish_reason,
@@ -646,6 +687,7 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "ipv4Addresses": detect_ipv4_addresses(),
                 "speculativeSessionCount": self.server.session_count(),
                 "speculativeProtocolVersion": PROTOCOL_VERSION,
+                "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
             }
             self._write_json(HTTPStatus.OK, payload)
             self._record_request(HTTPStatus.OK, payload)
@@ -661,6 +703,7 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "requestLogPath": str(self.server.config.request_log_path),
                 "ipv4Addresses": detect_ipv4_addresses(),
                 "speculativeSessionCount": self.server.session_count(),
+                "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
             }
             self._write_json(HTTPStatus.OK, payload)
             self._record_request(HTTPStatus.OK, payload)
