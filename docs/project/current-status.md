@@ -91,6 +91,7 @@ Practical interpretation:
 - do not spend the next node reopening backend-load debugging unless a fresh device run fails again
 - do not spend the next node on UI polish unless it is needed to support runtime validation
 - treat desktop GGUF tooling as confirmation support, not the current mainline
+- use `docs/project/android-local-baseline-checklist.md` as the on-device rerun procedure
 
 ## Definition Of Done For The Next Node
 
