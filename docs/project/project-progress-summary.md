@@ -233,6 +233,7 @@ Already complete:
 - replay-mode prompt construction now prefers explicit accepted text state instead of relying only on token-id debug reconstruction, and Android diagnostics surface that replay-session text state
 - the desktop service now keeps a separate internal target-session map and returns `targetSessionId`, which is the first persistent target-session boundary for future real verifier work
 - desktop `propose` now refreshes and rehydrates target proxy state through that target-session layer instead of mutating verifier target state only inside the speculative-session record
+- desktop `propose` now also runs through explicit target-session driver helpers and a dedicated verify-computation result shape, so the next true verifier can replace the current proxy engine without rewriting the HTTP lifecycle again
 
 Why it matters:
 
@@ -269,6 +270,18 @@ Already complete:
 Why it matters:
 
 - the next true-verifier node can replace the verifier engine behind the target-session layer instead of rewriting speculative-session lifecycle code again
+
+## Milestone 15: Verifier Driver Boundary
+
+Already complete:
+
+- the desktop service now has a dedicated verify-computation result structure
+- the current proxy verifier logic is encapsulated in target-session driver helpers
+- speculative `propose` no longer hardcodes the full proxy verify flow inline
+
+Why it matters:
+
+- the next node can swap the current proxy verifier engine for a real target verifier with much less churn to the surrounding request lifecycle
 
 ## What Is Proven Right Now
 
