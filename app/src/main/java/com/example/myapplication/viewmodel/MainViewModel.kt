@@ -303,6 +303,7 @@ class MainViewModel(
                     appendLine("Server saw client as: ${probe.clientAddress}")
                     appendLine("Desktop request log: ${probe.requestLogPath}")
                     appendLine("Desktop IPv4 addresses: ${probe.ipv4Addresses.joinToString()}")
+                    appendLine("Speculative verifier mode: ${probe.speculativeVerifierMode}")
                 }.trim()
                 _remoteProbeSummary.value = summary
                 _output.value = summary
@@ -432,7 +433,7 @@ class MainViewModel(
                 val startResponse = remoteClient.startSpeculativeSession(baseUrl, startRequest)
                 activeSessionId = startResponse.sessionId
                 appendLog(
-                    "Speculative session started. sessionId=${startResponse.sessionId}, requestId=${startResponse.requestId}, status=${startResponse.status}"
+                    "Speculative session started. sessionId=${startResponse.sessionId}, requestId=${startResponse.requestId}, status=${startResponse.status}, verifierMode=${startResponse.verifierMode}"
                 )
 
                 _statusMessage.value = "Sending speculative draft..."
@@ -466,6 +467,8 @@ class MainViewModel(
                 _speculativeSessionSummary.value = buildString {
                     appendLine("SessionId: ${startResponse.sessionId}")
                     appendLine("Start status: ${startResponse.status}")
+                    appendLine("Verifier mode: ${startResponse.verifierMode}")
+                    appendLine("Target preview text: ${startResponse.targetPreviewText}")
                     appendLine("Draft tokens: ${proposedTokens.joinToString()}")
                     appendLine("Accepted count: ${proposeResponse.acceptedCount}")
                     appendLine("Accepted token ids: ${proposeResponse.acceptedTokenIds.joinToString()}")
@@ -481,6 +484,7 @@ class MainViewModel(
                 }.trim()
                 _remoteResultSummary.value = buildString {
                     appendLine("Speculative stub requestId: ${proposeResponse.requestId}")
+                    appendLine("Verifier mode: ${startResponse.verifierMode}")
                     appendLine("Verify status: ${proposeResponse.status}")
                     appendLine("Accepted count: ${proposeResponse.acceptedCount}")
                     appendLine("Rejected from index: ${proposeResponse.rejectedFromIndex}")
@@ -490,6 +494,8 @@ class MainViewModel(
                 }.trim()
                 _output.value = buildString {
                     appendLine("Speculative stub completed.")
+                    appendLine("Verifier mode: ${startResponse.verifierMode}")
+                    appendLine("Target preview text: ${startResponse.targetPreviewText}")
                     appendLine("Draft text: $draftText")
                     appendLine("Draft token ids: ${proposedTokens.joinToString()}")
                     appendLine("Accepted token ids: ${proposeResponse.acceptedTokenIds.joinToString()}")

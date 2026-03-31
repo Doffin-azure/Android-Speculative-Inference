@@ -35,7 +35,8 @@ data class RemoteProbeResponse(
     val message: String,
     val clientAddress: String,
     val requestLogPath: String,
-    val ipv4Addresses: List<String>
+    val ipv4Addresses: List<String>,
+    val speculativeVerifierMode: String
 )
 
 data class SpeculativeStartRequest(
@@ -54,6 +55,8 @@ data class SpeculativeStartResponse(
     val sessionId: String,
     val requestId: String,
     val status: String,
+    val verifierMode: String,
+    val targetPreviewText: String,
     val fallbackAvailable: Boolean,
     val error: String
 )
@@ -130,7 +133,8 @@ class RemoteInferenceClient {
                 message = json.optString("message"),
                 clientAddress = json.optString("clientAddress"),
                 requestLogPath = json.optString("requestLogPath"),
-                ipv4Addresses = addresses
+                ipv4Addresses = addresses,
+                speculativeVerifierMode = json.optString("speculativeVerifierMode")
             )
         } finally {
             connection.disconnect()
@@ -216,6 +220,8 @@ class RemoteInferenceClient {
                 sessionId = json.optString("sessionId", request.sessionId),
                 requestId = json.optString("requestId", request.requestId),
                 status = json.optString("status", "unknown"),
+                verifierMode = json.optString("verifierMode"),
+                targetPreviewText = json.optString("targetPreviewText"),
                 fallbackAvailable = json.optBoolean("fallbackAvailable", false),
                 error = error
             )
