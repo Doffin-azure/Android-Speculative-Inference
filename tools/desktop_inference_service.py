@@ -262,8 +262,7 @@ class TargetSessionState:
     true_verifier_call_count: int
     last_true_expected_token_id: int
     last_true_expected_token_text: str
-    cached_true_prefix_text: str
-    cached_true_next_text: str
+    true_prefix_cache: dict[str, str]
     created_at_ms: int
     updated_at_ms: int
 
@@ -846,8 +845,7 @@ def build_target_session_state(session: SpeculativeSession) -> TargetSessionStat
         true_verifier_call_count=0,
         last_true_expected_token_id=-1,
         last_true_expected_token_text="",
-        cached_true_prefix_text="",
-        cached_true_next_text="",
+        true_prefix_cache={},
         created_at_ms=session.created_at_ms,
         updated_at_ms=session.updated_at_ms,
     )
@@ -1062,8 +1060,7 @@ def record_true_verifier_observation(
     target_session.true_verifier_call_count += 1
     target_session.last_true_expected_token_text = next_text[:1]
     target_session.last_true_expected_token_id = ord(next_text[0]) if next_text else -1
-    target_session.cached_true_prefix_text = prefix_text
-    target_session.cached_true_next_text = next_text
+    target_session.true_prefix_cache[prefix_text] = next_text
 
 
 def get_or_fetch_true_target_next_text(
@@ -1073,9 +1070,10 @@ def get_or_fetch_true_target_next_text(
     prefix_text: str,
     step_index: int,
 ) -> dict[str, Any]:
-    if target_session.cached_true_prefix_text == prefix_text and target_session.cached_true_next_text:
+    cached_next_text = target_session.true_prefix_cache.get(prefix_text, "")
+    if cached_next_text:
         return {
-            "outputText": target_session.cached_true_next_text,
+            "outputText": cached_next_text,
             "error": "",
             "debug": {
                 "replayPrompt": target_session.last_replay_prompt,
@@ -1182,8 +1180,9 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
             "trueVerifierCallCount": target_session.true_verifier_call_count,
             "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
             "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
-            "cachedTruePrefixText": target_session.cached_true_prefix_text,
-            "cachedTrueNextText": target_session.cached_true_next_text,
+            "truePrefixCacheSize": len(target_session.true_prefix_cache),
+            "cachedTruePrefixText": next(reversed(target_session.true_prefix_cache), "") if target_session.true_prefix_cache else "",
+            "cachedTrueNextText": target_session.true_prefix_cache.get(next(reversed(target_session.true_prefix_cache), ""), "") if target_session.true_prefix_cache else "",
         },
         "error": "",
     }
@@ -1307,8 +1306,9 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             "trueVerifierCallCount": target_session.true_verifier_call_count,
             "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
             "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
-            "cachedTruePrefixText": target_session.cached_true_prefix_text,
-            "cachedTrueNextText": target_session.cached_true_next_text,
+            "truePrefixCacheSize": len(target_session.true_prefix_cache),
+            "cachedTruePrefixText": next(reversed(target_session.true_prefix_cache), "") if target_session.true_prefix_cache else "",
+            "cachedTrueNextText": target_session.true_prefix_cache.get(next(reversed(target_session.true_prefix_cache), ""), "") if target_session.true_prefix_cache else "",
         },
     }
 
@@ -1388,8 +1388,9 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "trueVerifierCallCount": target_session.true_verifier_call_count if target_session is not None else 0,
         "lastTrueExpectedTokenId": target_session.last_true_expected_token_id if target_session is not None else -1,
         "lastTrueExpectedTokenText": target_session.last_true_expected_token_text if target_session is not None else "",
-        "cachedTruePrefixText": target_session.cached_true_prefix_text if target_session is not None else "",
-        "cachedTrueNextText": target_session.cached_true_next_text if target_session is not None else "",
+        "truePrefixCacheSize": len(target_session.true_prefix_cache) if target_session is not None else 0,
+        "cachedTruePrefixText": next(reversed(target_session.true_prefix_cache), "") if target_session is not None and target_session.true_prefix_cache else "",
+        "cachedTrueNextText": target_session.true_prefix_cache.get(next(reversed(target_session.true_prefix_cache), ""), "") if target_session is not None and target_session.true_prefix_cache else "",
         "targetSessionClosed": target_session is not None,
         "error": "",
     }
