@@ -737,6 +737,37 @@ Why this is core:
 - This is the first point where desktop speculative verification became truly target-backed instead of proxy-backed.
 - It moved `verifierStage` to `true_target` while keeping the protocol stable.
 
+## 35. Server-Backed True Verifier Bridge
+
+Commit:
+
+- current sync node
+
+Core code:
+
+```python
+if config.llama_server_base_url and target_session is not None and target_session.llama_server_slot_id >= 0:
+    response = run_generation_from_server_completion(
+        config,
+        request_id=request_id,
+        model=model,
+        full_prompt=replay_prompt,
+        max_tokens=max(1, max_tokens),
+        temperature=0.0,
+        top_p=1.0,
+        slot_id=target_session.llama_server_slot_id,
+        cache_prompt=True,
+    )
+    response.setdefault("debug", {})
+    response["debug"]["runtimeBackend"] = "llama_server_slot"
+    return response
+```
+
+Why this is core:
+
+- This is the first point where the true verifier can use a `llama-server` slot as its target-runtime backend instead of only replaying through standalone `llama-cli`.
+- It keeps the speculative protocol unchanged while moving desktop verification closer to a persistent target session shape.
+
 ## Reviewed But Not Listed As Feature Nodes
 
 These commits were reviewed during the git pass but were not promoted to the main feature list because they were documentation-only, ignore-only, template-only, or cleanup-only:

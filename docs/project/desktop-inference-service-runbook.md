@@ -34,6 +34,10 @@ Verifier modes:
 - `llama_replay_proxy` rebuilds the verifier target by replaying the already accepted assistant prefix back through `llama-cli` before each proposal step
 - `llama_true_step` uses the real target model for next-token checks on each speculative comparison step
 
+Optional true-verifier backend:
+
+- if `--llama-server-base-url` is provided, `llama_true_step` can use `llama-server` `/completion` with a fixed slot and prompt-cache reuse instead of relying only on standalone `llama-cli` replay
+
 ## Preconditions
 
 Before starting the service:
@@ -56,6 +60,7 @@ Expected result:
 
 - the model path is printed
 - the derived `llama-cli` WSL path is printed
+- if `--llama-server-base-url` is supplied, the service also checks upstream `llama-server` health
 - `configuration_check=OK`
 
 ## Start Command
@@ -86,6 +91,18 @@ If you want the first true-target verifier node:
 python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculative-verifier-mode llama_true_step
 ```
 
+If you also want the stronger `llama-server`-backed true-verifier path:
+
+```powershell
+python tools\desktop_inference_service.py --host 0.0.0.0 --port 8080 --speculative-verifier-mode llama_true_step --llama-server-base-url http://127.0.0.1:8091
+```
+
+Example `llama-server` start command from Windows PowerShell:
+
+```powershell
+wsl.exe bash -lc "cd /mnt/c/Users/JXZ/AndroidStudioProjects/llama.cpp && ./build-wsl-server/bin/llama-server -m /mnt/c/Users/JXZ/AndroidStudioProjects/MyApplication2/Llama-3.2-1B-Instruct-Q4_K_M.gguf --host 127.0.0.1 --port 8091 --parallel 1 --no-webui --cache-prompt"
+```
+
 ## Health Check
 
 From another PowerShell window:
@@ -99,6 +116,7 @@ Expected result:
 - `status` is `ok`
 - `backendLabel` is `desktop-llama.cpp-wsl-cli`
 - `speculativeVerifierMode` shows the currently active verifier mode
+- `llamaServerBaseUrl` shows the optional upstream `llama-server` used by `llama_true_step`
 
 ## Network Probe
 
@@ -243,7 +261,9 @@ When running in `llama_true_step` mode:
 - `propose` now asks the real target model for the next token on each speculative comparison step
 - the service returns `accepted_by_llama_true_step` or `corrected_by_llama_true_step`
 - `verifierStage` is now `true_target`
-- this is the first real desktop verifier node, but it still replays the prompt through `llama-cli` instead of holding a persistent in-memory target runtime session
+- without `--llama-server-base-url`, this path still uses `llama-cli` replay as the runtime backend
+- with `--llama-server-base-url`, this path uses `llama-server` `/completion` with a fixed slot and prompt-cache reuse
+- even with `llama-server`, this is still not the final in-process persistent target runtime session; it is the first stronger runtime bridge in that direction
 
 Finally close the session:
 

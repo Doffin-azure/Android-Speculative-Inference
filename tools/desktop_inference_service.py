@@ -9,6 +9,9 @@ import sys
 import threading
 import time
 import uuid
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -73,6 +76,14 @@ def default_llama_cli_path() -> str | None:
     if not llama_cpp_dir:
         return None
     return f"{windows_to_wsl_path(llama_cpp_dir)}/build-wsl-cli/bin/llama-cli"
+
+
+def default_llama_server_wsl_path() -> str | None:
+    properties = read_gradle_local_properties()
+    llama_cpp_dir = properties.get("llamaCppSourceDir")
+    if not llama_cpp_dir:
+        return None
+    return f"{windows_to_wsl_path(llama_cpp_dir)}/build-wsl-server/bin/llama-server"
 
 
 def default_ld_library_path(cli_path: str | None) -> str | None:
@@ -207,6 +218,8 @@ class ServiceConfig:
     port: int
     model_path: Path
     llama_cli_wsl_path: str
+    llama_server_base_url: str
+    llama_server_wsl_path: str
     ld_library_path: str
     threads: int
     request_log_path: Path
@@ -263,6 +276,12 @@ class TargetSessionState:
     last_true_expected_token_id: int
     last_true_expected_token_text: str
     true_prefix_cache: dict[str, str]
+    true_runtime_backend: str
+    llama_server_slot_id: int
+    last_true_chunk_start: int
+    last_true_chunk_consumed: int
+    true_cache_hit_streak: int
+    true_fetch_streak: int
     created_at_ms: int
     updated_at_ms: int
 
@@ -305,6 +324,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--llama-cli-wsl-path",
         default=default_llama_cli_path(),
         help="WSL path to llama-cli.",
+    )
+    parser.add_argument(
+        "--llama-server-base-url",
+        default="",
+        help="Optional base URL for a running llama-server, for example http://127.0.0.1:8091.",
+    )
+    parser.add_argument(
+        "--llama-server-wsl-path",
+        default=default_llama_server_wsl_path(),
+        help="Optional WSL path to llama-server for documentation and diagnostics.",
     )
     parser.add_argument(
         "--ld-library-path",
@@ -356,6 +385,8 @@ def validate_args(args: argparse.Namespace) -> ServiceConfig:
         port=args.port,
         model_path=args.model_path.resolve(),
         llama_cli_wsl_path=args.llama_cli_wsl_path,
+        llama_server_base_url=str(args.llama_server_base_url or "").rstrip("/"),
+        llama_server_wsl_path=str(args.llama_server_wsl_path or ""),
         ld_library_path=ld_library_path,
         threads=max(1, int(args.threads)),
         request_log_path=args.request_log_path.resolve(),
@@ -387,6 +418,8 @@ def append_request_log(config: ServiceConfig, event: dict[str, Any]) -> None:
 def run_configuration_check(config: ServiceConfig) -> int:
     print(f"model_path={config.model_path}")
     print(f"llama_cli_wsl_path={config.llama_cli_wsl_path}")
+    print(f"llama_server_base_url={config.llama_server_base_url}")
+    print(f"llama_server_wsl_path={config.llama_server_wsl_path}")
     print(f"ld_library_path={config.ld_library_path}")
     print(f"threads={config.threads}")
     print(f"request_log_path={config.request_log_path}")
@@ -412,8 +445,131 @@ def run_configuration_check(config: ServiceConfig) -> int:
         print(result.stderr.strip(), file=sys.stderr)
         return 1
 
+    if config.llama_server_base_url:
+        try:
+            server_health = request_json(
+                "GET",
+                f"{config.llama_server_base_url}/health",
+                timeout_seconds=10.0,
+            )
+            print(f"llama_server_health={server_health.get('status', 'unknown')}")
+        except RuntimeError as exc:
+            print(f"llama_server_health_error={exc}", file=sys.stderr)
+            return 1
+
     print("configuration_check=OK")
     return 0
+
+
+def request_json(
+    method: str,
+    url: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    body = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"{method} {url} failed: HTTP {exc.code}: {error_body}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"{method} {url} failed: {exc.reason}") from exc
+
+    if not raw.strip():
+        return {}
+    return json.loads(raw)
+
+
+def choose_llama_server_slot(base_url: str) -> int:
+    slots = request_json("GET", f"{base_url}/slots", timeout_seconds=10.0)
+    if not isinstance(slots, list) or not slots:
+        return 0
+
+    for slot in slots:
+        if not isinstance(slot, dict):
+            continue
+        if not bool(slot.get("is_processing")):
+            return int(slot.get("id", 0))
+
+    first_slot = slots[0]
+    if isinstance(first_slot, dict):
+        return int(first_slot.get("id", 0))
+    return 0
+
+
+def erase_llama_server_slot(base_url: str, slot_id: int) -> None:
+    request_json(
+        "POST",
+        f"{base_url}/slots/{slot_id}?action=erase",
+        {"id_slot": slot_id},
+        timeout_seconds=10.0,
+    )
+
+
+def run_generation_from_server_completion(
+    config: ServiceConfig,
+    *,
+    request_id: str,
+    model: str,
+    full_prompt: str,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    slot_id: int,
+    cache_prompt: bool,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    response = request_json(
+        "POST",
+        f"{config.llama_server_base_url}/completion",
+        {
+            "prompt": full_prompt,
+            "n_predict": max(1, max_tokens),
+            "temperature": temperature,
+            "top_p": top_p,
+            "cache_prompt": cache_prompt,
+            "id_slot": slot_id,
+            "return_tokens": True,
+            "stream": False,
+            "n_keep": -1,
+        },
+        timeout_seconds=120.0,
+    )
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+    output_text = str(response.get("content") or "")
+    completion_tokens = len(response.get("tokens") or [])
+    prompt_text = str(response.get("prompt") or full_prompt)
+    prompt_tokens = len(prompt_text.split())
+
+    return {
+        "requestId": request_id,
+        "outputText": output_text,
+        "finishReason": "stop" if not bool(response.get("stop")) else "stop",
+        "promptTokens": prompt_tokens,
+        "completionTokens": completion_tokens,
+        "totalTokens": prompt_tokens + completion_tokens,
+        "backendLabel": "desktop-llama.cpp-server",
+        "timings": {
+            "generationMs": elapsed_ms,
+        },
+        "error": "",
+        "debug": {
+            "model": model,
+            "slotId": slot_id,
+            "serverBaseUrl": config.llama_server_base_url,
+            "stop": response.get("stop"),
+            "tokensPredicted": completion_tokens,
+        },
+    }
 
 
 def run_generation(config: ServiceConfig, payload: dict[str, Any]) -> dict[str, Any]:
@@ -606,8 +762,26 @@ def run_true_target_chunk_text(
     user_prompt: str,
     accepted_text: str,
     max_tokens: int,
+    target_session: TargetSessionState | None = None,
 ) -> dict[str, Any]:
     replay_prompt = build_replay_prompt(system_prompt, user_prompt, accepted_text)
+    if config.llama_server_base_url and target_session is not None and target_session.llama_server_slot_id >= 0:
+        response = run_generation_from_server_completion(
+            config,
+            request_id=request_id,
+            model=model,
+            full_prompt=replay_prompt,
+            max_tokens=max(1, max_tokens),
+            temperature=0.0,
+            top_p=1.0,
+            slot_id=target_session.llama_server_slot_id,
+            cache_prompt=True,
+        )
+        response.setdefault("debug", {})
+        response["debug"]["replayPrompt"] = replay_prompt
+        response["debug"]["runtimeBackend"] = "llama_server_slot"
+        return response
+
     response = run_generation_from_full_prompt(
         config,
         request_id=request_id,
@@ -619,6 +793,7 @@ def run_true_target_chunk_text(
     )
     response.setdefault("debug", {})
     response["debug"]["replayPrompt"] = replay_prompt
+    response["debug"]["runtimeBackend"] = "llama_cli_replay"
     return response
 
 
@@ -639,6 +814,7 @@ def run_true_target_next_text(
         user_prompt=user_prompt,
         accepted_text=accepted_text,
         max_tokens=1,
+        target_session=None,
     )
 
 
@@ -691,6 +867,7 @@ def build_target_preview_text(
             user_prompt=user_prompt,
             accepted_text=accepted_text,
             max_tokens=DEFAULT_TRUE_VERIFY_MAX_TOKENS,
+            target_session=None,
         )
         return str(response.get("outputText") or "").strip(), str(
             response.get("debug", {}).get("replayPrompt") or ""
@@ -868,6 +1045,12 @@ def build_target_session_state(session: SpeculativeSession) -> TargetSessionStat
         last_true_expected_token_id=-1,
         last_true_expected_token_text="",
         true_prefix_cache={},
+        true_runtime_backend="llama_server_slot" if session.verifier_mode == "llama_true_step" else "proxy_target",
+        llama_server_slot_id=-1,
+        last_true_chunk_start=0,
+        last_true_chunk_consumed=0,
+        true_cache_hit_streak=0,
+        true_fetch_streak=0,
         created_at_ms=session.created_at_ms,
         updated_at_ms=session.updated_at_ms,
     )
@@ -1014,8 +1197,12 @@ def compute_true_verifier_result(
         )
 
     next_text = str(chunk_response.get("outputText") or "")
+    target_session.true_runtime_backend = str(
+        chunk_response.get("debug", {}).get("runtimeBackend") or target_session.true_runtime_backend
+    )
     target_session.last_replay_prompt = str(chunk_response.get("debug", {}).get("replayPrompt") or "")
     target_session.target_preview_text = next_text
+    target_session.last_true_chunk_start = target_index
     if not bool(chunk_response.get("debug", {}).get("cacheHit")):
         record_true_verifier_observation(target_session, prefix_text=working_prefix, next_text=next_text)
 
@@ -1042,6 +1229,7 @@ def compute_true_verifier_result(
         ]
 
     committed_token_ids = accepted_step_token_ids + correction_token_ids
+    target_session.last_true_chunk_consumed = len(committed_token_ids)
     target_text_delta = token_ids_to_debug_text(committed_token_ids)
     finish_reason = ""
     if correction_token_ids:
@@ -1100,6 +1288,8 @@ def record_true_verifier_observation(
     target_session.last_true_expected_token_text = next_text[:1]
     target_session.last_true_expected_token_id = ord(next_text[0]) if next_text else -1
     target_session.true_prefix_cache[prefix_text] = next_text
+    target_session.true_cache_hit_streak = 0
+    target_session.true_fetch_streak += 1
 
 
 def get_or_fetch_true_target_chunk_text(
@@ -1112,12 +1302,15 @@ def get_or_fetch_true_target_chunk_text(
 ) -> dict[str, Any]:
     cached_next_text = target_session.true_prefix_cache.get(prefix_text, "")
     if len(cached_next_text) >= max(1, desired_tokens):
+        target_session.true_cache_hit_streak += 1
+        target_session.true_fetch_streak = 0
         return {
             "outputText": cached_next_text,
             "error": "",
             "debug": {
                 "replayPrompt": target_session.last_replay_prompt,
                 "cacheHit": True,
+                "runtimeBackend": target_session.true_runtime_backend,
             },
         }
 
@@ -1129,6 +1322,7 @@ def get_or_fetch_true_target_chunk_text(
         user_prompt=target_session.user_prompt,
         accepted_text=prefix_text,
         max_tokens=max(DEFAULT_TRUE_VERIFY_MAX_TOKENS, desired_tokens),
+        target_session=target_session,
     )
     response.setdefault("debug", {})
     response["debug"]["cacheHit"] = False
@@ -1181,19 +1375,43 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
 
 def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
     session = build_speculative_session(payload, server.config)
-    session.target_preview_text, session.last_replay_prompt = build_target_preview_text(
-        server.config,
-        verifier_mode=session.verifier_mode,
-        request_id=session.request_id,
-        target_model=session.target_model,
-        system_prompt=session.system_prompt,
-        user_prompt=session.user_prompt,
-        accepted_text=current_assistant_prefix_text(session),
-        temperature=session.temperature,
-        top_p=session.top_p,
-    )
-    session.target_token_ids = resolve_session_target_token_ids(session)
     target_session = build_target_session_state(session)
+    if session.verifier_mode == "llama_true_step" and server.config.llama_server_base_url:
+        target_session.true_runtime_backend = "llama_server_slot"
+        target_session.llama_server_slot_id = choose_llama_server_slot(server.config.llama_server_base_url)
+        true_preview = get_or_fetch_true_target_chunk_text(
+            server.config,
+            target_session,
+            prefix_text=target_session.accepted_text,
+            step_index=0,
+            desired_tokens=DEFAULT_TRUE_VERIFY_MAX_TOKENS,
+        )
+        target_session.target_preview_text = str(true_preview.get("outputText") or "").strip()
+        target_session.last_replay_prompt = str(true_preview.get("debug", {}).get("replayPrompt") or "")
+        if target_session.target_preview_text and not bool(true_preview.get("debug", {}).get("cacheHit")):
+            record_true_verifier_observation(
+                target_session,
+                prefix_text=target_session.accepted_text,
+                next_text=target_session.target_preview_text,
+            )
+        session.target_preview_text = target_session.target_preview_text
+        session.last_replay_prompt = target_session.last_replay_prompt
+        session.target_token_ids = resolve_target_session_token_ids(target_session, session.accepted_token_ids)
+        sync_target_session_state(target_session, session)
+    else:
+        session.target_preview_text, session.last_replay_prompt = build_target_preview_text(
+            server.config,
+            verifier_mode=session.verifier_mode,
+            request_id=session.request_id,
+            target_model=session.target_model,
+            system_prompt=session.system_prompt,
+            user_prompt=session.user_prompt,
+            accepted_text=current_assistant_prefix_text(session),
+            temperature=session.temperature,
+            top_p=session.top_p,
+        )
+        session.target_token_ids = resolve_session_target_token_ids(session)
+        sync_target_session_state(target_session, session)
     session.target_session_id = target_session.target_session_id
     with server.sessions_lock:
         server.sessions[session.session_id] = session
@@ -1225,6 +1443,8 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
             "truePrefixCacheSize": len(target_session.true_prefix_cache),
             "cachedTruePrefixText": latest_cached_prefix,
             "cachedTrueNextText": latest_cached_next,
+            "trueRuntimeBackend": target_session.true_runtime_backend,
+            "llamaServerSlotId": target_session.llama_server_slot_id,
         },
         "error": "",
     }
@@ -1306,7 +1526,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         if session.verifier_mode == "llama_replay_proxy"
         else
         "Desktop speculative verification is now using the real target model for next-token checks through llama-cli on each speculative comparison step. "
-        "This is the first true-target verifier stage, but it still replays the prompt through llama-cli instead of holding a persistent in-memory target runtime session."
+        "This is the first true-target verifier stage. When llama-server is configured it now runs through a persistent server slot with prompt-cache reuse, "
+        "but it still does not directly hold libllama state inside this Python process."
         if session.verifier_mode == "llama_true_step"
         else
         "Desktop speculative verification is currently using llama preview text as a target proxy. "
@@ -1352,6 +1573,12 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             "truePrefixCacheSize": len(target_session.true_prefix_cache),
             "cachedTruePrefixText": latest_cached_prefix,
             "cachedTrueNextText": latest_cached_next,
+            "trueRuntimeBackend": target_session.true_runtime_backend,
+            "llamaServerSlotId": target_session.llama_server_slot_id,
+            "lastTrueChunkStart": target_session.last_true_chunk_start,
+            "lastTrueChunkConsumed": target_session.last_true_chunk_consumed,
+            "trueCacheHitStreak": target_session.true_cache_hit_streak,
+            "trueFetchStreak": target_session.true_fetch_streak,
         },
     }
 
@@ -1412,6 +1639,16 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         raise ValueError(f"Unknown speculative session: {session_id}")
     with server.sessions_lock:
         target_session = server.target_sessions.pop(session.target_session_id, None)
+    if (
+        target_session is not None
+        and target_session.verifier_mode == "llama_true_step"
+        and server.config.llama_server_base_url
+        and target_session.llama_server_slot_id >= 0
+    ):
+        try:
+            erase_llama_server_slot(server.config.llama_server_base_url, target_session.llama_server_slot_id)
+        except RuntimeError:
+            pass
     latest_cached_prefix, latest_cached_next = latest_true_cache_entry(target_session) if target_session is not None else ("", "")
 
     return {
@@ -1435,6 +1672,8 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "truePrefixCacheSize": len(target_session.true_prefix_cache) if target_session is not None else 0,
         "cachedTruePrefixText": latest_cached_prefix,
         "cachedTrueNextText": latest_cached_next,
+        "trueRuntimeBackend": target_session.true_runtime_backend if target_session is not None else "",
+        "llamaServerSlotId": target_session.llama_server_slot_id if target_session is not None else -1,
         "targetSessionClosed": target_session is not None,
         "error": "",
     }
@@ -1450,6 +1689,7 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "backendLabel": "desktop-llama.cpp-wsl-cli",
                 "modelPath": str(self.server.config.model_path),
                 "requestLogPath": str(self.server.config.request_log_path),
+                "llamaServerBaseUrl": self.server.config.llama_server_base_url,
                 "ipv4Addresses": detect_ipv4_addresses(),
                 "speculativeSessionCount": self.server.session_count(),
                 "targetSessionCount": self.server.target_session_count(),
@@ -1469,6 +1709,7 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "serverHost": self.server.config.host,
                 "serverPort": self.server.config.port,
                 "requestLogPath": str(self.server.config.request_log_path),
+                "llamaServerBaseUrl": self.server.config.llama_server_base_url,
                 "ipv4Addresses": detect_ipv4_addresses(),
                 "speculativeSessionCount": self.server.session_count(),
                 "targetSessionCount": self.server.target_session_count(),
@@ -1609,7 +1850,8 @@ def main() -> int:
     server = InferenceServer((config.host, config.port), config)
     print(
         f"desktop_inference_service listening on http://{config.host}:{config.port} "
-        f"using model {config.model_path.name}",
+        f"using model {config.model_path.name}"
+        f"{' with llama-server ' + config.llama_server_base_url if config.llama_server_base_url else ''}",
         flush=True,
     )
     try:

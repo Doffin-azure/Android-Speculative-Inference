@@ -27,7 +27,7 @@ For every future core feature node:
 The current code below covers the present speculative scheme:
 
 1. desktop target-session state
-2. desktop true-verifier next-token call
+2. desktop true-verifier next-token / chunk call
 3. desktop true-verifier comparison loop
 4. desktop `propose` mode dispatch
 5. Android speculative multi-step regression loop
@@ -58,6 +58,16 @@ class TargetSessionState:
     target_token_ids: list[int]
     accepted_token_count: int
     mismatch_count: int
+    true_verifier_call_count: int
+    last_true_expected_token_id: int
+    last_true_expected_token_text: str
+    true_prefix_cache: dict[str, str]
+    true_runtime_backend: str
+    llama_server_slot_id: int
+    last_true_chunk_start: int
+    last_true_chunk_consumed: int
+    true_cache_hit_streak: int
+    true_fetch_streak: int
     created_at_ms: int
     updated_at_ms: int
 ```
@@ -68,13 +78,15 @@ Explanation:
 - `accepted_text` is the current accepted assistant prefix.
 - `target_preview_text` and `last_replay_prompt` hold current verifier-side debugging state.
 - `target_token_ids`, `accepted_token_count`, and `mismatch_count` track verifier progress.
+- `true_runtime_backend` and `llama_server_slot_id` now record whether the true verifier is running through standalone `llama-cli` replay or through a fixed `llama-server` slot.
+- `last_true_chunk_start`, `last_true_chunk_consumed`, `true_cache_hit_streak`, and `true_fetch_streak` now expose verifier continuity state that was previously only implicit.
 
 Why this is core:
 
 - The later true verifier cannot be built cleanly if verifier state only lives inside the HTTP/session wrapper.
 - This object is the state anchor for the desktop verifier.
 
-## 2. Desktop True Verifier Next-Token Call
+## 2. Desktop True Verifier Next-Token / Chunk Call
 
 File:
 
@@ -83,7 +95,39 @@ File:
 Core code:
 
 ```python
-def run_true_target_next_text(
+def run_generation_from_server_completion(
+    config: ServiceConfig,
+    *,
+    request_id: str,
+    model: str,
+    full_prompt: str,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    slot_id: int,
+    cache_prompt: bool,
+) -> dict[str, Any]:
+    response = request_json(
+        "POST",
+        f"{config.llama_server_base_url}/completion",
+        {
+            "prompt": full_prompt,
+            "n_predict": max(1, max_tokens),
+            "temperature": temperature,
+            "top_p": top_p,
+            "cache_prompt": cache_prompt,
+            "id_slot": slot_id,
+            "return_tokens": True,
+            "stream": False,
+            "n_keep": -1,
+        },
+    )
+    return {
+        "outputText": str(response.get("content") or ""),
+        "backendLabel": "desktop-llama.cpp-server",
+    }
+
+def run_true_target_chunk_text(
     config: ServiceConfig,
     *,
     request_id: str,
@@ -91,32 +135,45 @@ def run_true_target_next_text(
     system_prompt: str,
     user_prompt: str,
     accepted_text: str,
+    max_tokens: int,
+    target_session: TargetSessionState | None = None,
 ) -> dict[str, Any]:
     replay_prompt = build_replay_prompt(system_prompt, user_prompt, accepted_text)
-    response = run_generation_from_full_prompt(
-        config,
-        request_id=request_id,
-        model=model,
-        full_prompt=replay_prompt,
-        max_tokens=DEFAULT_TRUE_VERIFY_MAX_TOKENS,
-        temperature=0.0,
-        top_p=1.0,
-    )
+    if config.llama_server_base_url and target_session is not None and target_session.llama_server_slot_id >= 0:
+        response = run_generation_from_server_completion(
+            config,
+            request_id=request_id,
+            model=model,
+            full_prompt=replay_prompt,
+            max_tokens=max(1, max_tokens),
+            temperature=0.0,
+            top_p=1.0,
+            slot_id=target_session.llama_server_slot_id,
+            cache_prompt=True,
+        )
+        response.setdefault("debug", {})
+        response["debug"]["runtimeBackend"] = "llama_server_slot"
+        return response
+
+    response = run_generation_from_full_prompt(...)
     response.setdefault("debug", {})
     response["debug"]["replayPrompt"] = replay_prompt
+    response["debug"]["runtimeBackend"] = "llama_cli_replay"
     return response
 ```
 
 Explanation:
 
-- This is the first real desktop verifier entry point.
-- It rebuilds the prompt from the current accepted assistant prefix and asks the target model for only one next token.
-- `temperature=0.0` and `top_p=1.0` make this path act like a deterministic verifier step instead of a normal sampling path.
+- This is now the main runtime seam for the true verifier.
+- It still rebuilds the prompt from the current accepted assistant prefix, but it can now fetch deterministic target continuation through two different runtimes:
+  - standalone `llama-cli`
+  - `llama-server` `/completion` with a fixed slot and prompt-cache reuse
+- `temperature=0.0` and `top_p=1.0` keep the path deterministic so it behaves like a verifier, not like an ordinary sampling call.
 
 Why this is core:
 
-- Before this function existed, verifier truth came from preview text or replay text proxies.
-- After this function was added, desktop gained a real target-model next-token check path.
+- Before this function family existed, verifier truth came from preview text or replay text proxies.
+- After it was strengthened, desktop gained a true verifier that can now also route through a more persistent `llama-server` slot-backed runtime.
 
 Current strengthening:
 
@@ -196,6 +253,7 @@ Explanation:
 - The cache is now session-wide instead of single-entry, so multiple previously seen prefixes can be reused inside the same desktop target session.
 - The true verifier now also uses a dedicated helper to read the latest cache entry, so debug output no longer duplicates cache-selection logic in multiple response builders.
 - The true verifier now fetches a small continuation chunk for the current prefix and compares the proposal against that chunk, so one verifier call can now accept multiple tokens before returning a correction.
+- The true verifier can now fetch that chunk through a fixed `llama-server` slot, and the target session tracks where the latest chunk started and how many committed tokens it consumed.
 
 Why this is core:
 
