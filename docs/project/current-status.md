@@ -127,6 +127,7 @@ Practical interpretation:
 - do not reopen backend-load debugging unless a fresh device run fails again
 - do not jump straight into speculative decoding protocol work
 - do not replace the proven local path while introducing the remote path
+- use `docs/project/project-progress-summary.md` when you need the milestone-level view of everything completed so far
 - use `docs/project/computer-inference-service-boundary.md` for architecture boundaries
 - use `docs/project/desktop-inference-service-runbook.md` for the working desktop-service baseline
 - use `docs/project/speculative-decoding-protocol-draft.md` for the first speculative message set
