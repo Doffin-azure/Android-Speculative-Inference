@@ -32,7 +32,8 @@ Current real stage:
 - the desktop service now exposes an explicit speculative verifier mode so the current prompt-stub harness and a future llama-backed verifier can share the same protocol boundary
 - the Android app now surfaces the active speculative verifier mode and target preview text returned by desktop session start
 - the Android UI now also surfaces the active speculative verifier mode directly outside the session summary so verifier-mode changes are easier to spot during testing
-- the next active stage is replacing that deterministic verify stub with real target-model token verification
+- the `llama_preview` verifier mode now uses llama preview text to drive accepted/correction semantics during `propose`
+- the next active stage is replacing preview-text proxy verification with real target-model token verification
 
 ## Active Technical Findings
 
@@ -69,6 +70,7 @@ Current strongest conclusion:
 - the desktop speculative `propose` step no longer accepts every proposal blindly; it now returns `acceptedCount`, `rejectedFromIndex`, and `correctionTokenIds`
 - the Android app can now deliberately trigger a mismatch and surface correction-token behavior directly in the speculative debug UI
 - the desktop service now reports a `speculativeVerifierMode` and can optionally prepare a llama-backed preview text while keeping the current protocol stable
+- the `llama_preview` mode is no longer preview-only; it now uses preview text as the current target proxy for accepted-prefix and correction-token behavior
 
 ## Important Files
 
@@ -98,7 +100,8 @@ Primary blocker:
 - the next blocker is no longer basic phone-to-computer reachability
 - the next blocker is no longer the absence of desktop speculative endpoints
 - the next blocker is no longer the absence of speculative verify semantics
-- the next blocker is replacing the deterministic prompt-derived verify stub with real target-model token verification
+- the next blocker is no longer the lack of a llama-backed target proxy
+- the next blocker is replacing preview-text proxy verification with real target-model token verification
 
 Secondary blocker:
 
@@ -119,7 +122,7 @@ Use this order unless a new runtime failure appears:
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
 2. use `docs/project/speculative-decoding-protocol-draft.md` as the protocol reference
 3. keep the Android speculative stub path as the regression harness
-4. replace deterministic prompt-derived verification with real token verification on the desktop side
+4. replace preview-text proxy verification with real token verification on the desktop side
 5. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:

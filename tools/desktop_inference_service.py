@@ -413,6 +413,11 @@ def build_stub_target_token_ids(system_prompt: str, user_prompt: str) -> list[in
     return token_ids or [0]
 
 
+def token_ids_from_text(text: str) -> list[int]:
+    token_ids = [ord(char) for char in text][:256]
+    return token_ids or [0]
+
+
 def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession) -> str:
     if config.speculative_verifier_mode != "llama_preview":
         return ""
@@ -432,6 +437,12 @@ def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession
     if preview_response.get("error"):
         return ""
     return str(preview_response.get("outputText") or "").strip()
+
+
+def resolve_session_target_token_ids(session: SpeculativeSession) -> list[int]:
+    if session.verifier_mode == "llama_preview" and session.target_preview_text.strip():
+        return token_ids_from_text(session.target_preview_text)
+    return build_stub_target_token_ids(session.system_prompt, session.user_prompt)
 
 
 def token_ids_to_debug_text(token_ids: list[int]) -> str:
@@ -487,6 +498,7 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
 def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
     session = build_speculative_session(payload, server.config)
     session.target_preview_text = build_target_preview_text(server.config, session)
+    session.target_token_ids = resolve_session_target_token_ids(session)
     with server.sessions_lock:
         server.sessions[session.session_id] = session
 
@@ -567,12 +579,21 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     session.status = "verifying"
     session.updated_at_ms = int(time.time() * 1000)
 
-    status = (
-        "accepted_by_prompt_stub"
-        if not correction_token_ids and rejected_from_index == -1
-        else "corrected_by_prompt_stub"
-    )
+    base_status = "accepted" if not correction_token_ids and rejected_from_index == -1 else "corrected"
+    if session.verifier_mode == "llama_preview":
+        status = f"{base_status}_by_llama_preview"
+    else:
+        status = f"{base_status}_by_prompt_stub"
     session.status = status
+
+    warning = (
+        "Desktop speculative verification is currently using llama preview text as a target proxy. "
+        "It now computes accepted prefixes and correction tokens from the preview text, but it still does not run true target-model token verification yet."
+        if session.verifier_mode == "llama_preview"
+        else
+        "Desktop speculative verification is currently a deterministic prompt-derived stub. "
+        "It now computes accepted prefixes and correction tokens, but it still does not run target-model token verification yet."
+    )
 
     return {
         "protocolVersion": session.protocol_version,
@@ -589,10 +610,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
         "status": status,
-        "warning": (
-            "Desktop speculative verification is currently a deterministic prompt-derived stub. "
-            "It now computes accepted prefixes and correction tokens, but it still does not run target-model token verification yet."
-        ),
+        "warning": warning,
         "error": "",
         "debug": {
             "verifierMode": session.verifier_mode,
