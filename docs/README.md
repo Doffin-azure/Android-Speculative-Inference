@@ -6,8 +6,8 @@ Its purpose is to keep high-signal operational knowledge in one place instead of
 
 ## Recommended Read Order
 
-1. `environment/desktop-gguf-runtime-supplement.md`
-2. `project/current-status.md`
+1. `project/current-status.md`
+2. `environment/desktop-gguf-runtime-supplement.md`
 3. `workflow/collaboration-rules.md`
 4. `archive/root-document-map.md`
 
@@ -39,10 +39,10 @@ Instead:
 
 ## Current Most Useful Documents
 
+- `project/current-status.md`
+  Use this first when resuming technical work and deciding what to do next.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
-- `project/current-status.md`
-  Use this when resuming technical work.
 - `workflow/collaboration-rules.md`
   Use this when checking build, git-sync, and bundle responsibilities.
 
