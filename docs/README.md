@@ -41,6 +41,8 @@ Instead:
 
 - `project/current-status.md`
   Use this first when resuming technical work and deciding what to do next.
+- `project/android-local-baseline-checklist.md`
+  Use this when rerunning the proven Android local model-load and generation baseline on device.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
 - `workflow/collaboration-rules.md`
@@ -54,6 +56,8 @@ Instead:
   The supplemental environment record for the computer-side GGUF inspection and desktop `llama.cpp` runtime attempt.
 - `docs/project/current-status.md`
   The shortest technical handoff for what is done, what is blocked, and what the current next step should be.
+- `docs/project/android-local-baseline-checklist.md`
+  The repeatable on-device checklist for re-confirming the Android local runtime baseline.
 - `docs/workflow/collaboration-rules.md`
   The collaboration contract for git sync, Android Studio verification, and the "user does bundle" boundary.
 - `docs/archive/root-document-map.md`
