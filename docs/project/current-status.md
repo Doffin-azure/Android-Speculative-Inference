@@ -37,6 +37,7 @@ Current real stage:
 - the desktop service now also exposes a `llama_replay_proxy` verifier mode that replays the already accepted assistant prefix back into llama-cli before verifying the next proposal chunk
 - the Android speculative stub client now runs a short multi-step session loop instead of stopping after a single `propose`
 - the desktop speculative session now also persists explicit `acceptedText`, `lastReplayPrompt`, and `lastTargetTextDelta` state for replay-based verifier debugging
+- the replay verifier now prefers explicit `acceptedText` over token-id debug reconstruction when building the next replay prompt, and the Android diagnostics now surface that replay-session state
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings

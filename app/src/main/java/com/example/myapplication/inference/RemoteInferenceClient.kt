@@ -57,6 +57,8 @@ data class SpeculativeStartResponse(
     val status: String,
     val verifierMode: String,
     val targetPreviewText: String,
+    val acceptedText: String,
+    val lastReplayPrompt: String,
     val fallbackAvailable: Boolean,
     val error: String
 )
@@ -79,6 +81,8 @@ data class SpeculativeProposeResponse(
     val rejectedFromIndex: Int,
     val correctionTokenIds: List<Int>,
     val targetTextDelta: String,
+    val acceptedText: String,
+    val lastReplayPrompt: String,
     val warning: String,
     val finishReason: String,
     val error: String
@@ -96,6 +100,8 @@ data class SpeculativeCloseResponse(
     val reason: String,
     val acceptedTokenCount: Int,
     val mismatchCount: Int,
+    val acceptedText: String,
+    val lastTargetTextDelta: String,
     val lastFinishReason: String,
     val error: String
 )
@@ -222,6 +228,8 @@ class RemoteInferenceClient {
                 status = json.optString("status", "unknown"),
                 verifierMode = json.optString("verifierMode"),
                 targetPreviewText = json.optString("targetPreviewText"),
+                acceptedText = json.optString("acceptedText"),
+                lastReplayPrompt = json.optJSONObject("debug")?.optString("lastReplayPrompt").orEmpty(),
                 fallbackAvailable = json.optBoolean("fallbackAvailable", false),
                 error = error
             )
@@ -267,6 +275,8 @@ class RemoteInferenceClient {
                 rejectedFromIndex = json.optInt("rejectedFromIndex", -1),
                 correctionTokenIds = json.optJSONArray("correctionTokenIds").toIntList(),
                 targetTextDelta = json.optString("targetTextDelta"),
+                acceptedText = json.optString("acceptedText"),
+                lastReplayPrompt = json.optJSONObject("debug")?.optString("lastReplayPrompt").orEmpty(),
                 warning = json.optString("warning"),
                 finishReason = json.optString("finishReason"),
                 error = error
@@ -307,6 +317,8 @@ class RemoteInferenceClient {
                 reason = json.optString("reason", request.reason),
                 acceptedTokenCount = json.optInt("acceptedTokenCount", 0),
                 mismatchCount = json.optInt("mismatchCount", 0),
+                acceptedText = json.optString("acceptedText"),
+                lastTargetTextDelta = json.optString("lastTargetTextDelta"),
                 lastFinishReason = json.optString("lastFinishReason"),
                 error = error
             )
