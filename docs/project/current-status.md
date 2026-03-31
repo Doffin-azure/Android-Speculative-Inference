@@ -24,7 +24,8 @@ Current real stage:
 - the Android app now contains a first normal remote client path and local/remote mode switch
 - the project now also has a dedicated remote connectivity probe path with desktop-side request logging
 - the Android-to-desktop normal remote path has now completed a successful end-to-end validation run
-- the next active stage is stabilizing the ordinary remote baseline and then defining the speculative layer on top of it
+- the project now has a first draft of the speculative decoding protocol
+- the next active stage is implementing the first speculative session flow on top of the proven local and ordinary remote baselines
 
 ## Active Technical Findings
 
@@ -54,6 +55,7 @@ Current strongest conclusion:
 - the codebase now has the minimum Android-side pieces needed to call that remote service
 - the project now has a separate network probe path so connectivity can be tested without involving model generation
 - the ordinary remote path has now also been validated from the Android device over the LAN against the desktop service
+- the speculative layer now has a first explicit message-set and state-machine draft instead of only a high-level goal
 
 ## Important Files
 
@@ -81,7 +83,7 @@ Primary blocker:
 
 - the next blocker is no longer Android local correctness
 - the next blocker is no longer basic phone-to-computer reachability
-- the next blocker is turning the newly proven ordinary remote path into a stable baseline for the later speculative protocol
+- the next blocker is translating the protocol draft into the first working speculative session endpoints and client state
 
 Secondary blocker:
 
@@ -91,18 +93,19 @@ Secondary blocker:
 
 The next step should focus on one of these:
 
-1. record the successful ordinary remote baseline as a completed milestone
-2. tighten remote-mode diagnostics and small UX details while the validation is still fresh
-3. start defining the speculative decoding protocol on top of the now-proven local + remote baselines
+1. add the first speculative session endpoints to the desktop service
+2. add phone-side speculative session state above the existing local and remote paths
+3. keep ordinary remote fallback active while the speculative path is introduced
 
 ## Immediate Execution Order
 
 Use this order unless a new runtime failure appears:
 
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
-2. preserve the currently known-good ordinary remote path as the baseline reference
-3. keep the local and ordinary remote paths both usable while defining the speculative layer
-4. only after the speculative contract is clear, decide what additional client/server restructuring is needed
+2. use `docs/project/speculative-decoding-protocol-draft.md` as the protocol reference
+3. add the smallest speculative session lifecycle on the desktop side first
+4. add phone-side speculative session state without removing the ordinary remote fallback
+5. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
 
@@ -111,6 +114,7 @@ Practical interpretation:
 - do not replace the proven local path while introducing the remote path
 - use `docs/project/computer-inference-service-boundary.md` for architecture boundaries
 - use `docs/project/desktop-inference-service-runbook.md` for the working desktop-service baseline
+- use `docs/project/speculative-decoding-protocol-draft.md` for the first speculative message set
 - remember that the Android app currently uses ordinary HTTP, so the desktop service host must be reachable from the device or emulator
 - use the probe endpoint and desktop request log first when debugging "cannot connect" failures
 - treat the current local and ordinary remote paths as proven baselines, not open hypotheses
@@ -119,9 +123,9 @@ Practical interpretation:
 
 The next node is complete when all of the following are true:
 
-- the successful ordinary remote path is recorded clearly in project documentation
-- the app surfaces remote request metadata clearly enough to support future debugging
-- the project has a concrete first draft of the speculative-layer contract
+- the desktop service exposes the first speculative session endpoints
+- the phone can open and close a speculative session cleanly
+- ordinary remote fallback remains available
 - the local Android baseline remains the fallback reference while the remote path is added
 - the close-out includes the required git-sync explanation and markdown summary update
 
@@ -132,6 +136,10 @@ Once the ordinary remote boundary is defined, the next architectural step is:
 1. define the speculative draft/verify protocol
 2. decide how the phone-local model and computer-hosted model exchange token work
 3. preserve fallback behavior between local-only, remote-only, and future speculative modes
+
+That protocol-definition step is now complete at the draft level.
+
+The next implementation step is to turn it into the first real speculative session lifecycle.
 
 ## Android Studio Verification Needed By User
 
