@@ -236,6 +236,28 @@ class SpeculativeSession:
     last_replay_prompt: str
     last_target_text_delta: str
     last_finish_reason: str
+    target_session_id: str
+    created_at_ms: int
+    updated_at_ms: int
+
+
+@dataclass
+class TargetSessionState:
+    target_session_id: str
+    speculative_session_id: str
+    request_id: str
+    verifier_mode: str
+    verifier_stage: str
+    target_model: str
+    system_prompt: str
+    user_prompt: str
+    accepted_text: str
+    target_preview_text: str
+    last_replay_prompt: str
+    last_target_text_delta: str
+    target_token_ids: list[int]
+    accepted_token_count: int
+    mismatch_count: int
     created_at_ms: int
     updated_at_ms: int
 
@@ -581,118 +603,147 @@ def token_ids_from_text(text: str) -> list[int]:
     return token_ids or [0]
 
 
-def build_target_preview_text(config: ServiceConfig, session: SpeculativeSession) -> str:
-    if config.speculative_verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
-        return ""
+def build_target_preview_text(
+    config: ServiceConfig,
+    *,
+    verifier_mode: str,
+    request_id: str,
+    target_model: str,
+    system_prompt: str,
+    user_prompt: str,
+    accepted_text: str,
+    temperature: float,
+    top_p: float,
+) -> tuple[str, str]:
+    if verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
+        return "", ""
 
-    if config.speculative_verifier_mode == "llama_replay_proxy":
-        replay_prompt = build_replay_prompt(
-            session.system_prompt,
-            session.user_prompt,
-            current_assistant_prefix_text(session),
-        )
-        session.last_replay_prompt = replay_prompt
+    if verifier_mode == "llama_replay_proxy":
+        replay_prompt = build_replay_prompt(system_prompt, user_prompt, accepted_text)
         preview_response = run_generation_from_full_prompt(
             config,
-            request_id=f"{session.request_id}-replay-preview",
-            model=session.target_model,
+            request_id=f"{request_id}-replay-preview",
+            model=target_model,
             full_prompt=replay_prompt,
             max_tokens=DEFAULT_LLAMA_REPLAY_MAX_TOKENS,
-            temperature=session.temperature,
-            top_p=session.top_p,
+            temperature=temperature,
+            top_p=top_p,
         )
         if preview_response.get("error"):
-            return ""
-        return str(preview_response.get("outputText") or "").strip()
+            return "", replay_prompt
+        return str(preview_response.get("outputText") or "").strip(), replay_prompt
 
     preview_response = run_generation(
         config,
         {
-            "requestId": f"{session.request_id}-preview",
-            "model": session.target_model,
-            "systemPrompt": session.system_prompt,
-            "userPrompt": session.user_prompt,
+            "requestId": f"{request_id}-preview",
+            "model": target_model,
+            "systemPrompt": system_prompt,
+            "userPrompt": user_prompt,
             "maxTokens": DEFAULT_LLAMA_PREVIEW_MAX_TOKENS,
-            "temperature": session.temperature,
-            "topP": session.top_p,
+            "temperature": temperature,
+            "topP": top_p,
         },
     )
     if preview_response.get("error"):
-        return ""
-    return str(preview_response.get("outputText") or "").strip()
+        return "", ""
+    return str(preview_response.get("outputText") or "").strip(), ""
+
+
+def resolve_target_token_ids(
+    *,
+    verifier_mode: str,
+    system_prompt: str,
+    user_prompt: str,
+    accepted_token_ids: list[int],
+    target_preview_text: str,
+) -> list[int]:
+    if verifier_mode == "llama_replay_proxy":
+        prefix_token_ids = accepted_token_ids[:]
+        if target_preview_text.strip():
+            return prefix_token_ids + token_ids_from_text(target_preview_text)
+        return prefix_token_ids or [0]
+    if verifier_mode in {"llama_preview", "llama_step_proxy"} and target_preview_text.strip():
+        return token_ids_from_text(target_preview_text)
+    return build_stub_target_token_ids(system_prompt, user_prompt)
 
 
 def resolve_session_target_token_ids(session: SpeculativeSession) -> list[int]:
-    if session.verifier_mode == "llama_replay_proxy":
-        prefix_token_ids = session.accepted_token_ids[:]
-        if session.target_preview_text.strip():
-            return prefix_token_ids + token_ids_from_text(session.target_preview_text)
-        return prefix_token_ids or [0]
-    if session.verifier_mode in {"llama_preview", "llama_step_proxy"} and session.target_preview_text.strip():
-        return token_ids_from_text(session.target_preview_text)
-    return build_stub_target_token_ids(session.system_prompt, session.user_prompt)
+    return resolve_target_token_ids(
+        verifier_mode=session.verifier_mode,
+        system_prompt=session.system_prompt,
+        user_prompt=session.user_prompt,
+        accepted_token_ids=session.accepted_token_ids,
+        target_preview_text=session.target_preview_text,
+    )
 
 
-def refresh_llama_proxy_preview(
+def resolve_target_session_token_ids(
+    target_session: TargetSessionState,
+    accepted_token_ids: list[int],
+) -> list[int]:
+    return resolve_target_token_ids(
+        verifier_mode=target_session.verifier_mode,
+        system_prompt=target_session.system_prompt,
+        user_prompt=target_session.user_prompt,
+        accepted_token_ids=accepted_token_ids,
+        target_preview_text=target_session.target_preview_text,
+    )
+
+
+def refresh_llama_proxy_preview_for_target_session(
     config: ServiceConfig,
-    session: SpeculativeSession,
+    target_session: TargetSessionState,
+    accepted_token_ids: list[int],
     min_target_chars: int,
 ) -> None:
-    if session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
+    if target_session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
         return
 
-    current_chars = max(0, len(session.target_token_ids) - session.accepted_token_count)
+    current_chars = max(0, len(target_session.target_token_ids) - target_session.accepted_token_count)
     if current_chars >= min_target_chars:
         return
 
-    if session.verifier_mode == "llama_replay_proxy":
-        desired_tokens = max(
-            DEFAULT_LLAMA_REPLAY_MAX_TOKENS,
-            min_target_chars + 8,
-            current_chars + 8,
-        )
+    if target_session.verifier_mode == "llama_replay_proxy":
+        desired_tokens = max(DEFAULT_LLAMA_REPLAY_MAX_TOKENS, min_target_chars + 8, current_chars + 8)
         replay_prompt = build_replay_prompt(
-            session.system_prompt,
-            session.user_prompt,
-            current_assistant_prefix_text(session),
+            target_session.system_prompt,
+            target_session.user_prompt,
+            target_session.accepted_text,
         )
-        session.last_replay_prompt = replay_prompt
+        target_session.last_replay_prompt = replay_prompt
         replay_response = run_generation_from_full_prompt(
             config,
-            request_id=f"{session.request_id}-replay-refresh-{desired_tokens}",
-            model=session.target_model,
+            request_id=f"{target_session.request_id}-replay-refresh-{desired_tokens}",
+            model=target_session.target_model,
             full_prompt=replay_prompt,
             max_tokens=desired_tokens,
-            temperature=session.temperature,
-            top_p=session.top_p,
+            temperature=DEFAULT_TEMPERATURE,
+            top_p=DEFAULT_TOP_P,
         )
         refreshed_text = str(replay_response.get("outputText") or "").strip()
         if refreshed_text:
-            session.target_preview_text = refreshed_text
-            session.target_token_ids = session.accepted_token_ids[:] + token_ids_from_text(refreshed_text)
+            target_session.target_preview_text = refreshed_text
+            target_session.target_token_ids = accepted_token_ids[:] + token_ids_from_text(refreshed_text)
         return
 
-    desired_tokens = max(
-        DEFAULT_LLAMA_PREVIEW_MAX_TOKENS,
-        min_target_chars + 8,
-        current_chars + 8,
-    )
+    desired_tokens = max(DEFAULT_LLAMA_PREVIEW_MAX_TOKENS, min_target_chars + 8, current_chars + 8)
     preview_response = run_generation(
         config,
         {
-            "requestId": f"{session.request_id}-preview-refresh-{desired_tokens}",
-            "model": session.target_model,
-            "systemPrompt": session.system_prompt,
-            "userPrompt": session.user_prompt,
+            "requestId": f"{target_session.request_id}-preview-refresh-{desired_tokens}",
+            "model": target_session.target_model,
+            "systemPrompt": target_session.system_prompt,
+            "userPrompt": target_session.user_prompt,
             "maxTokens": desired_tokens,
-            "temperature": session.temperature,
-            "topP": session.top_p,
+            "temperature": DEFAULT_TEMPERATURE,
+            "topP": DEFAULT_TOP_P,
         },
     )
     refreshed_text = str(preview_response.get("outputText") or "").strip()
     if refreshed_text:
-        session.target_preview_text = refreshed_text
-        session.target_token_ids = token_ids_from_text(refreshed_text)
+        target_session.target_preview_text = refreshed_text
+        target_session.target_token_ids = resolve_target_session_token_ids(target_session, accepted_token_ids)
 
 
 def token_ids_to_debug_text(token_ids: list[int]) -> str:
@@ -711,6 +762,55 @@ def current_assistant_prefix_text(session: SpeculativeSession) -> str:
     if session.accepted_token_ids:
         return token_ids_to_debug_text(session.accepted_token_ids)
     return ""
+
+
+def build_target_session_state(session: SpeculativeSession) -> TargetSessionState:
+    return TargetSessionState(
+        target_session_id=str(uuid.uuid4()),
+        speculative_session_id=session.session_id,
+        request_id=session.request_id,
+        verifier_mode=session.verifier_mode,
+        verifier_stage=infer_verifier_stage(session.verifier_mode),
+        target_model=session.target_model,
+        system_prompt=session.system_prompt,
+        user_prompt=session.user_prompt,
+        accepted_text=session.accepted_text,
+        target_preview_text=session.target_preview_text,
+        last_replay_prompt=session.last_replay_prompt,
+        last_target_text_delta=session.last_target_text_delta,
+        target_token_ids=session.target_token_ids[:],
+        accepted_token_count=session.accepted_token_count,
+        mismatch_count=session.mismatch_count,
+        created_at_ms=session.created_at_ms,
+        updated_at_ms=session.updated_at_ms,
+    )
+
+
+def sync_target_session_state(target_session: TargetSessionState, session: SpeculativeSession) -> None:
+    target_session.verifier_mode = session.verifier_mode
+    target_session.verifier_stage = infer_verifier_stage(session.verifier_mode)
+    target_session.target_model = session.target_model
+    target_session.system_prompt = session.system_prompt
+    target_session.user_prompt = session.user_prompt
+    target_session.accepted_text = session.accepted_text
+    target_session.target_preview_text = session.target_preview_text
+    target_session.last_replay_prompt = session.last_replay_prompt
+    target_session.last_target_text_delta = session.last_target_text_delta
+    target_session.target_token_ids = session.target_token_ids[:]
+    target_session.accepted_token_count = session.accepted_token_count
+    target_session.mismatch_count = session.mismatch_count
+    target_session.updated_at_ms = session.updated_at_ms
+
+
+def apply_target_session_state_to_session(
+    session: SpeculativeSession,
+    target_session: TargetSessionState,
+) -> None:
+    session.target_preview_text = target_session.target_preview_text
+    session.last_replay_prompt = target_session.last_replay_prompt
+    session.last_target_text_delta = target_session.last_target_text_delta
+    session.target_token_ids = target_session.target_token_ids[:]
+    session.accepted_text = target_session.accepted_text
 
 
 def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) -> SpeculativeSession:
@@ -751,6 +851,7 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
         last_replay_prompt="",
         last_target_text_delta="",
         last_finish_reason="",
+        target_session_id="",
         created_at_ms=now_ms,
         updated_at_ms=now_ms,
     )
@@ -758,10 +859,23 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
 
 def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
     session = build_speculative_session(payload, server.config)
-    session.target_preview_text = build_target_preview_text(server.config, session)
+    session.target_preview_text, session.last_replay_prompt = build_target_preview_text(
+        server.config,
+        verifier_mode=session.verifier_mode,
+        request_id=session.request_id,
+        target_model=session.target_model,
+        system_prompt=session.system_prompt,
+        user_prompt=session.user_prompt,
+        accepted_text=current_assistant_prefix_text(session),
+        temperature=session.temperature,
+        top_p=session.top_p,
+    )
     session.target_token_ids = resolve_session_target_token_ids(session)
+    target_session = build_target_session_state(session)
+    session.target_session_id = target_session.target_session_id
     with server.sessions_lock:
         server.sessions[session.session_id] = session
+        server.target_sessions[target_session.target_session_id] = target_session
 
     return {
         "protocolVersion": session.protocol_version,
@@ -769,6 +883,7 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "sessionId": session.session_id,
         "requestId": session.request_id,
         "status": session.status,
+        "targetSessionId": session.target_session_id,
         "targetModel": session.target_model,
         "draftModel": session.draft_model,
         "verifierMode": session.verifier_mode,
@@ -779,6 +894,7 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "targetPreviewText": session.target_preview_text,
         "acceptedText": session.accepted_text,
         "debug": {
+            "targetSessionId": session.target_session_id,
             "lastReplayPrompt": session.last_replay_prompt,
         },
         "error": "",
@@ -792,8 +908,11 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
 
     with server.sessions_lock:
         session = server.sessions.get(session_id)
+        target_session = server.target_sessions.get(session.target_session_id) if session is not None else None
     if session is None:
         raise ValueError(f"Unknown speculative session: {session_id}")
+    if target_session is None:
+        raise ValueError(f"Unknown target session for speculative session: {session_id}")
 
     draft_step = int(payload.get("draftStep") or 0)
     proposed_token_ids = parse_int_list("proposedTokenIds", payload.get("proposedTokenIds"))
@@ -801,11 +920,13 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     if not proposed_token_ids:
         raise ValueError("proposedTokenIds must not be empty.")
 
-    refresh_llama_proxy_preview(
+    refresh_llama_proxy_preview_for_target_session(
         server.config,
-        session,
+        target_session,
+        session.accepted_token_ids,
         session.accepted_token_count + len(proposed_token_ids) + max_correction_tokens,
     )
+    apply_target_session_state_to_session(session, target_session)
 
     target_index = session.accepted_token_count
     target_remaining = session.target_token_ids[target_index:]
@@ -853,6 +974,10 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     session.last_finish_reason = finish_reason
     session.status = "verifying"
     session.updated_at_ms = int(time.time() * 1000)
+    with server.sessions_lock:
+        target_session = server.target_sessions.get(session.target_session_id)
+        if target_session is not None:
+            sync_target_session_state(target_session, session)
 
     base_status = "accepted" if not correction_token_ids and rejected_from_index == -1 else "corrected"
     if session.verifier_mode == "llama_replay_proxy":
@@ -881,6 +1006,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "type": "verifyDraftResult",
         "sessionId": session.session_id,
         "requestId": session.request_id,
+        "targetSessionId": session.target_session_id,
         "draftStep": draft_step,
         "acceptedCount": accepted_count,
         "acceptedTokenIds": accepted_token_ids,
@@ -896,6 +1022,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "acceptedText": session.accepted_text,
         "error": "",
         "debug": {
+            "targetSessionId": session.target_session_id,
             "verifierMode": session.verifier_mode,
             "targetIndexBeforeStep": target_index,
             "targetRemainingCount": len(target_remaining),
@@ -961,12 +1088,15 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         session = server.sessions.pop(session_id, None)
     if session is None:
         raise ValueError(f"Unknown speculative session: {session_id}")
+    with server.sessions_lock:
+        target_session = server.target_sessions.pop(session.target_session_id, None)
 
     return {
         "protocolVersion": session.protocol_version,
         "type": "closeSessionResult",
         "sessionId": session.session_id,
         "requestId": session.request_id,
+        "targetSessionId": session.target_session_id,
         "status": "closed",
         "reason": reason,
         "verifierMode": session.verifier_mode,
@@ -976,6 +1106,7 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "acceptedText": session.accepted_text,
         "lastTargetTextDelta": session.last_target_text_delta,
         "lastFinishReason": session.last_finish_reason,
+        "targetSessionClosed": target_session is not None,
         "error": "",
     }
 
@@ -990,12 +1121,13 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "backendLabel": "desktop-llama.cpp-wsl-cli",
                 "modelPath": str(self.server.config.model_path),
                 "requestLogPath": str(self.server.config.request_log_path),
-                  "ipv4Addresses": detect_ipv4_addresses(),
-                  "speculativeSessionCount": self.server.session_count(),
-                  "speculativeProtocolVersion": PROTOCOL_VERSION,
-                  "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
-                  "speculativeVerifierStage": infer_verifier_stage(self.server.config.speculative_verifier_mode),
-              }
+                "ipv4Addresses": detect_ipv4_addresses(),
+                "speculativeSessionCount": self.server.session_count(),
+                "targetSessionCount": self.server.target_session_count(),
+                "speculativeProtocolVersion": PROTOCOL_VERSION,
+                "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
+                "speculativeVerifierStage": infer_verifier_stage(self.server.config.speculative_verifier_mode),
+            }
             self._write_json(HTTPStatus.OK, payload)
             self._record_request(HTTPStatus.OK, payload)
             return
@@ -1007,12 +1139,13 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
                 "clientAddress": self.client_address[0],
                 "serverHost": self.server.config.host,
                 "serverPort": self.server.config.port,
-                  "requestLogPath": str(self.server.config.request_log_path),
-                  "ipv4Addresses": detect_ipv4_addresses(),
-                  "speculativeSessionCount": self.server.session_count(),
-                  "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
-                  "speculativeVerifierStage": infer_verifier_stage(self.server.config.speculative_verifier_mode),
-              }
+                "requestLogPath": str(self.server.config.request_log_path),
+                "ipv4Addresses": detect_ipv4_addresses(),
+                "speculativeSessionCount": self.server.session_count(),
+                "targetSessionCount": self.server.target_session_count(),
+                "speculativeVerifierMode": self.server.config.speculative_verifier_mode,
+                "speculativeVerifierStage": infer_verifier_stage(self.server.config.speculative_verifier_mode),
+            }
             self._write_json(HTTPStatus.OK, payload)
             self._record_request(HTTPStatus.OK, payload)
             return
@@ -1119,11 +1252,16 @@ class InferenceServer(ThreadingHTTPServer):
         super().__init__(server_address, InferenceRequestHandler)
         self.config = config
         self.sessions: dict[str, SpeculativeSession] = {}
+        self.target_sessions: dict[str, TargetSessionState] = {}
         self.sessions_lock = threading.Lock()
 
     def session_count(self) -> int:
         with self.sessions_lock:
             return len(self.sessions)
+
+    def target_session_count(self) -> int:
+        with self.sessions_lock:
+            return len(self.target_sessions)
 
 
 def main() -> int:

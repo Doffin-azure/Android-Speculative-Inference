@@ -39,6 +39,8 @@ Current real stage:
 - the desktop speculative session now also persists explicit `acceptedText`, `lastReplayPrompt`, and `lastTargetTextDelta` state for replay-based verifier debugging
 - the replay verifier now prefers explicit `acceptedText` over token-id debug reconstruction when building the next replay prompt, and the Android diagnostics now surface that replay-session state
 - the first minimum boundary for a real desktop target verifier is now written down so the next implementation node can switch verifier stage without reopening protocol design
+- the desktop service now keeps a separate internal target-session state object alongside each speculative session, so verifier-state continuity is no longer fully implicit inside the speculative session record
+- the desktop verifier now reads and refreshes target proxy text through the dedicated target-session state instead of treating the speculative session as the only source of verifier truth
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -81,6 +83,8 @@ Current strongest conclusion:
 - the new `llama_replay_proxy` mode now rebuilds target proxy text from the currently accepted assistant prefix, which is closer to true continuation verification than fixed preview text
 - the Android speculative harness can now record a short accepted/correction trace across multiple draft steps in the same session
 - the desktop session now keeps explicit replay-verifier state that can later map more cleanly onto a persistent target session implementation
+- the desktop service now also keeps an explicit internal target-session map and returns `targetSessionId`, which establishes the first persistent target-session boundary needed before `verifierStage` can move from `proxy_target` to `true_target`
+- the new target-session boundary is no longer passive bookkeeping; desktop `propose` now refreshes and rehydrates verifier target state through that target-session layer
 
 ## Important Files
 
@@ -113,6 +117,7 @@ Primary blocker:
 - the next blocker is no longer the lack of a llama-backed target proxy
 - the next blocker is no longer static llama preview coverage
 - the next blocker is no longer replay-free target continuation
+- the next blocker is no longer the absence of a desktop target-session boundary
 - the next blocker is replacing replay-based proxy verification with real target-model token verification
 
 Secondary blocker:
@@ -136,8 +141,10 @@ Use this order unless a new runtime failure appears:
 3. keep the Android speculative stub path as the regression harness
 4. use the Android multi-step speculative stub loop as the regression client
 5. treat `llama_replay_proxy` as the closest current verifier harness before real token verification
-6. replace replay-based proxy verification with real token verification on the desktop side
-7. only after the first speculative loop works, optimize chunking or transport
+6. use the new desktop target-session boundary as the implementation seam for real verifier work
+7. let desktop verifier state flow through target-session helpers instead of direct speculative-session mutation
+8. replace replay-based proxy verification with real token verification on the desktop side
+9. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
 
@@ -165,7 +172,7 @@ The next node is complete when all of the following are true:
 
 The current desktop proxy-verifier ladder is now complete through `llama_replay_proxy`.
 
-The remaining completion work for this node is replacing the proxy ladder with real target-model token verification inside a persistent target session.
+The remaining completion work for this node is replacing the proxy ladder with real target-model token verification now that the new persistent desktop target-session boundary has become the active verifier-state path.
 
 ## After That
 
@@ -184,6 +191,8 @@ That lifecycle is now in place together with prompt-derived, llama-preview, and 
 The next implementation step is to replace those proxies with true target-model token verification.
 
 The Android-side regression harness is now stronger because it can exercise more than one speculative step inside a single desktop session.
+
+The desktop-side verifier boundary is now stronger because speculative sessions and target sessions are no longer represented by only one internal object.
 
 ## Android Studio Verification Needed By User
 
