@@ -45,6 +45,8 @@ Instead:
   Use this when rerunning the proven Android local model-load and generation baseline on device.
 - `project/computer-inference-service-boundary.md`
   Use this when starting the next stage above the local baseline: the ordinary computer-side inference service.
+- `project/desktop-inference-service-runbook.md`
+  Use this when starting and sanity-checking the first desktop HTTP inference service.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
 - `workflow/collaboration-rules.md`
@@ -62,6 +64,8 @@ Instead:
   The repeatable on-device checklist for re-confirming the Android local runtime baseline.
 - `docs/project/computer-inference-service-boundary.md`
   The design boundary for the ordinary computer-hosted inference service and phone-to-computer request path.
+- `docs/project/desktop-inference-service-runbook.md`
+  The start/check runbook for the first local desktop HTTP inference service.
 - `docs/workflow/collaboration-rules.md`
   The collaboration contract for git sync, Android Studio verification, and the "user does bundle" boundary.
 - `docs/archive/root-document-map.md`

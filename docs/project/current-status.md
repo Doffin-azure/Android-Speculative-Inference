@@ -20,7 +20,8 @@ Current real stage:
 - on-device local runtime validation has now succeeded for the current test model
 - the Android local baseline has been re-confirmed through the repeat validation checklist
 - the immediate blocker is no longer "can Android load and run a real model locally"
-- the next active stage is defining and implementing the computer-side normal inference service
+- the project now has a first working desktop HTTP inference service skeleton
+- the next active stage is connecting Android to that ordinary remote service path
 
 ## Active Technical Findings
 
@@ -46,6 +47,7 @@ Current strongest conclusion:
 - Android now also loads the same file successfully after switching to the built-in ggml backend path
 - the earlier Android failure was specifically caused by backend-loading configuration, not by the model artifact
 - the Android local baseline should now be treated as established rather than tentative
+- the first desktop `POST /v1/generate` baseline is now working locally through the new service skeleton
 
 ## Important Files
 
@@ -59,6 +61,7 @@ Android runtime path:
 Desktop GGUF validation path:
 
 - `tools/gguf_check.py`
+- `tools/desktop_inference_service.py`
 - `.venv-gguf/` (ignored)
 - `C:\Users\JXZ\AndroidStudioProjects\llama.cpp`
 - `C:\Users\JXZ\AndroidStudioProjects\llama.cpp\build-wsl-cli`
@@ -68,7 +71,7 @@ Desktop GGUF validation path:
 Primary blocker:
 
 - the next blocker is no longer Android local correctness
-- the next blocker is defining a clean ordinary remote inference boundary between phone and computer
+- the next blocker is adding the Android-side client path for the now-proven desktop service
 
 Secondary blocker:
 
@@ -78,32 +81,33 @@ Secondary blocker:
 
 The next step should focus on one of these:
 
-1. define the computer-side normal inference service contract
-2. implement the smallest possible desktop service that returns one complete generation response
-3. add the Android-side normal remote request path on top of that contract
+1. add the Android-side normal remote request client for `POST /v1/generate`
+2. add a simple app-level distinction between local and remote inference mode
+3. preserve the local path as fallback while validating the remote path
 
 ## Immediate Execution Order
 
 Use this order unless a new runtime failure appears:
 
-1. use `docs/project/computer-inference-service-boundary.md` as the stage-3 design reference
-2. define the first normal request/response payload for the computer-side service
-3. implement and verify the desktop service locally before involving the Android client
-4. only after the ordinary remote path works, plan speculative decoding on top of it
+1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
+2. add the smallest Android client that can call `POST /v1/generate`
+3. expose a minimal local/remote mode choice in the app without replacing the local baseline
+4. only after the ordinary remote path works end to end, plan speculative decoding on top of it
 
 Practical interpretation:
 
 - do not reopen backend-load debugging unless a fresh device run fails again
 - do not jump straight into speculative decoding protocol work
 - do not replace the proven local path while introducing the remote path
-- use `docs/project/computer-inference-service-boundary.md` as the mainline reference for the next node
+- use `docs/project/computer-inference-service-boundary.md` for architecture boundaries
+- use `docs/project/desktop-inference-service-runbook.md` for the working desktop-service baseline
 
 ## Definition Of Done For The Next Node
 
 The next node is complete when all of the following are true:
 
-- the ordinary computer-side inference service boundary is documented clearly enough to implement against
-- the first service contract is simple enough to test independently from Android
+- Android can call the working desktop service through a normal request path
+- the app can surface remote success or remote failure clearly
 - the local Android baseline remains the fallback reference while the remote path is added
 - the close-out includes the required git-sync explanation and markdown summary update
 
@@ -111,8 +115,8 @@ The next node is complete when all of the following are true:
 
 Once the ordinary remote boundary is defined, the next architectural step is:
 
-1. implement the computer-side normal inference service
-2. add the Android-to-computer normal request path
+1. add the Android-to-computer normal request path
+2. validate the full local-network or localhost-bridge flow
 3. treat speculative decoding as a later layer on top of that ordinary remote path
 
 ## What Not To Reopen
