@@ -35,6 +35,7 @@ Current real stage:
 - the `llama_preview` verifier mode now uses llama preview text to drive accepted/correction semantics during `propose`
 - the desktop service now also exposes a `llama_step_proxy` verifier mode that refreshes llama preview text on demand when a proposal needs more target coverage
 - the desktop service now also exposes a `llama_replay_proxy` verifier mode that replays the already accepted assistant prefix back into llama-cli before verifying the next proposal chunk
+- the Android speculative stub client now runs a short multi-step session loop instead of stopping after a single `propose`
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -75,6 +76,7 @@ Current strongest conclusion:
 - the `llama_preview` mode is no longer preview-only; it now uses preview text as the current target proxy for accepted-prefix and correction-token behavior
 - the new `llama_step_proxy` mode keeps the same preview-text proxy model but can refresh the preview when `propose` needs more target text than session start originally prepared
 - the new `llama_replay_proxy` mode now rebuilds target proxy text from the currently accepted assistant prefix, which is closer to true continuation verification than fixed preview text
+- the Android speculative harness can now record a short accepted/correction trace across multiple draft steps in the same session
 
 ## Important Files
 
@@ -128,9 +130,10 @@ Use this order unless a new runtime failure appears:
 1. use `docs/project/desktop-inference-service-runbook.md` as the current desktop-service reference
 2. use `docs/project/speculative-decoding-protocol-draft.md` as the protocol reference
 3. keep the Android speculative stub path as the regression harness
-4. treat `llama_replay_proxy` as the closest current verifier harness before real token verification
-5. replace replay-based proxy verification with real token verification on the desktop side
-6. only after the first speculative loop works, optimize chunking or transport
+4. use the Android multi-step speculative stub loop as the regression client
+5. treat `llama_replay_proxy` as the closest current verifier harness before real token verification
+6. replace replay-based proxy verification with real token verification on the desktop side
+7. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
 
@@ -175,11 +178,14 @@ That lifecycle is now in place together with prompt-derived, llama-preview, and 
 
 The next implementation step is to replace those proxies with true target-model token verification.
 
+The Android-side regression harness is now stronger because it can exercise more than one speculative step inside a single desktop session.
+
 ## Android Studio Verification Needed By User
 
 For the next validation node:
 
 - run one `llama_replay_proxy` speculative request and capture the session summary
+- confirm the summary now shows more than one speculative step when the verifier keeps returning more target text
 - keep one `llama_step_proxy` or `llama_preview` run available as a regression comparison
 - once real verifier work lands, run both a happy-path and correction-path speculative request from the app
 - keep one known-good ordinary remote run recorded as the fallback reference
