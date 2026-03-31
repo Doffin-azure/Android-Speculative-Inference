@@ -10,12 +10,16 @@ import com.example.myapplication.inference.LocalLlm
 import com.example.myapplication.inference.LocalLlmImpl
 import com.example.myapplication.inference.RemoteGenerateRequest
 import com.example.myapplication.inference.RemoteInferenceClient
+import com.example.myapplication.inference.SpeculativeCloseRequest
+import com.example.myapplication.inference.SpeculativeProposeRequest
+import com.example.myapplication.inference.SpeculativeStartRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.UUID
 
 class MainViewModel(
     application: Application
@@ -23,7 +27,8 @@ class MainViewModel(
 
     enum class InferenceMode {
         LOCAL,
-        REMOTE
+        REMOTE,
+        SPECULATIVE
     }
 
     data class ModelCandidate(
@@ -79,6 +84,9 @@ class MainViewModel(
     private val _remoteResultSummary = MutableStateFlow("")
     val remoteResultSummary: StateFlow<String> = _remoteResultSummary.asStateFlow()
 
+    private val _speculativeSessionSummary = MutableStateFlow("")
+    val speculativeSessionSummary: StateFlow<String> = _speculativeSessionSummary.asStateFlow()
+
     private val _lastError = MutableStateFlow("")
     val lastError: StateFlow<String> = _lastError.asStateFlow()
 
@@ -105,6 +113,7 @@ class MainViewModel(
         _statusMessage.value = when (mode) {
             InferenceMode.LOCAL -> "Local inference mode selected."
             InferenceMode.REMOTE -> "Remote inference mode selected."
+            InferenceMode.SPECULATIVE -> "Speculative inference mode selected."
         }
         appendLog("Inference mode changed to ${mode.name}.")
     }
@@ -253,6 +262,7 @@ class MainViewModel(
         when (_inferenceMode.value) {
             InferenceMode.LOCAL -> runLocal(prompt)
             InferenceMode.REMOTE -> runRemote(prompt)
+            InferenceMode.SPECULATIVE -> runSpeculative(prompt)
         }
     }
 
@@ -367,6 +377,143 @@ class MainViewModel(
         }
     }
 
+    private fun runSpeculative(prompt: String) {
+        viewModelScope.launch {
+            if (_isLoadingModel.value || _isGenerating.value) {
+                return@launch
+            }
+
+            if (prompt.isBlank()) {
+                _statusMessage.value = "Please enter a prompt."
+                appendLog("Speculative run blocked: prompt is empty.")
+                return@launch
+            }
+
+            val baseUrl = _remoteServerUrl.value.trim()
+            if (baseUrl.isBlank()) {
+                _statusMessage.value = "Enter a remote service URL."
+                _lastError.value = "Remote service URL is empty."
+                appendLog("Speculative run blocked: remote service URL is empty.")
+                return@launch
+            }
+
+            _isGenerating.value = true
+            _statusMessage.value = "Starting speculative session..."
+            _lastError.value = ""
+            _remoteResultSummary.value = ""
+            _speculativeSessionSummary.value = ""
+
+            var activeSessionId: String? = null
+            try {
+                appendLog("Speculative health check requested for $baseUrl")
+                val health = remoteClient.health(baseUrl)
+                appendLog("Speculative health check result: $health")
+
+                val pseudoTokens = buildStubDraftTokens(prompt)
+                val draftText = prompt.take(32)
+                val startRequest = SpeculativeStartRequest(
+                    sessionId = UUID.randomUUID().toString(),
+                    draftModel = "android-draft-stub",
+                    targetModel = _modelPath.value.ifBlank { "desktop-target" },
+                    userPrompt = prompt
+                )
+                _statusMessage.value = "Opening speculative session..."
+                appendLog("Speculative start requested. Prompt length: ${prompt.length}")
+
+                val startResponse = remoteClient.startSpeculativeSession(baseUrl, startRequest)
+                activeSessionId = startResponse.sessionId
+                appendLog(
+                    "Speculative session started. sessionId=${startResponse.sessionId}, requestId=${startResponse.requestId}, status=${startResponse.status}"
+                )
+
+                _statusMessage.value = "Sending speculative draft..."
+                val proposeResponse = remoteClient.proposeDraft(
+                    baseUrl = baseUrl,
+                    request = SpeculativeProposeRequest(
+                        sessionId = startResponse.sessionId,
+                        draftStep = 1,
+                        proposedTokenIds = pseudoTokens,
+                        proposedText = draftText,
+                        maxCorrectionTokens = 1
+                    )
+                )
+                appendLog(
+                    "Speculative propose completed. sessionId=${proposeResponse.sessionId}, acceptedCount=${proposeResponse.acceptedCount}, correctionCount=${proposeResponse.correctionTokenIds.size}"
+                )
+
+                _statusMessage.value = "Closing speculative session..."
+                val closeResponse = remoteClient.closeSpeculativeSession(
+                    baseUrl = baseUrl,
+                    request = SpeculativeCloseRequest(
+                        sessionId = startResponse.sessionId,
+                        reason = "single_step_stub_completed"
+                    )
+                )
+                appendLog(
+                    "Speculative session closed. sessionId=${closeResponse.sessionId}, acceptedTokenCount=${closeResponse.acceptedTokenCount}, mismatchCount=${closeResponse.mismatchCount}"
+                )
+                activeSessionId = null
+
+                _speculativeSessionSummary.value = buildString {
+                    appendLine("SessionId: ${startResponse.sessionId}")
+                    appendLine("Start status: ${startResponse.status}")
+                    appendLine("Draft tokens: ${pseudoTokens.joinToString()}")
+                    appendLine("Accepted count: ${proposeResponse.acceptedCount}")
+                    appendLine("Accepted token ids: ${proposeResponse.acceptedTokenIds.joinToString()}")
+                    appendLine("Correction token ids: ${proposeResponse.correctionTokenIds.joinToString()}")
+                    appendLine("Close status: ${closeResponse.status}")
+                    appendLine("Fallback available: ${startResponse.fallbackAvailable}")
+                    if (proposeResponse.warning.isNotBlank()) {
+                        appendLine("Warning: ${proposeResponse.warning}")
+                    }
+                }.trim()
+                _remoteResultSummary.value = buildString {
+                    appendLine("Speculative stub requestId: ${proposeResponse.requestId}")
+                    appendLine("Accepted count: ${proposeResponse.acceptedCount}")
+                    appendLine("Finish reason: ${proposeResponse.finishReason.ifBlank { "stub" }}")
+                    appendLine("Close reason: ${closeResponse.reason}")
+                }.trim()
+                _output.value = buildString {
+                    appendLine("Speculative stub completed.")
+                    appendLine("Draft text: $draftText")
+                    appendLine("Accepted token ids: ${proposeResponse.acceptedTokenIds.joinToString()}")
+                    if (proposeResponse.warning.isNotBlank()) {
+                        appendLine()
+                        appendLine(proposeResponse.warning)
+                    }
+                }.trim()
+                _statusMessage.value = "Speculative stub complete."
+                _lastError.value = listOf(
+                    startResponse.error,
+                    proposeResponse.error,
+                    closeResponse.error
+                ).firstOrNull { it.isNotBlank() }.orEmpty()
+            } catch (e: Exception) {
+                _lastError.value = e.message ?: "unknown error"
+                _statusMessage.value = "Speculative run error: ${e.message}"
+                appendLog("Speculative run error: ${e.message ?: "unknown error"}")
+                if (activeSessionId != null) {
+                    runCatching {
+                        remoteClient.closeSpeculativeSession(
+                            baseUrl = baseUrl,
+                            request = SpeculativeCloseRequest(
+                                sessionId = activeSessionId,
+                                reason = "error_cleanup"
+                            )
+                        )
+                    }.onSuccess { response ->
+                        appendLog("Speculative cleanup close succeeded. sessionId=${response.sessionId}")
+                    }.onFailure { closeError ->
+                        appendLog("Speculative cleanup close failed: ${closeError.message ?: "unknown error"}")
+                    }
+                }
+            } finally {
+                _isGenerating.value = false
+                persistDiagnosticSnapshot()
+            }
+        }
+    }
+
     private fun refreshNativeState() {
         _isModelLoaded.value = runCatching { localLlm.isModelLoaded() }.getOrDefault(false)
         _loadedModelPath.value = runCatching { localLlm.loadedModelPath() }.getOrDefault("")
@@ -396,6 +543,7 @@ class MainViewModel(
             appendLine("Remote backend: ${_remoteBackendLabel.value}")
             appendLine("Remote probe summary: ${_remoteProbeSummary.value}")
             appendLine("Remote result summary: ${_remoteResultSummary.value}")
+            appendLine("Speculative session summary: ${_speculativeSessionSummary.value}")
             appendLine("Status: ${_statusMessage.value}")
             appendLine("Model loaded: ${_isModelLoaded.value}")
             appendLine("Selected model: ${_modelPath.value}")
@@ -420,6 +568,22 @@ class MainViewModel(
     private fun diagnosticLogFile(): File {
         val application = getApplication<Application>()
         return File(application.filesDir, "logs/diagnostic-latest.txt")
+    }
+
+    private fun buildStubDraftTokens(prompt: String): List<Int> {
+        val trimmed = prompt.trim()
+        if (trimmed.isBlank()) {
+            return listOf(0)
+        }
+
+        val tokens = trimmed
+            .codePoints()
+            .limit(4)
+            .toArray()
+            .map { it.toInt() }
+            .filter { it > 0 }
+
+        return if (tokens.isEmpty()) listOf(trimmed.length) else tokens
     }
 
     override fun onCleared() {
