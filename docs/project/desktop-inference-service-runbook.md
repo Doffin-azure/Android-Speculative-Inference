@@ -21,6 +21,10 @@ Endpoints:
 - `GET /health`
 - `GET /probe`
 - `POST /v1/generate`
+- `POST /v1/speculative/start`
+- `POST /v1/speculative/propose`
+- `POST /v1/speculative/fallback`
+- `POST /v1/speculative/close`
 
 ## Preconditions
 
@@ -126,6 +130,86 @@ Current limitations:
 - no concurrency tuning
 - no persistent loaded model process yet
 - prompt formatting is currently simple and conservative, not a finalized chat-template layer
+- the speculative endpoints currently provide a lifecycle stub, not real token verification yet
+
+## Speculative Session Smoke Test
+
+Use this after the normal health and probe checks:
+
+```powershell
+$startBody = @{
+  protocolVersion = 1
+  type = "startSession"
+  sessionId = "sess-smoke"
+  requestId = "req-smoke"
+  draftModel = "android-draft"
+  targetModel = "desktop-target"
+  userPrompt = "hello"
+  sampling = @{
+    temperature = 0.7
+    topP = 0.9
+  }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri http://127.0.0.1:8080/v1/speculative/start `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $startBody
+```
+
+Expected result:
+
+- `status` is `ready`
+- `fallbackAvailable` is `true`
+
+Then send a small token proposal:
+
+```powershell
+$proposeBody = @{
+  protocolVersion = 1
+  type = "proposeDraft"
+  sessionId = "sess-smoke"
+  draftStep = 1
+  proposedTokenIds = @(11, 22, 33)
+  proposedText = "hello"
+  maxCorrectionTokens = 1
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri http://127.0.0.1:8080/v1/speculative/propose `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $proposeBody
+```
+
+Expected result for the current stub:
+
+- `status` is `accepted_as_stub`
+- `acceptedCount` equals the number of proposed token ids
+- `warning` explains that real target-model verification is not implemented yet
+
+Finally close the session:
+
+```powershell
+$closeBody = @{
+  protocolVersion = 1
+  type = "closeSession"
+  sessionId = "sess-smoke"
+  reason = "manual_smoke_test"
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri http://127.0.0.1:8080/v1/speculative/close `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $closeBody
+```
+
+Expected result:
+
+- `status` is `closed`
+- `acceptedTokenCount` reflects the accepted proposal count recorded in the stub session
 
 ## Next Step After This Works
 
