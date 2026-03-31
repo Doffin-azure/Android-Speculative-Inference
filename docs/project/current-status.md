@@ -45,6 +45,7 @@ Current real stage:
 - the desktop service now also exposes a first real verifier mode, `llama_true_step`, which uses real target-model next-token checks instead of preview-text or replay-text proxies
 - the first true verifier mode no longer spends a redundant refresh call before verification and now records explicit true-verifier step state inside the desktop target session
 - the first true verifier mode now also caches the latest accepted-prefix -> next-token observation inside the desktop target session so repeated checks for the same prefix do not re-query the target model
+- the true verifier cache is now session-wide instead of single-entry, so previously seen prefixes can be reused across more than one speculative step
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings

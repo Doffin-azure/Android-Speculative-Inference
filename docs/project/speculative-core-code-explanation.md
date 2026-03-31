@@ -126,8 +126,7 @@ Current strengthening:
   - `last_true_expected_token_id`
   - `last_true_expected_token_text`
 - the target session now also caches:
-  - `cached_true_prefix_text`
-  - `cached_true_next_text`
+  - `true_prefix_cache`
 
 ## 3. Desktop True Verifier Comparison Loop
 
@@ -194,6 +193,7 @@ Explanation:
 - The first mismatch returns one correction token.
 - Each real verifier step now also records the latest expected token and increments the true-verifier call counter inside the target session.
 - If the same accepted prefix is checked again, the verifier can now reuse the cached next-token observation instead of calling the target model again.
+- The cache is now session-wide instead of single-entry, so multiple previously seen prefixes can be reused inside the same desktop target session.
 
 Why this is core:
 
