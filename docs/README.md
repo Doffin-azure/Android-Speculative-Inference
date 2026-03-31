@@ -49,6 +49,8 @@ Instead:
   Use this when starting and sanity-checking the first desktop HTTP inference service.
 - `project/speculative-decoding-protocol-draft.md`
   Use this when starting the first phone-draft / computer-verify protocol design.
+- `project/speculative-decoding-implementation-guide-zh.md`
+  Use this when you want the Chinese implementation guide for phone-side draft and computer-side verification.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
 - `workflow/collaboration-rules.md`
@@ -70,6 +72,8 @@ Instead:
   The start/check runbook for the first local desktop HTTP inference service.
 - `docs/project/speculative-decoding-protocol-draft.md`
   The first draft of the speculative decoding message set, session model, and fallback rules.
+- `docs/project/speculative-decoding-implementation-guide-zh.md`
+  The Chinese implementation guide that explains how speculative decoding should be built in this project.
 - `docs/workflow/collaboration-rules.md`
   The collaboration contract for git sync, Android Studio verification, and the "user does bundle" boundary.
 - `docs/archive/root-document-map.md`
