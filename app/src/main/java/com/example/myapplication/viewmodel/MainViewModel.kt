@@ -87,6 +87,9 @@ class MainViewModel(
     private val _speculativeSessionSummary = MutableStateFlow("")
     val speculativeSessionSummary: StateFlow<String> = _speculativeSessionSummary.asStateFlow()
 
+    private val _speculativeForceMismatch = MutableStateFlow(false)
+    val speculativeForceMismatch: StateFlow<Boolean> = _speculativeForceMismatch.asStateFlow()
+
     private val _lastError = MutableStateFlow("")
     val lastError: StateFlow<String> = _lastError.asStateFlow()
 
@@ -120,6 +123,11 @@ class MainViewModel(
 
     fun setRemoteServerUrl(url: String) {
         _remoteServerUrl.value = url
+    }
+
+    fun setSpeculativeForceMismatch(enabled: Boolean) {
+        _speculativeForceMismatch.value = enabled
+        appendLog("Speculative force mismatch set to $enabled.")
     }
 
     fun onModelDirectorySelected(directoryUri: Uri) {
@@ -410,6 +418,7 @@ class MainViewModel(
                 appendLog("Speculative health check result: $health")
 
                 val pseudoTokens = buildStubDraftTokens(prompt)
+                val proposedTokens = maybeMutateStubDraftTokens(pseudoTokens)
                 val draftText = prompt.take(32)
                 val startRequest = SpeculativeStartRequest(
                     sessionId = UUID.randomUUID().toString(),
@@ -432,7 +441,7 @@ class MainViewModel(
                     request = SpeculativeProposeRequest(
                         sessionId = startResponse.sessionId,
                         draftStep = 1,
-                        proposedTokenIds = pseudoTokens,
+                        proposedTokenIds = proposedTokens,
                         proposedText = draftText,
                         maxCorrectionTokens = 1
                     )
@@ -457,26 +466,36 @@ class MainViewModel(
                 _speculativeSessionSummary.value = buildString {
                     appendLine("SessionId: ${startResponse.sessionId}")
                     appendLine("Start status: ${startResponse.status}")
-                    appendLine("Draft tokens: ${pseudoTokens.joinToString()}")
+                    appendLine("Draft tokens: ${proposedTokens.joinToString()}")
                     appendLine("Accepted count: ${proposeResponse.acceptedCount}")
                     appendLine("Accepted token ids: ${proposeResponse.acceptedTokenIds.joinToString()}")
+                    appendLine("Rejected from index: ${proposeResponse.rejectedFromIndex}")
                     appendLine("Correction token ids: ${proposeResponse.correctionTokenIds.joinToString()}")
+                    appendLine("Target text delta: ${proposeResponse.targetTextDelta}")
                     appendLine("Close status: ${closeResponse.status}")
                     appendLine("Fallback available: ${startResponse.fallbackAvailable}")
+                    appendLine("Force mismatch: ${_speculativeForceMismatch.value}")
                     if (proposeResponse.warning.isNotBlank()) {
                         appendLine("Warning: ${proposeResponse.warning}")
                     }
                 }.trim()
                 _remoteResultSummary.value = buildString {
                     appendLine("Speculative stub requestId: ${proposeResponse.requestId}")
+                    appendLine("Verify status: ${proposeResponse.status}")
                     appendLine("Accepted count: ${proposeResponse.acceptedCount}")
+                    appendLine("Rejected from index: ${proposeResponse.rejectedFromIndex}")
+                    appendLine("Correction count: ${proposeResponse.correctionTokenIds.size}")
                     appendLine("Finish reason: ${proposeResponse.finishReason.ifBlank { "stub" }}")
                     appendLine("Close reason: ${closeResponse.reason}")
                 }.trim()
                 _output.value = buildString {
                     appendLine("Speculative stub completed.")
                     appendLine("Draft text: $draftText")
+                    appendLine("Draft token ids: ${proposedTokens.joinToString()}")
                     appendLine("Accepted token ids: ${proposeResponse.acceptedTokenIds.joinToString()}")
+                    appendLine("Correction token ids: ${proposeResponse.correctionTokenIds.joinToString()}")
+                    appendLine("Rejected from index: ${proposeResponse.rejectedFromIndex}")
+                    appendLine("Target text delta: ${proposeResponse.targetTextDelta}")
                     if (proposeResponse.warning.isNotBlank()) {
                         appendLine()
                         appendLine(proposeResponse.warning)
@@ -544,6 +563,7 @@ class MainViewModel(
             appendLine("Remote probe summary: ${_remoteProbeSummary.value}")
             appendLine("Remote result summary: ${_remoteResultSummary.value}")
             appendLine("Speculative session summary: ${_speculativeSessionSummary.value}")
+            appendLine("Speculative force mismatch: ${_speculativeForceMismatch.value}")
             appendLine("Status: ${_statusMessage.value}")
             appendLine("Model loaded: ${_isModelLoaded.value}")
             appendLine("Selected model: ${_modelPath.value}")
@@ -584,6 +604,20 @@ class MainViewModel(
             .filter { it > 0 }
 
         return if (tokens.isEmpty()) listOf(trimmed.length) else tokens
+    }
+
+    private fun maybeMutateStubDraftTokens(tokenIds: List<Int>): List<Int> {
+        if (!_speculativeForceMismatch.value || tokenIds.isEmpty()) {
+            return tokenIds
+        }
+
+        return tokenIds.mapIndexed { index, tokenId ->
+            if (index == 1 || (index == 0 && tokenIds.size == 1)) {
+                tokenId + 1
+            } else {
+                tokenId
+            }
+        }
     }
 
     override fun onCleared() {

@@ -28,6 +28,7 @@ Current real stage:
 - the desktop service now exposes a first speculative session lifecycle stub on top of the proven local and ordinary remote baselines
 - the Android app codebase now contains a first speculative mode wired to that desktop lifecycle stub
 - the desktop `propose` path now computes accepted prefixes and correction tokens through a deterministic prompt-derived verify stub
+- the Android speculative mode now includes a force-mismatch debug path so correction-token behavior can be exercised from the device UI
 - the next active stage is replacing that deterministic verify stub with real target-model token verification
 
 ## Active Technical Findings
@@ -63,6 +64,7 @@ Current strongest conclusion:
 - the current desktop speculative implementation is intentionally still a lifecycle stub and does not yet perform target-model token verification
 - the Android app now has a first speculative mode, remote client calls, and diagnostic summary fields for the desktop stub session flow
 - the desktop speculative `propose` step no longer accepts every proposal blindly; it now returns `acceptedCount`, `rejectedFromIndex`, and `correctionTokenIds`
+- the Android app can now deliberately trigger a mismatch and surface correction-token behavior directly in the speculative debug UI
 
 ## Important Files
 
@@ -162,6 +164,7 @@ For the next validation node:
 
 - confirm the app still syncs and indexes after the new speculative mode additions
 - run one speculative stub request against the desktop service and capture the session summary
+- run one force-mismatch speculative request and capture the correction-token summary
 - keep one known-good ordinary remote run recorded as the fallback reference
 
 ## What Not To Reopen

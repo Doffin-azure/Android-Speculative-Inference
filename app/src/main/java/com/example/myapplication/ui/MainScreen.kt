@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
@@ -30,6 +31,7 @@ fun MainScreen(
     remoteProbeSummary: String,
     remoteResultSummary: String,
     speculativeSessionSummary: String,
+    speculativeForceMismatch: Boolean,
     statusMessage: String,
     output: String,
     lastError: String,
@@ -44,6 +46,7 @@ fun MainScreen(
     onPickModelDirectory: () -> Unit,
     onSetInferenceMode: (MainViewModel.InferenceMode) -> Unit,
     onRemoteServerUrlChange: (String) -> Unit,
+    onSetSpeculativeForceMismatch: (Boolean) -> Unit,
     onTestRemoteConnectivity: () -> Unit,
     onSelectModelCandidate: (String) -> Unit,
     onLoadModel: () -> Unit,
@@ -142,6 +145,22 @@ fun MainScreen(
                     onCopy = { clipboardManager.setText(AnnotatedString(speculativeSessionSummary)) },
                     modifier = Modifier.padding(top = 8.dp)
                 )
+            }
+
+            if (inferenceMode == MainViewModel.InferenceMode.SPECULATIVE) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Force mismatch for verify test")
+                    Checkbox(
+                        checked = speculativeForceMismatch,
+                        onCheckedChange = { onSetSpeculativeForceMismatch(it) },
+                        enabled = !busy
+                    )
+                }
             }
         }
 
