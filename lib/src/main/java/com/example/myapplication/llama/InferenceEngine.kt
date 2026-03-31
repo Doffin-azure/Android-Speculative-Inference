@@ -3,6 +3,13 @@ package com.example.myapplication.llama
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
+data class DraftSessionHandle(
+    val sessionId: String,
+    val runtimeLabel: String,
+    val acceptedText: String = "",
+    val acceptedTokenCount: Int = 0
+)
+
 interface InferenceEngine {
     val state: StateFlow<State>
 
@@ -21,6 +28,27 @@ interface InferenceEngine {
     fun sendUserPrompt(message: String, predictLength: Int = DEFAULT_PREDICT_LENGTH): Flow<String>
 
     suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String
+
+    fun supportsDraftSession(): Boolean = false
+
+    suspend fun startDraftSession(
+        systemPrompt: String,
+        userPrompt: String,
+        predictLength: Int = DEFAULT_PREDICT_LENGTH
+    ): DraftSessionHandle {
+        throw UnsupportedOperationException("Draft session is not implemented by this engine.")
+    }
+
+    suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> {
+        throw UnsupportedOperationException("Draft token generation is not implemented by this engine.")
+    }
+
+    suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {
+        throw UnsupportedOperationException("Applying verified tokens is not implemented by this engine.")
+    }
+
+    suspend fun closeDraftSession(sessionId: String) {
+    }
 
     fun cleanUp()
 

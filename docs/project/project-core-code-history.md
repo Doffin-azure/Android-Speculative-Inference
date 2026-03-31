@@ -768,6 +768,35 @@ Why this is core:
 - This is the first point where the true verifier can use a `llama-server` slot as its target-runtime backend instead of only replaying through standalone `llama-cli`.
 - It keeps the speculative protocol unchanged while moving desktop verification closer to a persistent target session shape.
 
+## 36. Android Draft-Session Boundary
+
+Commit:
+
+- current sync node
+
+Core code:
+
+```kotlin
+data class DraftSessionHandle(
+    val sessionId: String,
+    val runtimeLabel: String,
+    val acceptedText: String = "",
+    val acceptedTokenCount: Int = 0
+)
+
+fun supportsDraftSession(): Boolean = false
+
+suspend fun startDraftSession(...): DraftSessionHandle
+suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int>
+suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle
+suspend fun closeDraftSession(sessionId: String)
+```
+
+Why this is core:
+
+- This is the first explicit local runtime boundary for true draft work.
+- It turns Android speculative draft from an implicit future idea into a concrete code seam that later native work can implement.
+
 ## Reviewed But Not Listed As Feature Nodes
 
 These commits were reviewed during the git pass but were not promoted to the main feature list because they were documentation-only, ignore-only, template-only, or cleanup-only:
