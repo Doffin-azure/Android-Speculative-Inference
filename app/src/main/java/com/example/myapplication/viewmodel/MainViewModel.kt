@@ -90,6 +90,9 @@ class MainViewModel(
     private val _speculativeForceMismatch = MutableStateFlow(false)
     val speculativeForceMismatch: StateFlow<Boolean> = _speculativeForceMismatch.asStateFlow()
 
+    private val _speculativeVerifierMode = MutableStateFlow("")
+    val speculativeVerifierMode: StateFlow<String> = _speculativeVerifierMode.asStateFlow()
+
     private val _lastError = MutableStateFlow("")
     val lastError: StateFlow<String> = _lastError.asStateFlow()
 
@@ -297,6 +300,7 @@ class MainViewModel(
             try {
                 appendLog("Remote probe requested for $baseUrl")
                 val probe = remoteClient.probe(baseUrl)
+                _speculativeVerifierMode.value = probe.speculativeVerifierMode
                 val summary = buildString {
                     appendLine("Probe status: ${probe.status}")
                     appendLine("Message: ${probe.message}")
@@ -432,6 +436,7 @@ class MainViewModel(
 
                 val startResponse = remoteClient.startSpeculativeSession(baseUrl, startRequest)
                 activeSessionId = startResponse.sessionId
+                _speculativeVerifierMode.value = startResponse.verifierMode
                 appendLog(
                     "Speculative session started. sessionId=${startResponse.sessionId}, requestId=${startResponse.requestId}, status=${startResponse.status}, verifierMode=${startResponse.verifierMode}"
                 )
@@ -570,6 +575,7 @@ class MainViewModel(
             appendLine("Remote result summary: ${_remoteResultSummary.value}")
             appendLine("Speculative session summary: ${_speculativeSessionSummary.value}")
             appendLine("Speculative force mismatch: ${_speculativeForceMismatch.value}")
+            appendLine("Speculative verifier mode: ${_speculativeVerifierMode.value}")
             appendLine("Status: ${_statusMessage.value}")
             appendLine("Model loaded: ${_isModelLoaded.value}")
             appendLine("Selected model: ${_modelPath.value}")

@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
             val remoteResultSummary by viewModel.remoteResultSummary.collectAsState()
             val speculativeSessionSummary by viewModel.speculativeSessionSummary.collectAsState()
             val speculativeForceMismatch by viewModel.speculativeForceMismatch.collectAsState()
+            val speculativeVerifierMode by viewModel.speculativeVerifierMode.collectAsState()
             val statusMessage by viewModel.statusMessage.collectAsState()
             val output by viewModel.output.collectAsState()
             val lastError by viewModel.lastError.collectAsState()
@@ -54,6 +55,7 @@ class MainActivity : ComponentActivity() {
                 remoteResultSummary = remoteResultSummary,
                 speculativeSessionSummary = speculativeSessionSummary,
                 speculativeForceMismatch = speculativeForceMismatch,
+                speculativeVerifierMode = speculativeVerifierMode,
                 statusMessage = statusMessage,
                 output = output,
                 lastError = lastError,
