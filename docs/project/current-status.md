@@ -159,6 +159,7 @@ Practical interpretation:
 - do not replace the proven local path while introducing the remote path
 - use `docs/project/project-progress-summary.md` when you need the milestone-level view of everything completed so far
 - use `docs/project/speculative-core-code-explanation.md` when you need the current implementation's key code snippets instead of only milestone summaries
+- use `docs/project/project-core-code-history.md` when you need the historical ledger of completed feature nodes and their core code
 - use `docs/project/desktop-true-verifier-minimum-boundary.md` when deciding what the first real desktop verifier is allowed to change
 - use `docs/project/computer-inference-service-boundary.md` for architecture boundaries
 - use `docs/project/desktop-inference-service-runbook.md` for the working desktop-service baseline

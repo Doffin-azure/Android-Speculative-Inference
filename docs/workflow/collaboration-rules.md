@@ -8,6 +8,7 @@
 - Do not stop at the git explanation alone. Also write a short node summary into the markdown archive/checkpoint documents so future resume points stay explicit.
 - When a core feature is implemented, also add or update a dedicated code-explanation document that includes the core code snippets and a short explanation of how they work.
 - Do not treat behavioral summaries as enough for core features. The documentation close-out should explicitly show the key code path and explain why it is the core implementation.
+- Keep `docs/project/project-core-code-history.md` as the historical ledger for already completed feature nodes reviewed from git history.
 
 ## Build And Verification Boundary
 

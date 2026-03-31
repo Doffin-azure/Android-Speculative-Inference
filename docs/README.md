@@ -55,6 +55,8 @@ Instead:
   Use this when you want the Chinese implementation guide for phone-side draft and computer-side verification.
 - `project/speculative-core-code-explanation.md`
   Use this when you want the current speculative implementation's core code snippets together with short explanations.
+- `project/project-core-code-history.md`
+  Use this when you want the git-reviewed historical ledger of completed feature work and its core code snippets.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
 - `workflow/collaboration-rules.md`
@@ -82,6 +84,8 @@ Instead:
   The Chinese implementation guide that explains how speculative decoding should be built in this project.
 - `docs/project/speculative-core-code-explanation.md`
   The code-focused explanation document that records the current core speculative implementation snippets and how they work.
+- `docs/project/project-core-code-history.md`
+  The historical core-code ledger that records completed feature nodes from git history and the key code for each one.
 - `docs/workflow/collaboration-rules.md`
   The collaboration contract for git sync, Android Studio verification, and the "user does bundle" boundary.
 - `docs/archive/root-document-map.md`
