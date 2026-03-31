@@ -43,6 +43,7 @@ Current real stage:
 - the desktop verifier now reads and refreshes target proxy text through the dedicated target-session state instead of treating the speculative session as the only source of verifier truth
 - the desktop service now has an explicit verifier-driver shape around target sessions, so `propose` no longer hardcodes proxy verification as one monolithic block
 - the desktop service now also exposes a first real verifier mode, `llama_true_step`, which uses real target-model next-token checks instead of preview-text or replay-text proxies
+- the first true verifier mode no longer spends a redundant refresh call before verification and now records explicit true-verifier step state inside the desktop target session
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -89,6 +90,7 @@ Current strongest conclusion:
 - the new target-session boundary is no longer passive bookkeeping; desktop `propose` now refreshes and rehydrates verifier target state through that target-session layer
 - the current proxy verifier logic is now encapsulated behind target-session driver helpers and a dedicated verify-computation result shape, which is the direct replacement point for the first true verifier
 - the first true verifier node now exists as `llama_true_step`; it keeps the HTTP protocol stable while moving `verifierStage` to `true_target`
+- the current true verifier now also records call count and last expected token state, which improves desktop-side debugging before a persistent target runtime session exists
 
 ## Important Files
 

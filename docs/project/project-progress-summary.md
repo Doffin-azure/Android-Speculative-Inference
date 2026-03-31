@@ -293,6 +293,7 @@ Already complete:
 - `llama_true_step` moves `verifierStage` to `true_target`
 - speculative `propose` now has a real verifier path that asks the target model for the next token on each comparison step
 - local validation confirmed that this true-verifier path can produce accepted-prefix and correction-token semantics
+- the true-verifier path no longer spends a redundant refresh call before verification and now records explicit call-count / expected-token state in the target session
 
 Why it matters:
 

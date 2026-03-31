@@ -259,6 +259,9 @@ class TargetSessionState:
     target_token_ids: list[int]
     accepted_token_count: int
     mismatch_count: int
+    true_verifier_call_count: int
+    last_true_expected_token_id: int
+    last_true_expected_token_text: str
     created_at_ms: int
     updated_at_ms: int
 
@@ -755,17 +758,6 @@ def refresh_llama_proxy_preview_for_target_session(
         return
 
     if target_session.verifier_mode == "llama_true_step":
-        next_response = run_true_target_next_text(
-            config,
-            request_id=f"{target_session.request_id}-true-refresh-{target_session.accepted_token_count}",
-            model=target_session.target_model,
-            system_prompt=target_session.system_prompt,
-            user_prompt=target_session.user_prompt,
-            accepted_text=target_session.accepted_text,
-        )
-        target_session.last_replay_prompt = str(next_response.get("debug", {}).get("replayPrompt") or "")
-        target_session.target_preview_text = str(next_response.get("outputText") or "").strip()
-        target_session.target_token_ids = accepted_token_ids[:]
         return
 
     current_chars = max(0, len(target_session.target_token_ids) - target_session.accepted_token_count)
@@ -849,6 +841,9 @@ def build_target_session_state(session: SpeculativeSession) -> TargetSessionStat
         target_token_ids=session.target_token_ids[:],
         accepted_token_count=session.accepted_token_count,
         mismatch_count=session.mismatch_count,
+        true_verifier_call_count=0,
+        last_true_expected_token_id=-1,
+        last_true_expected_token_text="",
         created_at_ms=session.created_at_ms,
         updated_at_ms=session.updated_at_ms,
     )
@@ -985,6 +980,7 @@ def compute_true_verifier_result(
         next_text = str(next_response.get("outputText") or "")
         target_session.last_replay_prompt = str(next_response.get("debug", {}).get("replayPrompt") or "")
         target_session.target_preview_text = next_text
+        record_true_verifier_observation(target_session, next_text=next_text)
         if next_text:
             preview_debug_parts.append(next_text[:1])
 
@@ -1052,6 +1048,16 @@ def apply_verify_computation_to_sessions(
     target_session.target_token_ids = session.accepted_token_ids[:]
     target_session.updated_at_ms = session.updated_at_ms
     sync_target_session_state(target_session, session)
+
+
+def record_true_verifier_observation(
+    target_session: TargetSessionState,
+    *,
+    next_text: str,
+) -> None:
+    target_session.true_verifier_call_count += 1
+    target_session.last_true_expected_token_text = next_text[:1]
+    target_session.last_true_expected_token_id = ord(next_text[0]) if next_text else -1
 
 
 def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) -> SpeculativeSession:
@@ -1137,6 +1143,9 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "debug": {
             "targetSessionId": session.target_session_id,
             "lastReplayPrompt": session.last_replay_prompt,
+            "trueVerifierCallCount": target_session.true_verifier_call_count,
+            "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
+            "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
         },
         "error": "",
     }
@@ -1257,6 +1266,9 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             "llamaPreviewText": session.target_preview_text,
             "acceptedText": session.accepted_text,
             "lastReplayPrompt": session.last_replay_prompt,
+            "trueVerifierCallCount": target_session.true_verifier_call_count,
+            "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
+            "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
         },
     }
 
@@ -1333,6 +1345,9 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "acceptedText": session.accepted_text,
         "lastTargetTextDelta": session.last_target_text_delta,
         "lastFinishReason": session.last_finish_reason,
+        "trueVerifierCallCount": target_session.true_verifier_call_count if target_session is not None else 0,
+        "lastTrueExpectedTokenId": target_session.last_true_expected_token_id if target_session is not None else -1,
+        "lastTrueExpectedTokenText": target_session.last_true_expected_token_text if target_session is not None else "",
         "targetSessionClosed": target_session is not None,
         "error": "",
     }
