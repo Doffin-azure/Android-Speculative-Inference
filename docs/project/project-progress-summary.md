@@ -152,10 +152,11 @@ Already complete:
 
 - the app contains a `SPECULATIVE` mode
 - the app can start a speculative session
-- the app can send a one-step speculative proposal
+- the app can send speculative proposals
 - the app can close the session
 - the app shows speculative summaries and diagnostics
 - the app has a force-mismatch debug path
+- the Android speculative stub client can now run a short multi-step session loop instead of a single draft step
 
 Important verified result:
 
@@ -167,6 +168,7 @@ That means the phone side already proves:
 - rejected-index display
 - correction-token display
 - mismatch regression testing from the UI
+- short multi-step speculative tracing inside the same session
 
 ## Milestone 9: Verifier Mode Boundary
 
@@ -242,6 +244,7 @@ These statements should now be treated as established:
 - verifier mode and llama-backed preview visibility are proven
 - llama-backed preview refresh during speculative propose is proven
 - replay-based target continuation proxy verification is proven
+- Android-side multi-step speculative tracing is proven in the codebase
 
 ## What Is Still Stubbed
 
@@ -267,10 +270,11 @@ That ordering is still the lowest-risk path.
 ## Recommended Next Implementation Order
 
 1. keep the current Android speculative debug harness as the regression path
-2. keep `llama_replay_proxy` as the highest-fidelity regression harness while true verification is being built
-3. replace desktop replay-based proxy verification with real target-model token verification
-4. only then move down into `:lib` to expose real local draft tokens on Android
-5. keep ordinary remote fallback active throughout
+2. keep the Android multi-step speculative stub loop as the regression client
+3. keep `llama_replay_proxy` as the highest-fidelity verifier harness while true verification is being built
+4. replace desktop replay-based proxy verification with real target-model token verification
+5. only then move down into `:lib` to expose real local draft tokens on Android
+6. keep ordinary remote fallback active throughout
 
 ## Useful File Map
 

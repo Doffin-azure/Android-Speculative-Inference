@@ -25,6 +25,19 @@ class MainViewModel(
     application: Application
 ) : AndroidViewModel(application) {
 
+    data class SpeculativeStepTrace(
+        val draftStep: Int,
+        val proposedTokenIds: List<Int>,
+        val proposedText: String,
+        val acceptedCount: Int,
+        val acceptedTokenIds: List<Int>,
+        val rejectedFromIndex: Int,
+        val correctionTokenIds: List<Int>,
+        val targetTextDelta: String,
+        val status: String,
+        val finishReason: String
+    )
+
     enum class InferenceMode {
         LOCAL,
         REMOTE,
@@ -36,6 +49,11 @@ class MainViewModel(
         val contentUri: String,
         val sizeBytes: Long
     )
+
+    companion object {
+        private const val SPECULATIVE_STUB_MAX_STEPS = 3
+        private const val SPECULATIVE_STUB_MAX_DRAFT_TOKENS = 4
+    }
 
     private val localLlm: LocalLlm = LocalLlmImpl(application.applicationContext)
     private val remoteClient = RemoteInferenceClient()
@@ -422,9 +440,6 @@ class MainViewModel(
                 val health = remoteClient.health(baseUrl)
                 appendLog("Speculative health check result: $health")
 
-                val pseudoTokens = buildStubDraftTokens(prompt)
-                val proposedTokens = maybeMutateStubDraftTokens(pseudoTokens)
-                val draftText = prompt.take(32)
                 val startRequest = SpeculativeStartRequest(
                     sessionId = UUID.randomUUID().toString(),
                     draftModel = "android-draft-stub",
@@ -441,27 +456,78 @@ class MainViewModel(
                     "Speculative session started. sessionId=${startResponse.sessionId}, requestId=${startResponse.requestId}, status=${startResponse.status}, verifierMode=${startResponse.verifierMode}"
                 )
 
-                _statusMessage.value = "Sending speculative draft..."
-                val proposeResponse = remoteClient.proposeDraft(
-                    baseUrl = baseUrl,
-                    request = SpeculativeProposeRequest(
-                        sessionId = startResponse.sessionId,
-                        draftStep = 1,
+                val draftSeedText = selectSpeculativeStubSeedText(
+                    prompt = prompt,
+                    verifierMode = startResponse.verifierMode,
+                    targetPreviewText = startResponse.targetPreviewText
+                )
+                val draftSeedTokens = buildStubDraftTokensFromText(draftSeedText)
+                val stepTraces = mutableListOf<SpeculativeStepTrace>()
+                val committedTokenIds = mutableListOf<Int>()
+                var lastWarning = ""
+                var lastRequestId = startResponse.requestId
+                var lastFinishReason = ""
+
+                for (draftStep in 1..SPECULATIVE_STUB_MAX_STEPS) {
+                    val baseTokens = buildStubProposalSlice(
+                        seedTokens = draftSeedTokens,
+                        committedCount = committedTokenIds.size
+                    )
+                    if (baseTokens.isEmpty()) {
+                        appendLog("Speculative stub loop stopped: no more draft tokens available for step $draftStep.")
+                        break
+                    }
+
+                    val proposedTokens = maybeMutateStubDraftTokens(
+                        tokenIds = baseTokens,
+                        draftStep = draftStep
+                    )
+                    val draftText = tokenIdsToReadableText(proposedTokens)
+                    _statusMessage.value = "Sending speculative draft step $draftStep..."
+                    val proposeResponse = remoteClient.proposeDraft(
+                        baseUrl = baseUrl,
+                        request = SpeculativeProposeRequest(
+                            sessionId = startResponse.sessionId,
+                            draftStep = draftStep,
+                            proposedTokenIds = proposedTokens,
+                            proposedText = draftText,
+                            maxCorrectionTokens = 1
+                        )
+                    )
+                    appendLog(
+                        "Speculative propose completed. sessionId=${proposeResponse.sessionId}, draftStep=$draftStep, acceptedCount=${proposeResponse.acceptedCount}, correctionCount=${proposeResponse.correctionTokenIds.size}, status=${proposeResponse.status}"
+                    )
+
+                    committedTokenIds += proposeResponse.acceptedTokenIds
+                    committedTokenIds += proposeResponse.correctionTokenIds
+                    lastWarning = proposeResponse.warning
+                    lastRequestId = proposeResponse.requestId
+                    lastFinishReason = proposeResponse.finishReason
+                    stepTraces += SpeculativeStepTrace(
+                        draftStep = draftStep,
                         proposedTokenIds = proposedTokens,
                         proposedText = draftText,
-                        maxCorrectionTokens = 1
+                        acceptedCount = proposeResponse.acceptedCount,
+                        acceptedTokenIds = proposeResponse.acceptedTokenIds,
+                        rejectedFromIndex = proposeResponse.rejectedFromIndex,
+                        correctionTokenIds = proposeResponse.correctionTokenIds,
+                        targetTextDelta = proposeResponse.targetTextDelta,
+                        status = proposeResponse.status,
+                        finishReason = proposeResponse.finishReason
                     )
-                )
-                appendLog(
-                    "Speculative propose completed. sessionId=${proposeResponse.sessionId}, acceptedCount=${proposeResponse.acceptedCount}, correctionCount=${proposeResponse.correctionTokenIds.size}"
-                )
+
+                    if (proposeResponse.finishReason.isNotBlank()) {
+                        appendLog("Speculative stub loop stopped at step $draftStep due to finishReason=${proposeResponse.finishReason}")
+                        break
+                    }
+                }
 
                 _statusMessage.value = "Closing speculative session..."
                 val closeResponse = remoteClient.closeSpeculativeSession(
                     baseUrl = baseUrl,
                     request = SpeculativeCloseRequest(
                         sessionId = startResponse.sessionId,
-                        reason = "single_step_stub_completed"
+                        reason = "multi_step_stub_completed"
                     )
                 )
                 appendLog(
@@ -469,53 +535,74 @@ class MainViewModel(
                 )
                 activeSessionId = null
 
+                val finalStep = stepTraces.lastOrNull()
+
                 _speculativeSessionSummary.value = buildString {
                     appendLine("SessionId: ${startResponse.sessionId}")
                     appendLine("Start status: ${startResponse.status}")
                     appendLine("Verifier mode: ${startResponse.verifierMode}")
                     appendLine("Target preview text: ${startResponse.targetPreviewText}")
-                    appendLine("Draft tokens: ${proposedTokens.joinToString()}")
-                    appendLine("Accepted count: ${proposeResponse.acceptedCount}")
-                    appendLine("Accepted token ids: ${proposeResponse.acceptedTokenIds.joinToString()}")
-                    appendLine("Rejected from index: ${proposeResponse.rejectedFromIndex}")
-                    appendLine("Correction token ids: ${proposeResponse.correctionTokenIds.joinToString()}")
-                    appendLine("Target text delta: ${proposeResponse.targetTextDelta}")
+                    appendLine("Draft seed text: $draftSeedText")
+                    appendLine("Draft steps completed: ${stepTraces.size}")
+                    appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
+                    appendLine("Committed text: ${tokenIdsToReadableText(committedTokenIds)}")
+                    if (finalStep != null) {
+                        appendLine("Final step status: ${finalStep.status}")
+                        appendLine("Final accepted count: ${finalStep.acceptedCount}")
+                        appendLine("Final rejected from index: ${finalStep.rejectedFromIndex}")
+                        appendLine("Final correction token ids: ${finalStep.correctionTokenIds.joinToString()}")
+                        appendLine("Final target text delta: ${finalStep.targetTextDelta}")
+                    }
                     appendLine("Close status: ${closeResponse.status}")
                     appendLine("Fallback available: ${startResponse.fallbackAvailable}")
                     appendLine("Force mismatch: ${_speculativeForceMismatch.value}")
-                    if (proposeResponse.warning.isNotBlank()) {
-                        appendLine("Warning: ${proposeResponse.warning}")
+                    if (stepTraces.isNotEmpty()) {
+                        appendLine("Step trace:")
+                        stepTraces.forEach { trace ->
+                            appendLine(
+                                "  Step ${trace.draftStep}: proposed=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} status=${trace.status}"
+                            )
+                        }
+                    }
+                    if (lastWarning.isNotBlank()) {
+                        appendLine("Warning: $lastWarning")
                     }
                 }.trim()
                 _remoteResultSummary.value = buildString {
-                    appendLine("Speculative stub requestId: ${proposeResponse.requestId}")
+                    appendLine("Speculative stub requestId: $lastRequestId")
                     appendLine("Verifier mode: ${startResponse.verifierMode}")
-                    appendLine("Verify status: ${proposeResponse.status}")
-                    appendLine("Accepted count: ${proposeResponse.acceptedCount}")
-                    appendLine("Rejected from index: ${proposeResponse.rejectedFromIndex}")
-                    appendLine("Correction count: ${proposeResponse.correctionTokenIds.size}")
-                    appendLine("Finish reason: ${proposeResponse.finishReason.ifBlank { "stub" }}")
+                    appendLine("Steps completed: ${stepTraces.size}")
+                    appendLine("Final verify status: ${finalStep?.status ?: "not_run"}")
+                    appendLine("Final accepted count: ${finalStep?.acceptedCount ?: 0}")
+                    appendLine("Final rejected from index: ${finalStep?.rejectedFromIndex ?: -1}")
+                    appendLine("Final correction count: ${finalStep?.correctionTokenIds?.size ?: 0}")
+                    appendLine("Committed token count: ${committedTokenIds.size}")
+                    appendLine("Finish reason: ${lastFinishReason.ifBlank { "stub" }}")
                     appendLine("Close reason: ${closeResponse.reason}")
                 }.trim()
                 _output.value = buildString {
-                    appendLine("Speculative stub completed.")
+                    appendLine("Speculative multi-step stub completed.")
                     appendLine("Verifier mode: ${startResponse.verifierMode}")
                     appendLine("Target preview text: ${startResponse.targetPreviewText}")
-                    appendLine("Draft text: $draftText")
-                    appendLine("Draft token ids: ${proposedTokens.joinToString()}")
-                    appendLine("Accepted token ids: ${proposeResponse.acceptedTokenIds.joinToString()}")
-                    appendLine("Correction token ids: ${proposeResponse.correctionTokenIds.joinToString()}")
-                    appendLine("Rejected from index: ${proposeResponse.rejectedFromIndex}")
-                    appendLine("Target text delta: ${proposeResponse.targetTextDelta}")
-                    if (proposeResponse.warning.isNotBlank()) {
+                    appendLine("Draft seed text: $draftSeedText")
+                    appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
+                    appendLine("Committed text: ${tokenIdsToReadableText(committedTokenIds)}")
+                    if (stepTraces.isNotEmpty()) {
+                        appendLine("Step details:")
+                        stepTraces.forEach { trace ->
+                            appendLine(
+                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta}"
+                            )
+                        }
+                    }
+                    if (lastWarning.isNotBlank()) {
                         appendLine()
-                        appendLine(proposeResponse.warning)
+                        appendLine(lastWarning)
                     }
                 }.trim()
-                _statusMessage.value = "Speculative stub complete."
+                _statusMessage.value = "Speculative multi-step stub complete."
                 _lastError.value = listOf(
                     startResponse.error,
-                    proposeResponse.error,
                     closeResponse.error
                 ).firstOrNull { it.isNotBlank() }.orEmpty()
             } catch (e: Exception) {
@@ -618,16 +705,70 @@ class MainViewModel(
         return if (tokens.isEmpty()) listOf(trimmed.length) else tokens
     }
 
-    private fun maybeMutateStubDraftTokens(tokenIds: List<Int>): List<Int> {
+    private fun buildStubDraftTokensFromText(text: String): List<Int> {
+        val normalized = text.trim()
+        if (normalized.isBlank()) {
+            return listOf(0)
+        }
+
+        return normalized
+            .codePoints()
+            .limit(96)
+            .toArray()
+            .map { it.toInt() }
+            .filter { it > 0 }
+            .ifEmpty { listOf(normalized.length) }
+    }
+
+    private fun buildStubProposalSlice(seedTokens: List<Int>, committedCount: Int): List<Int> {
+        if (seedTokens.isEmpty()) {
+            return emptyList()
+        }
+        if (committedCount >= seedTokens.size) {
+            return emptyList()
+        }
+        return seedTokens.drop(committedCount).take(SPECULATIVE_STUB_MAX_DRAFT_TOKENS)
+    }
+
+    private fun selectSpeculativeStubSeedText(
+        prompt: String,
+        verifierMode: String,
+        targetPreviewText: String
+    ): String {
+        return if (verifierMode.startsWith("llama_") && targetPreviewText.isNotBlank()) {
+            targetPreviewText
+        } else {
+            prompt.trim()
+        }
+    }
+
+    private fun maybeMutateStubDraftTokens(tokenIds: List<Int>, draftStep: Int): List<Int> {
         if (!_speculativeForceMismatch.value || tokenIds.isEmpty()) {
             return tokenIds
         }
 
         return tokenIds.mapIndexed { index, tokenId ->
-            if (index == 1 || (index == 0 && tokenIds.size == 1)) {
+            if (draftStep == 1 && (index == 1 || (index == 0 && tokenIds.size == 1))) {
                 tokenId + 1
             } else {
                 tokenId
+            }
+        }
+    }
+
+    private fun tokenIdsToReadableText(tokenIds: List<Int>): String {
+        if (tokenIds.isEmpty()) {
+            return ""
+        }
+        return buildString {
+            tokenIds.forEach { tokenId ->
+                if (tokenId in 32..126) {
+                    append(tokenId.toChar())
+                } else {
+                    append("<")
+                    append(tokenId)
+                    append(">")
+                }
             }
         }
     }
