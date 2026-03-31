@@ -878,6 +878,13 @@ def apply_target_session_state_to_session(
     session.accepted_text = target_session.accepted_text
 
 
+def latest_true_cache_entry(target_session: TargetSessionState) -> tuple[str, str]:
+    if not target_session.true_prefix_cache:
+        return "", ""
+    latest_prefix = next(reversed(target_session.true_prefix_cache))
+    return latest_prefix, target_session.true_prefix_cache.get(latest_prefix, "")
+
+
 def refresh_target_session_driver_state(
     config: ServiceConfig,
     target_session: TargetSessionState,
@@ -1157,6 +1164,7 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
     with server.sessions_lock:
         server.sessions[session.session_id] = session
         server.target_sessions[target_session.target_session_id] = target_session
+    latest_cached_prefix, latest_cached_next = latest_true_cache_entry(target_session)
 
     return {
         "protocolVersion": session.protocol_version,
@@ -1181,8 +1189,8 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
             "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
             "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
             "truePrefixCacheSize": len(target_session.true_prefix_cache),
-            "cachedTruePrefixText": next(reversed(target_session.true_prefix_cache), "") if target_session.true_prefix_cache else "",
-            "cachedTrueNextText": target_session.true_prefix_cache.get(next(reversed(target_session.true_prefix_cache), ""), "") if target_session.true_prefix_cache else "",
+            "cachedTruePrefixText": latest_cached_prefix,
+            "cachedTrueNextText": latest_cached_next,
         },
         "error": "",
     }
@@ -1245,6 +1253,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         target_session = server.target_sessions.get(session.target_session_id)
         if target_session is not None:
             sync_target_session_state(target_session, session)
+    latest_cached_prefix, latest_cached_next = latest_true_cache_entry(target_session) if target_session is not None else ("", "")
 
     base_status = "accepted" if not computation.correction_token_ids and computation.rejected_from_index == -1 else "corrected"
     if session.verifier_mode == "llama_replay_proxy":
@@ -1307,8 +1316,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
             "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
             "truePrefixCacheSize": len(target_session.true_prefix_cache),
-            "cachedTruePrefixText": next(reversed(target_session.true_prefix_cache), "") if target_session.true_prefix_cache else "",
-            "cachedTrueNextText": target_session.true_prefix_cache.get(next(reversed(target_session.true_prefix_cache), ""), "") if target_session.true_prefix_cache else "",
+            "cachedTruePrefixText": latest_cached_prefix,
+            "cachedTrueNextText": latest_cached_next,
         },
     }
 
@@ -1369,6 +1378,7 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         raise ValueError(f"Unknown speculative session: {session_id}")
     with server.sessions_lock:
         target_session = server.target_sessions.pop(session.target_session_id, None)
+    latest_cached_prefix, latest_cached_next = latest_true_cache_entry(target_session) if target_session is not None else ("", "")
 
     return {
         "protocolVersion": session.protocol_version,
@@ -1389,8 +1399,8 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         "lastTrueExpectedTokenId": target_session.last_true_expected_token_id if target_session is not None else -1,
         "lastTrueExpectedTokenText": target_session.last_true_expected_token_text if target_session is not None else "",
         "truePrefixCacheSize": len(target_session.true_prefix_cache) if target_session is not None else 0,
-        "cachedTruePrefixText": next(reversed(target_session.true_prefix_cache), "") if target_session is not None and target_session.true_prefix_cache else "",
-        "cachedTrueNextText": target_session.true_prefix_cache.get(next(reversed(target_session.true_prefix_cache), ""), "") if target_session is not None and target_session.true_prefix_cache else "",
+        "cachedTruePrefixText": latest_cached_prefix,
+        "cachedTrueNextText": latest_cached_next,
         "targetSessionClosed": target_session is not None,
         "error": "",
     }
