@@ -16,6 +16,7 @@ cmake-data_*.deb
 *.gguf
 MIDTERM_REPORT.md
 desktop-service.*.log
+logs/*.log
 
 # Android Studio / IntelliJ
 .idea/caches

@@ -73,6 +73,9 @@ class MainViewModel(
     private val _remoteBackendLabel = MutableStateFlow("")
     val remoteBackendLabel: StateFlow<String> = _remoteBackendLabel.asStateFlow()
 
+    private val _remoteProbeSummary = MutableStateFlow("")
+    val remoteProbeSummary: StateFlow<String> = _remoteProbeSummary.asStateFlow()
+
     private val _lastError = MutableStateFlow("")
     val lastError: StateFlow<String> = _lastError.asStateFlow()
 
@@ -250,6 +253,51 @@ class MainViewModel(
         }
     }
 
+    fun testRemoteConnectivity() {
+        viewModelScope.launch {
+            if (_isLoadingModel.value || _isGenerating.value) {
+                return@launch
+            }
+
+            val baseUrl = _remoteServerUrl.value.trim()
+            if (baseUrl.isBlank()) {
+                _statusMessage.value = "Enter a remote service URL."
+                _lastError.value = "Remote service URL is empty."
+                appendLog("Remote probe blocked: remote service URL is empty.")
+                return@launch
+            }
+
+            _isGenerating.value = true
+            _statusMessage.value = "Testing remote connectivity..."
+            _lastError.value = ""
+            _remoteProbeSummary.value = ""
+
+            try {
+                appendLog("Remote probe requested for $baseUrl")
+                val probe = remoteClient.probe(baseUrl)
+                val summary = buildString {
+                    appendLine("Probe status: ${probe.status}")
+                    appendLine("Message: ${probe.message}")
+                    appendLine("Server saw client as: ${probe.clientAddress}")
+                    appendLine("Desktop request log: ${probe.requestLogPath}")
+                    appendLine("Desktop IPv4 addresses: ${probe.ipv4Addresses.joinToString()}")
+                }.trim()
+                _remoteProbeSummary.value = summary
+                _output.value = summary
+                _statusMessage.value = "Remote connectivity probe succeeded."
+                appendLog("Remote probe succeeded. Server saw client as ${probe.clientAddress}")
+            } catch (e: Exception) {
+                _lastError.value = e.message ?: "unknown error"
+                _statusMessage.value = "Remote probe error: ${e.message}"
+                _remoteProbeSummary.value = ""
+                appendLog("Remote probe error: ${e.message ?: "unknown error"}")
+            } finally {
+                _isGenerating.value = false
+                persistDiagnosticSnapshot()
+            }
+        }
+    }
+
     private fun runRemote(prompt: String) {
         viewModelScope.launch {
             if (_isLoadingModel.value || _isGenerating.value) {
@@ -332,6 +380,7 @@ class MainViewModel(
             appendLine("Backend: ${_backendLabel.value}")
             appendLine("Remote server URL: ${_remoteServerUrl.value}")
             appendLine("Remote backend: ${_remoteBackendLabel.value}")
+            appendLine("Remote probe summary: ${_remoteProbeSummary.value}")
             appendLine("Status: ${_statusMessage.value}")
             appendLine("Model loaded: ${_isModelLoaded.value}")
             appendLine("Selected model: ${_modelPath.value}")

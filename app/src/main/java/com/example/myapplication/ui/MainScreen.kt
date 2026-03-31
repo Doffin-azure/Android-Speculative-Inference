@@ -27,6 +27,7 @@ fun MainScreen(
     inferenceMode: MainViewModel.InferenceMode,
     remoteServerUrl: String,
     remoteBackendLabel: String,
+    remoteProbeSummary: String,
     statusMessage: String,
     output: String,
     lastError: String,
@@ -41,6 +42,7 @@ fun MainScreen(
     onPickModelDirectory: () -> Unit,
     onSetInferenceMode: (MainViewModel.InferenceMode) -> Unit,
     onRemoteServerUrlChange: (String) -> Unit,
+    onTestRemoteConnectivity: () -> Unit,
     onSelectModelCandidate: (String) -> Unit,
     onLoadModel: () -> Unit,
     onRun: (String) -> Unit
@@ -93,6 +95,23 @@ fun MainScreen(
             if (remoteBackendLabel.isNotBlank()) {
                 Text(
                     text = "Remote backend: $remoteBackendLabel",
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+
+            Button(
+                onClick = onTestRemoteConnectivity,
+                enabled = !busy,
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                Text("Test Remote Connectivity")
+            }
+
+            if (remoteProbeSummary.isNotBlank()) {
+                CopyableReadOnlyField(
+                    label = "Remote Probe",
+                    value = remoteProbeSummary,
+                    onCopy = { clipboardManager.setText(AnnotatedString(remoteProbeSummary)) },
                     modifier = Modifier.padding(top = 8.dp)
                 )
             }
