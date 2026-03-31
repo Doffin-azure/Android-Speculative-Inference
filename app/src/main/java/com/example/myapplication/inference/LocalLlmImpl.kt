@@ -1,6 +1,7 @@
 package com.example.myapplication.inference
 
 import android.content.Context
+import com.example.myapplication.llama.DraftSessionHandle
 import com.example.myapplication.llama.AiChat
 import com.example.myapplication.llama.InferenceEngine
 import kotlinx.coroutines.flow.toList
@@ -22,6 +23,10 @@ class LocalLlmImpl(context: Context) : LocalLlm {
 
     override fun lastError(): String {
         return engine.lastError()
+    }
+
+    override fun supportsDraftSession(): Boolean {
+        return engine.supportsDraftSession()
     }
 
     override suspend fun loadModel(modelPath: String): Boolean {
@@ -48,6 +53,26 @@ class LocalLlmImpl(context: Context) : LocalLlm {
             is InferenceEngine.State.Error -> state.message
             else -> output
         }
+    }
+
+    override suspend fun startDraftSession(
+        systemPrompt: String,
+        userPrompt: String,
+        predictLength: Int
+    ): DraftSessionHandle {
+        return engine.startDraftSession(systemPrompt, userPrompt, predictLength)
+    }
+
+    override suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> {
+        return engine.draftNextTokenIds(sessionId, maxTokens)
+    }
+
+    override suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {
+        return engine.applyVerifiedTokens(sessionId, tokenIds)
+    }
+
+    override suspend fun closeDraftSession(sessionId: String) {
+        engine.closeDraftSession(sessionId)
     }
 
     override suspend fun benchmark(pp: Int, tg: Int, pl: Int, nr: Int): String {

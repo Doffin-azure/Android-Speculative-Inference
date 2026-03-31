@@ -36,6 +36,13 @@ class MainViewModel(
         val targetTextDelta: String,
         val acceptedText: String,
         val lastReplayPrompt: String,
+        val verifierStage: String,
+        val trueRuntimeBackend: String,
+        val llamaServerSlotId: Int,
+        val lastTrueChunkStart: Int,
+        val lastTrueChunkConsumed: Int,
+        val trueCacheHitStreak: Int,
+        val trueFetchStreak: Int,
         val status: String,
         val finishReason: String
     )
@@ -516,6 +523,13 @@ class MainViewModel(
                         targetTextDelta = proposeResponse.targetTextDelta,
                         acceptedText = proposeResponse.acceptedText,
                         lastReplayPrompt = proposeResponse.lastReplayPrompt,
+                        verifierStage = proposeResponse.verifierStage,
+                        trueRuntimeBackend = proposeResponse.trueRuntimeBackend,
+                        llamaServerSlotId = proposeResponse.llamaServerSlotId,
+                        lastTrueChunkStart = proposeResponse.lastTrueChunkStart,
+                        lastTrueChunkConsumed = proposeResponse.lastTrueChunkConsumed,
+                        trueCacheHitStreak = proposeResponse.trueCacheHitStreak,
+                        trueFetchStreak = proposeResponse.trueFetchStreak,
                         status = proposeResponse.status,
                         finishReason = proposeResponse.finishReason
                     )
@@ -544,7 +558,15 @@ class MainViewModel(
                 _speculativeSessionSummary.value = buildString {
                     appendLine("SessionId: ${startResponse.sessionId}")
                     appendLine("Start status: ${startResponse.status}")
+                    appendLine("Target session id: ${startResponse.targetSessionId}")
                     appendLine("Verifier mode: ${startResponse.verifierMode}")
+                    appendLine("Verifier stage: ${startResponse.verifierStage}")
+                    if (startResponse.trueRuntimeBackend.isNotBlank()) {
+                        appendLine("True runtime backend: ${startResponse.trueRuntimeBackend}")
+                    }
+                    if (startResponse.llamaServerSlotId >= 0) {
+                        appendLine("Llama server slot id: ${startResponse.llamaServerSlotId}")
+                    }
                     appendLine("Target preview text: ${startResponse.targetPreviewText}")
                     appendLine("Start accepted text: ${startResponse.acceptedText}")
                     if (startResponse.lastReplayPrompt.isNotBlank()) {
@@ -561,6 +583,19 @@ class MainViewModel(
                         appendLine("Final correction token ids: ${finalStep.correctionTokenIds.joinToString()}")
                         appendLine("Final target text delta: ${finalStep.targetTextDelta}")
                         appendLine("Final accepted text: ${finalStep.acceptedText}")
+                        appendLine("Final verifier stage: ${finalStep.verifierStage}")
+                        if (finalStep.trueRuntimeBackend.isNotBlank()) {
+                            appendLine("Final true runtime backend: ${finalStep.trueRuntimeBackend}")
+                        }
+                        if (finalStep.llamaServerSlotId >= 0) {
+                            appendLine("Final llama server slot id: ${finalStep.llamaServerSlotId}")
+                        }
+                        if (finalStep.lastTrueChunkStart >= 0) {
+                            appendLine("Final true chunk start: ${finalStep.lastTrueChunkStart}")
+                            appendLine("Final true chunk consumed: ${finalStep.lastTrueChunkConsumed}")
+                            appendLine("Final true cache hit streak: ${finalStep.trueCacheHitStreak}")
+                            appendLine("Final true fetch streak: ${finalStep.trueFetchStreak}")
+                        }
                         if (finalStep.lastReplayPrompt.isNotBlank()) {
                             appendLine("Final replay prompt: ${finalStep.lastReplayPrompt}")
                         }
@@ -568,6 +603,12 @@ class MainViewModel(
                     appendLine("Close status: ${closeResponse.status}")
                     appendLine("Close accepted text: ${closeResponse.acceptedText}")
                     appendLine("Close last target text delta: ${closeResponse.lastTargetTextDelta}")
+                    if (closeResponse.trueRuntimeBackend.isNotBlank()) {
+                        appendLine("Close true runtime backend: ${closeResponse.trueRuntimeBackend}")
+                    }
+                    if (closeResponse.llamaServerSlotId >= 0) {
+                        appendLine("Close llama server slot id: ${closeResponse.llamaServerSlotId}")
+                    }
                     appendLine("Fallback available: ${startResponse.fallbackAvailable}")
                     appendLine("Force mismatch: ${_speculativeForceMismatch.value}")
                     if (stepTraces.isNotEmpty()) {
@@ -585,6 +626,14 @@ class MainViewModel(
                 _remoteResultSummary.value = buildString {
                     appendLine("Speculative stub requestId: $lastRequestId")
                     appendLine("Verifier mode: ${startResponse.verifierMode}")
+                    appendLine("Verifier stage: ${finalStep?.verifierStage ?: startResponse.verifierStage}")
+                    if ((finalStep?.trueRuntimeBackend ?: startResponse.trueRuntimeBackend).isNotBlank()) {
+                        appendLine("True runtime backend: ${finalStep?.trueRuntimeBackend ?: startResponse.trueRuntimeBackend}")
+                    }
+                    val activeSlotId = finalStep?.llamaServerSlotId ?: startResponse.llamaServerSlotId
+                    if (activeSlotId >= 0) {
+                        appendLine("Llama server slot id: $activeSlotId")
+                    }
                     appendLine("Steps completed: ${stepTraces.size}")
                     appendLine("Final verify status: ${finalStep?.status ?: "not_run"}")
                     appendLine("Final accepted count: ${finalStep?.acceptedCount ?: 0}")
@@ -598,6 +647,13 @@ class MainViewModel(
                 _output.value = buildString {
                     appendLine("Speculative multi-step stub completed.")
                     appendLine("Verifier mode: ${startResponse.verifierMode}")
+                    appendLine("Verifier stage: ${startResponse.verifierStage}")
+                    if (startResponse.trueRuntimeBackend.isNotBlank()) {
+                        appendLine("True runtime backend: ${startResponse.trueRuntimeBackend}")
+                    }
+                    if (startResponse.llamaServerSlotId >= 0) {
+                        appendLine("Llama server slot id: ${startResponse.llamaServerSlotId}")
+                    }
                     appendLine("Target preview text: ${startResponse.targetPreviewText}")
                     appendLine("Start accepted text: ${startResponse.acceptedText}")
                     appendLine("Draft seed text: $draftSeedText")
@@ -607,7 +663,7 @@ class MainViewModel(
                         appendLine("Step details:")
                         stepTraces.forEach { trace ->
                             appendLine(
-                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText}"
+                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText} verifierStage=${trace.verifierStage} runtime=${trace.trueRuntimeBackend} slot=${trace.llamaServerSlotId} chunkStart=${trace.lastTrueChunkStart} chunkConsumed=${trace.lastTrueChunkConsumed}"
                             )
                         }
                     }
@@ -681,6 +737,7 @@ class MainViewModel(
             appendLine("Speculative session summary: ${_speculativeSessionSummary.value}")
             appendLine("Speculative force mismatch: ${_speculativeForceMismatch.value}")
             appendLine("Speculative verifier mode: ${_speculativeVerifierMode.value}")
+            appendLine("Local draft session supported: ${runCatching { localLlm.supportsDraftSession() }.getOrDefault(false)}")
             appendLine("Status: ${_statusMessage.value}")
             appendLine("Model loaded: ${_isModelLoaded.value}")
             appendLine("Selected model: ${_modelPath.value}")

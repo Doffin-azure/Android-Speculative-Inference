@@ -36,7 +36,9 @@ data class RemoteProbeResponse(
     val clientAddress: String,
     val requestLogPath: String,
     val ipv4Addresses: List<String>,
-    val speculativeVerifierMode: String
+    val speculativeVerifierMode: String,
+    val speculativeVerifierStage: String,
+    val llamaServerBaseUrl: String
 )
 
 data class SpeculativeStartRequest(
@@ -55,10 +57,14 @@ data class SpeculativeStartResponse(
     val sessionId: String,
     val requestId: String,
     val status: String,
+    val targetSessionId: String,
     val verifierMode: String,
+    val verifierStage: String,
     val targetPreviewText: String,
     val acceptedText: String,
     val lastReplayPrompt: String,
+    val trueRuntimeBackend: String,
+    val llamaServerSlotId: Int,
     val fallbackAvailable: Boolean,
     val error: String
 )
@@ -83,6 +89,13 @@ data class SpeculativeProposeResponse(
     val targetTextDelta: String,
     val acceptedText: String,
     val lastReplayPrompt: String,
+    val verifierStage: String,
+    val trueRuntimeBackend: String,
+    val llamaServerSlotId: Int,
+    val lastTrueChunkStart: Int,
+    val lastTrueChunkConsumed: Int,
+    val trueCacheHitStreak: Int,
+    val trueFetchStreak: Int,
     val warning: String,
     val finishReason: String,
     val error: String
@@ -103,6 +116,8 @@ data class SpeculativeCloseResponse(
     val acceptedText: String,
     val lastTargetTextDelta: String,
     val lastFinishReason: String,
+    val trueRuntimeBackend: String,
+    val llamaServerSlotId: Int,
     val error: String
 )
 
@@ -140,7 +155,9 @@ class RemoteInferenceClient {
                 clientAddress = json.optString("clientAddress"),
                 requestLogPath = json.optString("requestLogPath"),
                 ipv4Addresses = addresses,
-                speculativeVerifierMode = json.optString("speculativeVerifierMode")
+                speculativeVerifierMode = json.optString("speculativeVerifierMode"),
+                speculativeVerifierStage = json.optString("speculativeVerifierStage"),
+                llamaServerBaseUrl = json.optString("llamaServerBaseUrl")
             )
         } finally {
             connection.disconnect()
@@ -226,10 +243,14 @@ class RemoteInferenceClient {
                 sessionId = json.optString("sessionId", request.sessionId),
                 requestId = json.optString("requestId", request.requestId),
                 status = json.optString("status", "unknown"),
+                targetSessionId = json.optString("targetSessionId"),
                 verifierMode = json.optString("verifierMode"),
+                verifierStage = json.optString("verifierStage"),
                 targetPreviewText = json.optString("targetPreviewText"),
                 acceptedText = json.optString("acceptedText"),
                 lastReplayPrompt = json.optJSONObject("debug")?.optString("lastReplayPrompt").orEmpty(),
+                trueRuntimeBackend = json.optJSONObject("debug")?.optString("trueRuntimeBackend").orEmpty(),
+                llamaServerSlotId = json.optJSONObject("debug")?.optInt("llamaServerSlotId", -1) ?: -1,
                 fallbackAvailable = json.optBoolean("fallbackAvailable", false),
                 error = error
             )
@@ -277,6 +298,13 @@ class RemoteInferenceClient {
                 targetTextDelta = json.optString("targetTextDelta"),
                 acceptedText = json.optString("acceptedText"),
                 lastReplayPrompt = json.optJSONObject("debug")?.optString("lastReplayPrompt").orEmpty(),
+                verifierStage = json.optString("verifierStage"),
+                trueRuntimeBackend = json.optJSONObject("debug")?.optString("trueRuntimeBackend").orEmpty(),
+                llamaServerSlotId = json.optJSONObject("debug")?.optInt("llamaServerSlotId", -1) ?: -1,
+                lastTrueChunkStart = json.optJSONObject("debug")?.optInt("lastTrueChunkStart", -1) ?: -1,
+                lastTrueChunkConsumed = json.optJSONObject("debug")?.optInt("lastTrueChunkConsumed", -1) ?: -1,
+                trueCacheHitStreak = json.optJSONObject("debug")?.optInt("trueCacheHitStreak", 0) ?: 0,
+                trueFetchStreak = json.optJSONObject("debug")?.optInt("trueFetchStreak", 0) ?: 0,
                 warning = json.optString("warning"),
                 finishReason = json.optString("finishReason"),
                 error = error
@@ -320,6 +348,8 @@ class RemoteInferenceClient {
                 acceptedText = json.optString("acceptedText"),
                 lastTargetTextDelta = json.optString("lastTargetTextDelta"),
                 lastFinishReason = json.optString("lastFinishReason"),
+                trueRuntimeBackend = json.optString("trueRuntimeBackend"),
+                llamaServerSlotId = json.optInt("llamaServerSlotId", -1),
                 error = error
             )
         } finally {

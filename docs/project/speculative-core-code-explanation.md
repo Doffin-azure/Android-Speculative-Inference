@@ -31,6 +31,7 @@ The current code below covers the present speculative scheme:
 3. desktop true-verifier comparison loop
 4. desktop `propose` mode dispatch
 5. Android speculative multi-step regression loop
+6. Android draft-session interface boundary
 
 ## 1. Desktop Target-Session State
 
@@ -297,6 +298,49 @@ Why this is core:
 
 - This dispatch point is the clean seam between protocol lifecycle and verifier implementation.
 - Future verifier upgrades should happen here, not by rewriting the whole endpoint.
+
+## 6. Android Draft-Session Interface Boundary
+
+Files:
+
+- `lib/src/main/java/com/example/myapplication/llama/InferenceEngine.kt`
+- `app/src/main/java/com/example/myapplication/inference/LocalLlm.kt`
+
+Core code:
+
+```kotlin
+data class DraftSessionHandle(
+    val sessionId: String,
+    val runtimeLabel: String,
+    val acceptedText: String = "",
+    val acceptedTokenCount: Int = 0
+)
+
+fun supportsDraftSession(): Boolean = false
+
+suspend fun startDraftSession(
+    systemPrompt: String,
+    userPrompt: String,
+    predictLength: Int = DEFAULT_PREDICT_LENGTH
+): DraftSessionHandle {
+    throw UnsupportedOperationException("Draft session is not implemented by this engine.")
+}
+
+suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int>
+suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle
+suspend fun closeDraftSession(sessionId: String)
+```
+
+Explanation:
+
+- This is the first explicit boundary for true draft work on Android.
+- The current implementation still returns `unsupported`, which is intentional: the runtime contract is now fixed before the native path is changed.
+- `DraftSessionHandle` is the smallest shared state shape that can later connect Kotlin UI code to a native speculative-draft session.
+
+Why this is core:
+
+- Before this boundary existed, the codebase only had one-shot `generate(...)` semantics.
+- Real speculative draft work needs `start / draft / apply / close` semantics, and this is the first code-level seam for that transition.
 
 ## 5. Android Speculative Multi-Step Regression Loop
 

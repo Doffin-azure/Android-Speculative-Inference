@@ -36,6 +36,8 @@ The project now also has a first true desktop verifier mode, so the remaining ve
 
 The desktop true verifier can now also route target continuation fetches through a configured `llama-server` slot, which is the first runtime step away from pure standalone `llama-cli` replay.
 
+The Android and `:lib` layers now also have an explicit draft-session interface boundary, so true draft work is no longer blocked on discovering where to place the API surface.
+
 ## Milestone 1: Android Local Baseline
 
 Already complete:
@@ -300,6 +302,24 @@ Already complete:
 - the true-verifier cache is now session-wide, which is a closer fit to future persistent target-session behavior than the earlier single-entry cache
 - the true-verifier path can now use one chunk-sized target continuation fetch to validate more than one proposed token at a time
 - the true-verifier path can now also use `llama-server` `/completion` with a fixed slot and prompt-cache reuse, and the desktop target session now records explicit runtime-backend / chunk-position state for that path
+
+## Milestone 17: Android Draft-Session Boundary
+
+Already complete:
+
+- `InferenceEngine` now exposes:
+  - `supportsDraftSession()`
+  - `startDraftSession(...)`
+  - `draftNextTokenIds(...)`
+  - `applyVerifiedTokens(...)`
+  - `closeDraftSession(...)`
+- `LocalLlm` and `LocalLlmImpl` now mirror that same boundary
+- the current implementation still intentionally reports `unsupported`
+
+Why it matters:
+
+- the project no longer has to discover where true draft lifecycle APIs belong
+- the next draft-work node can focus on implementation inside `InferenceEngineImpl` and `ai_chat.cpp` instead of reopening interface design
 
 Why it matters:
 
