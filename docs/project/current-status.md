@@ -48,6 +48,7 @@ Current real stage:
 - the true verifier cache is now session-wide instead of single-entry, so previously seen prefixes can be reused across more than one speculative step
 - the true verifier cache state is now exposed through a shared helper instead of repeated inline cache-selection logic, which tightens the desktop target-session boundary a little further
 - the first true verifier is no longer limited to one-token proof behavior; it now fetches a small target continuation chunk and can accept more than one token from a single verifier call
+- the first true verifier can now also use a configured `llama-server` backend with a fixed slot and prompt-cache reuse, which is the first step away from pure standalone `llama-cli` replay
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -95,6 +96,7 @@ Current strongest conclusion:
 - the current proxy verifier logic is now encapsulated behind target-session driver helpers and a dedicated verify-computation result shape, which is the direct replacement point for the first true verifier
 - the first true verifier node now exists as `llama_true_step`; it keeps the HTTP protocol stable while moving `verifierStage` to `true_target`
 - the current true verifier now also records call count and last expected token state, which improves desktop-side debugging before a persistent target runtime session exists
+- the current true verifier can now route chunk fetches through `llama-server` `/completion`, so desktop-side true verification is no longer limited to repeated standalone `llama-cli` invocations
 
 ## Important Files
 
@@ -129,7 +131,7 @@ Primary blocker:
 - the next blocker is no longer replay-free target continuation
 - the next blocker is no longer the absence of a desktop target-session boundary
 - the next blocker is no longer the absence of any true verifier mode
-- the next blocker is upgrading the first true verifier from replayed one-token target checks to a stronger persistent target session implementation
+- the next blocker is strengthening the new `llama-server`-backed true verifier path beyond prompt-cache reuse and toward a fuller persistent target runtime session implementation
 
 Secondary blocker:
 
@@ -155,7 +157,7 @@ Use this order unless a new runtime failure appears:
 6. use the new desktop target-session boundary as the implementation seam for real verifier work
 7. let desktop verifier state flow through target-session helpers instead of direct speculative-session mutation
 8. use `llama_true_step` as the first true-target regression mode on desktop
-9. strengthen that true verifier toward a persistent target runtime session
+9. strengthen that true verifier toward a persistent target runtime session, now starting from the new `llama-server` slot-backed path when available
 10. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
@@ -186,7 +188,7 @@ The next node is complete when all of the following are true:
 
 The current desktop proxy-verifier ladder is now complete through `llama_replay_proxy`.
 
-The remaining completion work for this node is strengthening the first real desktop verifier beyond replayed one-token checks and toward a persistent target runtime session.
+The remaining completion work for this node is strengthening the first real desktop verifier beyond replay-based chunk checks and the new `llama-server` prompt-cache path toward a fuller persistent target runtime session.
 
 ## After That
 

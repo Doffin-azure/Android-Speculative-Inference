@@ -34,6 +34,8 @@ The desktop service now also has the first explicit internal target-session boun
 
 The project now also has a first true desktop verifier mode, so the remaining verifier work is no longer "get to true target at all" but "make the first true target mode stronger and more persistent."
 
+The desktop true verifier can now also route target continuation fetches through a configured `llama-server` slot, which is the first runtime step away from pure standalone `llama-cli` replay.
+
 ## Milestone 1: Android Local Baseline
 
 Already complete:
@@ -297,6 +299,7 @@ Already complete:
 - the true-verifier path now also caches the latest accepted-prefix -> next-token observation so repeated checks for the same prefix can reuse target results
 - the true-verifier cache is now session-wide, which is a closer fit to future persistent target-session behavior than the earlier single-entry cache
 - the true-verifier path can now use one chunk-sized target continuation fetch to validate more than one proposed token at a time
+- the true-verifier path can now also use `llama-server` `/completion` with a fixed slot and prompt-cache reuse, and the desktop target session now records explicit runtime-backend / chunk-position state for that path
 
 Why it matters:
 
