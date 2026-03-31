@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.documentfile.provider.DocumentFile
 import com.example.myapplication.inference.LocalLlm
 import com.example.myapplication.inference.LocalLlmImpl
+import com.example.myapplication.inference.RemoteGenerateRequest
+import com.example.myapplication.inference.RemoteInferenceClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,6 +21,11 @@ class MainViewModel(
     application: Application
 ) : AndroidViewModel(application) {
 
+    enum class InferenceMode {
+        LOCAL,
+        REMOTE
+    }
+
     data class ModelCandidate(
         val name: String,
         val contentUri: String,
@@ -26,9 +33,16 @@ class MainViewModel(
     )
 
     private val localLlm: LocalLlm = LocalLlmImpl(application.applicationContext)
+    private val remoteClient = RemoteInferenceClient()
 
     private val _backendLabel = MutableStateFlow("Detecting backend...")
     val backendLabel: StateFlow<String> = _backendLabel.asStateFlow()
+
+    private val _inferenceMode = MutableStateFlow(InferenceMode.LOCAL)
+    val inferenceMode: StateFlow<InferenceMode> = _inferenceMode.asStateFlow()
+
+    private val _remoteServerUrl = MutableStateFlow("http://10.0.2.2:8080")
+    val remoteServerUrl: StateFlow<String> = _remoteServerUrl.asStateFlow()
 
     private val _output = MutableStateFlow("Ready")
     val output: StateFlow<String> = _output.asStateFlow()
@@ -56,6 +70,9 @@ class MainViewModel(
     private val _loadedModelPath = MutableStateFlow("")
     val loadedModelPath: StateFlow<String> = _loadedModelPath.asStateFlow()
 
+    private val _remoteBackendLabel = MutableStateFlow("")
+    val remoteBackendLabel: StateFlow<String> = _remoteBackendLabel.asStateFlow()
+
     private val _lastError = MutableStateFlow("")
     val lastError: StateFlow<String> = _lastError.asStateFlow()
 
@@ -75,6 +92,19 @@ class MainViewModel(
 
         appendLog("Backend: ${_backendLabel.value}")
         refreshNativeState()
+    }
+
+    fun setInferenceMode(mode: InferenceMode) {
+        _inferenceMode.value = mode
+        _statusMessage.value = when (mode) {
+            InferenceMode.LOCAL -> "Local inference mode selected."
+            InferenceMode.REMOTE -> "Remote inference mode selected."
+        }
+        appendLog("Inference mode changed to ${mode.name}.")
+    }
+
+    fun setRemoteServerUrl(url: String) {
+        _remoteServerUrl.value = url
     }
 
     fun onModelDirectorySelected(directoryUri: Uri) {
@@ -213,6 +243,68 @@ class MainViewModel(
         }
     }
 
+    fun runInference(prompt: String) {
+        when (_inferenceMode.value) {
+            InferenceMode.LOCAL -> runLocal(prompt)
+            InferenceMode.REMOTE -> runRemote(prompt)
+        }
+    }
+
+    private fun runRemote(prompt: String) {
+        viewModelScope.launch {
+            if (_isLoadingModel.value || _isGenerating.value) {
+                return@launch
+            }
+
+            if (prompt.isBlank()) {
+                _statusMessage.value = "Please enter a prompt."
+                appendLog("Remote run blocked: prompt is empty.")
+                return@launch
+            }
+
+            val baseUrl = _remoteServerUrl.value.trim()
+            if (baseUrl.isBlank()) {
+                _statusMessage.value = "Enter a remote service URL."
+                _lastError.value = "Remote service URL is empty."
+                appendLog("Remote run blocked: remote service URL is empty.")
+                return@launch
+            }
+
+            _isGenerating.value = true
+            _statusMessage.value = "Checking remote service..."
+            _lastError.value = ""
+
+            try {
+                appendLog("Remote health check requested for $baseUrl")
+                val health = remoteClient.health(baseUrl)
+                appendLog("Remote health check result: $health")
+
+                val request = RemoteGenerateRequest(
+                    model = _modelPath.value,
+                    userPrompt = prompt
+                )
+                _statusMessage.value = "Running remote inference..."
+                appendLog("Remote generation requested. Prompt length: ${prompt.length}")
+
+                val response = remoteClient.generate(baseUrl, request)
+                _output.value = response.outputText.ifBlank { response.error }
+                _remoteBackendLabel.value = response.backendLabel
+                _statusMessage.value = "Remote inference complete."
+                _lastError.value = response.error
+                appendLog(
+                    "Remote generation completed. RequestId=${response.requestId}, finishReason=${response.finishReason}, outputLength=${response.outputText.length}"
+                )
+            } catch (e: Exception) {
+                _lastError.value = e.message ?: "unknown error"
+                _statusMessage.value = "Remote run error: ${e.message}"
+                appendLog("Remote run error: ${e.message ?: "unknown error"}")
+            } finally {
+                _isGenerating.value = false
+                persistDiagnosticSnapshot()
+            }
+        }
+    }
+
     private fun refreshNativeState() {
         _isModelLoaded.value = runCatching { localLlm.isModelLoaded() }.getOrDefault(false)
         _loadedModelPath.value = runCatching { localLlm.loadedModelPath() }.getOrDefault("")
@@ -236,7 +328,10 @@ class MainViewModel(
         val logFile = diagnosticLogFile()
         logFile.parentFile?.mkdirs()
         val snapshot = buildString {
+            appendLine("Inference mode: ${_inferenceMode.value.name}")
             appendLine("Backend: ${_backendLabel.value}")
+            appendLine("Remote server URL: ${_remoteServerUrl.value}")
+            appendLine("Remote backend: ${_remoteBackendLabel.value}")
             appendLine("Status: ${_statusMessage.value}")
             appendLine("Model loaded: ${_isModelLoaded.value}")
             appendLine("Selected model: ${_modelPath.value}")

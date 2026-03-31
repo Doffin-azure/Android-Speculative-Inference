@@ -26,6 +26,9 @@ class MainActivity : ComponentActivity() {
             }
 
             val backendLabel by viewModel.backendLabel.collectAsState()
+            val inferenceMode by viewModel.inferenceMode.collectAsState()
+            val remoteServerUrl by viewModel.remoteServerUrl.collectAsState()
+            val remoteBackendLabel by viewModel.remoteBackendLabel.collectAsState()
             val statusMessage by viewModel.statusMessage.collectAsState()
             val output by viewModel.output.collectAsState()
             val lastError by viewModel.lastError.collectAsState()
@@ -40,6 +43,9 @@ class MainActivity : ComponentActivity() {
 
             MainScreen(
                 backendLabel = backendLabel,
+                inferenceMode = inferenceMode,
+                remoteServerUrl = remoteServerUrl,
+                remoteBackendLabel = remoteBackendLabel,
                 statusMessage = statusMessage,
                 output = output,
                 lastError = lastError,
@@ -54,9 +60,11 @@ class MainActivity : ComponentActivity() {
                 onPickModelDirectory = {
                     directoryPicker.launch(null)
                 },
+                onSetInferenceMode = viewModel::setInferenceMode,
+                onRemoteServerUrlChange = viewModel::setRemoteServerUrl,
                 onSelectModelCandidate = viewModel::selectModelCandidate,
                 onLoadModel = { viewModel.loadModel() },
-                onRun = { prompt -> viewModel.runLocal(prompt) }
+                onRun = { prompt -> viewModel.runInference(prompt) }
             )
         }
     }
