@@ -183,11 +183,12 @@ Invoke-RestMethod `
   -Body $proposeBody
 ```
 
-Expected result for the current stub:
+Expected result for the current deterministic verify stub:
 
-- `status` is `accepted_as_stub`
-- `acceptedCount` equals the number of proposed token ids
-- `warning` explains that real target-model verification is not implemented yet
+- when the proposed ids match the prompt-derived target prefix, `status` is `accepted_by_prompt_stub`
+- when they diverge, `status` becomes `corrected_by_prompt_stub`
+- `acceptedCount`, `rejectedFromIndex`, and `correctionTokenIds` now carry real verify-style semantics
+- `warning` still explains that real target-model verification is not implemented yet
 
 Finally close the session:
 

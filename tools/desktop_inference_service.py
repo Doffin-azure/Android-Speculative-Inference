@@ -165,6 +165,7 @@ class SpeculativeSession:
     accepted_token_count: int
     mismatch_count: int
     correction_token_ids: list[int]
+    target_token_ids: list[int]
     last_finish_reason: str
     created_at_ms: int
     updated_at_ms: int
@@ -394,6 +395,22 @@ def parse_int_list(name: str, value: Any) -> list[int]:
     return parsed
 
 
+def build_stub_target_token_ids(system_prompt: str, user_prompt: str) -> list[int]:
+    source = user_prompt.strip() or build_prompt(system_prompt, user_prompt)
+    token_ids = [ord(char) for char in source][:256]
+    return token_ids or [0]
+
+
+def token_ids_to_debug_text(token_ids: list[int]) -> str:
+    chars: list[str] = []
+    for token_id in token_ids:
+        if 32 <= token_id <= 126:
+            chars.append(chr(token_id))
+        else:
+            chars.append(f"<{token_id}>")
+    return "".join(chars)
+
+
 def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) -> SpeculativeSession:
     session_id = str(payload.get("sessionId") or uuid.uuid4())
     request_id = str(payload.get("requestId") or uuid.uuid4())
@@ -425,6 +442,7 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
         accepted_token_count=0,
         mismatch_count=0,
         correction_token_ids=[],
+        target_token_ids=build_stub_target_token_ids(system_prompt, user_prompt),
         last_finish_reason="",
         created_at_ms=now_ms,
         updated_at_ms=now_ms,
@@ -464,18 +482,59 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
     draft_step = int(payload.get("draftStep") or 0)
     proposed_token_ids = parse_int_list("proposedTokenIds", payload.get("proposedTokenIds"))
     max_correction_tokens = max(1, int(payload.get("maxCorrectionTokens") or 1))
+    if not proposed_token_ids:
+        raise ValueError("proposedTokenIds must not be empty.")
 
-    accepted_token_ids = list(proposed_token_ids)
-    accepted_count = len(accepted_token_ids)
+    target_index = session.accepted_token_count
+    target_remaining = session.target_token_ids[target_index:]
+
+    accepted_token_ids: list[int] = []
     correction_token_ids: list[int] = []
+    rejected_from_index = -1
+
+    for index, proposed_token_id in enumerate(proposed_token_ids):
+        current_target_index = target_index + index
+        if current_target_index >= len(session.target_token_ids):
+            rejected_from_index = index
+            break
+
+        expected_token_id = session.target_token_ids[current_target_index]
+        if proposed_token_id == expected_token_id:
+            accepted_token_ids.append(proposed_token_id)
+            continue
+
+        rejected_from_index = index
+        correction_token_ids = session.target_token_ids[
+            current_target_index:current_target_index + max_correction_tokens
+        ]
+        session.mismatch_count += 1
+        break
+
+    if rejected_from_index == -1 and len(accepted_token_ids) < len(proposed_token_ids):
+        correction_token_ids = session.target_token_ids[
+            target_index + len(accepted_token_ids):target_index + len(accepted_token_ids) + max_correction_tokens
+        ]
+
+    committed_token_ids = accepted_token_ids + correction_token_ids
+    accepted_count = len(accepted_token_ids)
     finish_reason = ""
+    if target_index + len(committed_token_ids) >= len(session.target_token_ids):
+        finish_reason = "stub_target_complete"
 
     session.draft_step = draft_step
-    session.accepted_token_ids.extend(accepted_token_ids)
+    session.accepted_token_ids.extend(committed_token_ids)
     session.accepted_token_count = len(session.accepted_token_ids)
     session.correction_token_ids = correction_token_ids[:max_correction_tokens]
     session.last_finish_reason = finish_reason
+    session.status = "verifying"
     session.updated_at_ms = int(time.time() * 1000)
+
+    status = (
+        "accepted_by_prompt_stub"
+        if not correction_token_ids and rejected_from_index == -1
+        else "corrected_by_prompt_stub"
+    )
+    session.status = status
 
     return {
         "protocolVersion": session.protocol_version,
@@ -485,18 +544,23 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "draftStep": draft_step,
         "acceptedCount": accepted_count,
         "acceptedTokenIds": accepted_token_ids,
-        "rejectedFromIndex": -1,
+        "rejectedFromIndex": rejected_from_index,
         "correctionTokenIds": correction_token_ids,
-        "targetTextDelta": str(payload.get("proposedText") or ""),
+        "targetTextDelta": token_ids_to_debug_text(committed_token_ids),
         "finishReason": finish_reason,
         "acceptedTokenCount": session.accepted_token_count,
         "mismatchCount": session.mismatch_count,
-        "status": "accepted_as_stub",
+        "status": status,
         "warning": (
-            "Desktop speculative verification is currently a lifecycle stub. "
-            "It records proposals and accepts the provided token ids without target-model token verification yet."
+            "Desktop speculative verification is currently a deterministic prompt-derived stub. "
+            "It now computes accepted prefixes and correction tokens, but it still does not run target-model token verification yet."
         ),
         "error": "",
+        "debug": {
+            "targetIndexBeforeStep": target_index,
+            "targetRemainingCount": len(target_remaining),
+            "targetPreview": token_ids_to_debug_text(target_remaining[:16]),
+        },
     }
 
 
