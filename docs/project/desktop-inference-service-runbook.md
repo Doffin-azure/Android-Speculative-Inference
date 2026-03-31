@@ -29,7 +29,7 @@ Endpoints:
 Verifier modes:
 
 - `prompt_stub` keeps the current deterministic prompt-derived verifier
-- `llama_preview` keeps the same verifier semantics for now, but also prepares a llama-backed preview string at session start so the future target-model verifier can reuse the same session boundary
+- `llama_preview` prepares a llama-backed preview string at session start and now uses that preview text as the current accepted/correction target proxy
 
 ## Preconditions
 
@@ -201,6 +201,12 @@ Expected result for the current deterministic verify stub:
 - when they diverge, `status` becomes `corrected_by_prompt_stub`
 - `acceptedCount`, `rejectedFromIndex`, and `correctionTokenIds` now carry real verify-style semantics
 - `warning` still explains that real target-model verification is not implemented yet
+
+When running in `llama_preview` mode:
+
+- matching proposals against the preview text should return `accepted_by_llama_preview`
+- diverging proposals against the preview text should return `corrected_by_llama_preview`
+- `targetPreviewText` from session start is now the text proxy used for accepted/correction behavior
 
 Finally close the session:
 
