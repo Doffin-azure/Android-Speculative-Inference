@@ -42,6 +42,7 @@ Current real stage:
 - the desktop service now keeps a separate internal target-session state object alongside each speculative session, so verifier-state continuity is no longer fully implicit inside the speculative session record
 - the desktop verifier now reads and refreshes target proxy text through the dedicated target-session state instead of treating the speculative session as the only source of verifier truth
 - the desktop service now has an explicit verifier-driver shape around target sessions, so `propose` no longer hardcodes proxy verification as one monolithic block
+- the desktop service now also exposes a first real verifier mode, `llama_true_step`, which uses real target-model next-token checks instead of preview-text or replay-text proxies
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -87,6 +88,7 @@ Current strongest conclusion:
 - the desktop service now also keeps an explicit internal target-session map and returns `targetSessionId`, which establishes the first persistent target-session boundary needed before `verifierStage` can move from `proxy_target` to `true_target`
 - the new target-session boundary is no longer passive bookkeeping; desktop `propose` now refreshes and rehydrates verifier target state through that target-session layer
 - the current proxy verifier logic is now encapsulated behind target-session driver helpers and a dedicated verify-computation result shape, which is the direct replacement point for the first true verifier
+- the first true verifier node now exists as `llama_true_step`; it keeps the HTTP protocol stable while moving `verifierStage` to `true_target`
 
 ## Important Files
 
@@ -120,7 +122,8 @@ Primary blocker:
 - the next blocker is no longer static llama preview coverage
 - the next blocker is no longer replay-free target continuation
 - the next blocker is no longer the absence of a desktop target-session boundary
-- the next blocker is replacing replay-based proxy verification with real target-model token verification
+- the next blocker is no longer the absence of any true verifier mode
+- the next blocker is upgrading the first true verifier from replayed one-token target checks to a stronger persistent target session implementation
 
 Secondary blocker:
 
@@ -145,8 +148,9 @@ Use this order unless a new runtime failure appears:
 5. treat `llama_replay_proxy` as the closest current verifier harness before real token verification
 6. use the new desktop target-session boundary as the implementation seam for real verifier work
 7. let desktop verifier state flow through target-session helpers instead of direct speculative-session mutation
-8. replace the current proxy verify driver with the first true target verifier on the desktop side
-9. only after the first speculative loop works, optimize chunking or transport
+8. use `llama_true_step` as the first true-target regression mode on desktop
+9. strengthen that true verifier toward a persistent target runtime session
+10. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
 
@@ -174,7 +178,7 @@ The next node is complete when all of the following are true:
 
 The current desktop proxy-verifier ladder is now complete through `llama_replay_proxy`.
 
-The remaining completion work for this node is replacing the proxy ladder with real target-model token verification now that the new persistent desktop target-session boundary has become the active verifier-state path.
+The remaining completion work for this node is strengthening the first real desktop verifier beyond replayed one-token checks and toward a persistent target runtime session.
 
 ## After That
 
