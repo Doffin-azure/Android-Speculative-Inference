@@ -53,6 +53,8 @@ Instead:
   Use this when starting the first phone-draft / computer-verify protocol design.
 - `project/speculative-decoding-implementation-guide-zh.md`
   Use this when you want the Chinese implementation guide for phone-side draft and computer-side verification.
+- `project/speculative-core-code-explanation.md`
+  Use this when you want the current speculative implementation's core code snippets together with short explanations.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
 - `workflow/collaboration-rules.md`
@@ -78,6 +80,8 @@ Instead:
   The first draft of the speculative decoding message set, session model, and fallback rules.
 - `docs/project/speculative-decoding-implementation-guide-zh.md`
   The Chinese implementation guide that explains how speculative decoding should be built in this project.
+- `docs/project/speculative-core-code-explanation.md`
+  The code-focused explanation document that records the current core speculative implementation snippets and how they work.
 - `docs/workflow/collaboration-rules.md`
   The collaboration contract for git sync, Android Studio verification, and the "user does bundle" boundary.
 - `docs/archive/root-document-map.md`

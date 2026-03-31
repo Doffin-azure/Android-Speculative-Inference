@@ -6,6 +6,8 @@
 - After each completed node or session, perform a git sync.
 - Do not treat git sync as silent cleanup. Record a short explanation of what changed.
 - Do not stop at the git explanation alone. Also write a short node summary into the markdown archive/checkpoint documents so future resume points stay explicit.
+- When a core feature is implemented, also add or update a dedicated code-explanation document that includes the core code snippets and a short explanation of how they work.
+- Do not treat behavioral summaries as enough for core features. The documentation close-out should explicitly show the key code path and explain why it is the core implementation.
 
 ## Build And Verification Boundary
 
@@ -32,3 +34,4 @@ When closing a completed node:
 - sync git
 - provide a short human-readable explanation of the sync
 - update the relevant markdown archive/checkpoint documents with a brief summary of the completed work
+- if the node contains a core feature, update the code-explanation document with the key code snippets and short explanations
