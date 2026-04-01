@@ -2273,8 +2273,15 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         len(proposed_token_ids) + max_correction_tokens,
     )
     apply_target_session_state_to_session(session, target_session)
+    debug_token_mode = (
+        draft_tree.token_mode
+        if draft_tree is not None
+        else ("real_token" if is_real_token_verifier_mode(session.verifier_mode) else "codepoint_legacy")
+    )
+    debug_acceptance_mode = "other"
 
     if session.verifier_mode == "llama_true_step":
+        debug_acceptance_mode = "step_compare"
         computation = compute_true_verifier_result(
             server.config,
             target_session,
@@ -2284,16 +2291,30 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             max_correction_tokens=max_correction_tokens,
         )
     elif session.verifier_mode == "llama_true_tree_pq_tokens":
-        computation = compute_true_tree_pq_token_verifier_result(
-            server.config,
-            target_session,
-            accepted_token_ids=session.accepted_token_ids,
-            accepted_token_count=session.accepted_token_count,
-            proposed_token_ids=proposed_token_ids,
-            max_correction_tokens=max_correction_tokens,
-            draft_tree=draft_tree,
-        )
+        if draft_tree is not None and draft_tree.token_mode == "real_token":
+            debug_acceptance_mode = "token_pq"
+            computation = compute_true_tree_pq_token_verifier_result(
+                server.config,
+                target_session,
+                accepted_token_ids=session.accepted_token_ids,
+                accepted_token_count=session.accepted_token_count,
+                proposed_token_ids=proposed_token_ids,
+                max_correction_tokens=max_correction_tokens,
+                draft_tree=draft_tree,
+            )
+        else:
+            debug_acceptance_mode = "fallback_piece_prefix"
+            computation = compute_true_tree_verifier_result(
+                server.config,
+                target_session,
+                accepted_token_ids=session.accepted_token_ids,
+                accepted_token_count=session.accepted_token_count,
+                proposed_token_ids=proposed_token_ids,
+                max_correction_tokens=max_correction_tokens,
+                draft_tree=draft_tree,
+            )
     elif session.verifier_mode == "llama_true_tree":
+        debug_acceptance_mode = "piece_prefix"
         computation = compute_true_tree_verifier_result(
             server.config,
             target_session,
@@ -2304,6 +2325,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             draft_tree=draft_tree,
         )
     else:
+        debug_acceptance_mode = "prompt_stub"
         computation = compute_proxy_verifier_result(
             target_session,
             accepted_token_ids=session.accepted_token_ids,
@@ -2368,6 +2390,10 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "Desktop speculative verification is currently a deterministic prompt-derived stub. "
         "It now computes accepted prefixes and correction tokens, but it still does not run target-model token verification yet."
     )
+    if session.verifier_mode == "llama_true_tree_pq_tokens" and debug_acceptance_mode == "fallback_piece_prefix":
+        warning += (
+            " This run fell back to piece-prefix acceptance because the desktop verifier did not receive a usable real-token draft-tree payload."
+        )
 
     return {
         "protocolVersion": session.protocol_version,
@@ -2392,18 +2418,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "debug": {
             "targetSessionId": session.target_session_id,
             "verifierMode": session.verifier_mode,
-            "tokenMode": (
-                draft_tree.token_mode
-                if draft_tree is not None
-                else ("real_token" if is_real_token_verifier_mode(session.verifier_mode) else "codepoint_legacy")
-            ),
-            "acceptanceMode": (
-                "token_pq"
-                if session.verifier_mode == "llama_true_tree_pq_tokens"
-                else "piece_prefix"
-                if session.verifier_mode == "llama_true_tree"
-                else "other"
-            ),
+            "tokenMode": debug_token_mode,
+            "acceptanceMode": debug_acceptance_mode,
             "targetIndexBeforeStep": computation.target_index_before_step,
             "targetRemainingCount": computation.target_remaining_count,
             "targetPreview": computation.target_preview_debug,
