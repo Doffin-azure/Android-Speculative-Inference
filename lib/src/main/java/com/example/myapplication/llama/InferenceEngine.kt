@@ -21,6 +21,23 @@ data class DraftTreeNode(
     val cumulativeLogProbability: Float
 )
 
+data class DraftPathStepCandidate(
+    val nodeIndex: Int,
+    val tokenId: Int,
+    val tokenText: String,
+    val probability: Float,
+    val logProbability: Float
+)
+
+data class DraftPathStep(
+    val depth: Int,
+    val parentNodeIndex: Int,
+    val acceptedPrefixTokenIds: List<Int>,
+    val candidates: List<DraftPathStepCandidate>,
+    val bestTokenId: Int,
+    val bestNodeIndex: Int
+)
+
 data class DraftTreeProposal(
     val sessionId: String,
     val tokenMode: String,
@@ -31,7 +48,8 @@ data class DraftTreeProposal(
     val branchFactor: Int,
     val depthEvaluated: Int,
     val nodeCount: Int,
-    val nodes: List<DraftTreeNode>
+    val nodes: List<DraftTreeNode>,
+    val draftPathSteps: List<DraftPathStep> = emptyList()
 )
 
 interface InferenceEngine {

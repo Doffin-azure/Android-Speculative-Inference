@@ -124,7 +124,8 @@ class StubInferenceEngine : InferenceEngine {
             branchFactor = branchFactor,
             depthEvaluated = 0,
             nodeCount = 0,
-            nodes = emptyList()
+            nodes = emptyList(),
+            draftPathSteps = emptyList()
         )
     }
 

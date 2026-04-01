@@ -553,10 +553,15 @@ class MainViewModel(
                     targetPreviewText = startResponse.targetPreviewText
                 )
                 val useRealTokenDraftPath = (
-                    startResponse.verifierMode == "llama_true_tree_pq_tokens" &&
+                    (startResponse.verifierMode == "llama_true_tree_pq_tokens" ||
+                        startResponse.verifierMode == "llama_eagle_aligned") &&
                         activeLocalDraftSessionId != null
                 )
-                if (startResponse.verifierMode == "llama_true_tree_pq_tokens" && !useRealTokenDraftPath) {
+                if (
+                    (startResponse.verifierMode == "llama_true_tree_pq_tokens" ||
+                        startResponse.verifierMode == "llama_eagle_aligned") &&
+                    !useRealTokenDraftPath
+                ) {
                     appendLog("Experimental real-token verifier requested, but no local real-token draft session is active; falling back to legacy/stub draft path.")
                 }
                 val draftSeedTokens = buildStubDraftTokensFromText(draftSeedText)
@@ -570,7 +575,12 @@ class MainViewModel(
                     var localDraftTreeProposal: DraftTreeProposal? = null
                     val baseTokens = if (activeLocalDraftSessionId != null) {
                         runCatching {
-                            if ((startResponse.verifierMode == "llama_true_tree" || useRealTokenDraftPath) && localDraftTreeSupported) {
+                            if (
+                                (
+                                    startResponse.verifierMode == "llama_true_tree" ||
+                                        useRealTokenDraftPath
+                                    ) && localDraftTreeSupported
+                            ) {
                                 val selectedTreeProposal = if (useRealTokenDraftPath) {
                                     localLlm.draftRealTokenTreeProposal(
                                         sessionId = activeLocalDraftSessionId,
@@ -586,7 +596,7 @@ class MainViewModel(
                                 }
                                 localDraftTreeProposal = selectedTreeProposal
                                 appendLog(
-                                    "Local draft tree proposal ready. tokenMode=${selectedTreeProposal.tokenMode}, depth=${selectedTreeProposal.depthEvaluated}, branchFactor=${selectedTreeProposal.branchFactor}, nodeCount=${selectedTreeProposal.nodeCount}, bestPath=${selectedTreeProposal.bestPathTokenIds.joinToString()}, bestPathNodes=${selectedTreeProposal.bestPathNodeIndices.joinToString()}"
+                                    "Local draft tree proposal ready. tokenMode=${selectedTreeProposal.tokenMode}, depth=${selectedTreeProposal.depthEvaluated}, branchFactor=${selectedTreeProposal.branchFactor}, nodeCount=${selectedTreeProposal.nodeCount}, bestPath=${selectedTreeProposal.bestPathTokenIds.joinToString()}, bestPathNodes=${selectedTreeProposal.bestPathNodeIndices.joinToString()}, draftPathSteps=${selectedTreeProposal.draftPathSteps.size}"
                                 )
                                 selectedTreeProposal.bestPathTokenIds.take(SPECULATIVE_STUB_MAX_DRAFT_TOKENS)
                             } else {

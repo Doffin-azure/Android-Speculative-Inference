@@ -466,6 +466,23 @@ struct draft_tree_branch {
     std::vector<int> path_node_indices;
 };
 
+struct draft_path_step_candidate {
+    int node_index;
+    llama_token token_id;
+    std::string token_text;
+    float probability;
+    float log_probability;
+};
+
+struct draft_path_step_record {
+    int depth;
+    int parent_node_index;
+    std::vector<int> accepted_prefix_token_ids;
+    std::vector<draft_path_step_candidate> candidates;
+    int best_token_id;
+    int best_node_index;
+};
+
 static std::string detokenize_token_ids(const std::vector<int> &token_ids, const bool special = true) {
     if (g_context == nullptr || token_ids.empty()) {
         return "";
@@ -539,6 +556,52 @@ static std::string json_escape(const std::string &input) {
         }
     }
     return out.str();
+}
+
+static void append_json_int_array(std::ostringstream &out, const std::vector<int> &values) {
+    out << "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
+            out << ",";
+        }
+        out << values[i];
+    }
+    out << "]";
+}
+
+static void append_json_draft_path_steps(
+        std::ostringstream &out,
+        const std::vector<draft_path_step_record> &steps) {
+    out << "[";
+    for (size_t step_index = 0; step_index < steps.size(); ++step_index) {
+        if (step_index > 0) {
+            out << ",";
+        }
+        const auto &step = steps[step_index];
+        out << "{"
+            << "\"depth\":" << step.depth << ","
+            << "\"parentNodeIndex\":" << step.parent_node_index << ","
+            << "\"acceptedPrefixTokenIds\":";
+        append_json_int_array(out, step.accepted_prefix_token_ids);
+        out << ",\"bestTokenId\":" << step.best_token_id
+            << ",\"bestNodeIndex\":" << step.best_node_index
+            << ",\"candidates\":[";
+        for (size_t candidate_index = 0; candidate_index < step.candidates.size(); ++candidate_index) {
+            if (candidate_index > 0) {
+                out << ",";
+            }
+            const auto &candidate = step.candidates[candidate_index];
+            out << "{"
+                << "\"nodeIndex\":" << candidate.node_index << ","
+                << "\"tokenId\":" << static_cast<int>(candidate.token_id) << ","
+                << "\"tokenText\":\"" << json_escape(candidate.token_text) << "\","
+                << "\"probability\":" << candidate.probability << ","
+                << "\"logProbability\":" << candidate.log_probability
+                << "}";
+        }
+        out << "]}";
+    }
+    out << "]";
 }
 
 static void append_utf8_codepoints(const std::string &emitted, std::vector<int> &out_ids) {
@@ -1533,7 +1596,9 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftT
         result << best_path_node_indices[i];
     }
     result << "],\"nodeCount\":" << global_node_index
-           << ",\"nodes\":[" << nodes_json.str() << "]}";
+           << ",\"nodes\":[" << nodes_json.str() << "]"
+           << ",\"draftPathSteps\":[]"
+           << "}";
 
     return env->NewStringUTF(result.str().c_str());
 }
@@ -1557,6 +1622,7 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftR
     std::string best_path_text;
     std::vector<int> best_path_ids;
     std::vector<int> best_path_node_indices;
+    std::vector<draft_path_step_record> step_records;
 
     std::vector<draft_tree_branch> active_branches;
     active_branches.push_back({
@@ -1588,8 +1654,35 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftR
             }
 
             saw_candidates_at_depth = true;
+            draft_path_step_record *step_record = nullptr;
+            for (auto &record : step_records) {
+                if (record.depth == depth &&
+                    record.parent_node_index == branch.parent_node_index &&
+                    record.accepted_prefix_token_ids == branch.path_ids) {
+                    step_record = &record;
+                    break;
+                }
+            }
+            if (step_record == nullptr) {
+                step_records.push_back({
+                    depth,
+                    branch.parent_node_index,
+                    branch.path_ids,
+                    {},
+                    -1,
+                    -1
+                });
+                step_record = &step_records.back();
+            }
             for (const auto &candidate : candidates) {
                 const int node_index = global_node_index++;
+                step_record->candidates.push_back({
+                    node_index,
+                    candidate.token_id,
+                    candidate.token_text,
+                    candidate.probability,
+                    candidate.log_probability
+                });
                 if (!is_first_node) {
                     nodes_json << ",";
                 }
@@ -1655,6 +1748,32 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftR
 
     restore_runtime_branch_snapshot(root_snapshot);
 
+    std::vector<draft_path_step_record> best_path_steps;
+    int expected_parent_node_index = -1;
+    std::vector<int> accepted_prefix_token_ids;
+    for (size_t depth = 0; depth < best_path_node_indices.size() && depth < best_path_ids.size(); ++depth) {
+        draft_path_step_record *matched_record = nullptr;
+        for (auto &record : step_records) {
+            if (record.depth == static_cast<int>(depth) &&
+                record.parent_node_index == expected_parent_node_index &&
+                record.accepted_prefix_token_ids == accepted_prefix_token_ids) {
+                matched_record = &record;
+                break;
+            }
+        }
+        if (matched_record == nullptr) {
+            break;
+        }
+
+        draft_path_step_record finalized_record = *matched_record;
+        finalized_record.best_node_index = best_path_node_indices[depth];
+        finalized_record.best_token_id = best_path_ids[depth];
+        best_path_steps.push_back(std::move(finalized_record));
+
+        expected_parent_node_index = best_path_node_indices[depth];
+        accepted_prefix_token_ids.push_back(best_path_ids[depth]);
+    }
+
     std::ostringstream result;
     result << "{"
            << "\"tokenMode\":\"real_token\","
@@ -1676,7 +1795,10 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftR
         result << best_path_node_indices[i];
     }
     result << "],\"nodeCount\":" << global_node_index
-           << ",\"nodes\":[" << nodes_json.str() << "]}";
+           << ",\"nodes\":[" << nodes_json.str() << "]"
+           << ",\"draftPathSteps\":";
+    append_json_draft_path_steps(result, best_path_steps);
+    result << "}";
 
     return env->NewStringUTF(result.str().c_str());
 }

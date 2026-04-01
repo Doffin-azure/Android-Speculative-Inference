@@ -3,6 +3,8 @@ package com.example.myapplication.llama.internal
 import android.content.Context
 import android.util.Log
 import com.example.myapplication.llama.DraftSessionHandle
+import com.example.myapplication.llama.DraftPathStep
+import com.example.myapplication.llama.DraftPathStepCandidate
 import com.example.myapplication.llama.DraftTreeNode
 import com.example.myapplication.llama.DraftTreeProposal
 import com.example.myapplication.llama.InferenceEngine
@@ -506,6 +508,46 @@ internal class InferenceEngineImpl private constructor(
             }
         }
 
+        val draftPathSteps = mutableListOf<DraftPathStep>()
+        val draftPathStepsArray = json.optJSONArray("draftPathSteps")
+        if (draftPathStepsArray != null) {
+            for (index in 0 until draftPathStepsArray.length()) {
+                val step = draftPathStepsArray.optJSONObject(index) ?: continue
+                val acceptedPrefixTokenIds = mutableListOf<Int>()
+                val acceptedPrefixArray = step.optJSONArray("acceptedPrefixTokenIds")
+                if (acceptedPrefixArray != null) {
+                    for (tokenIndex in 0 until acceptedPrefixArray.length()) {
+                        acceptedPrefixTokenIds += acceptedPrefixArray.optInt(tokenIndex)
+                    }
+                }
+                val candidates = mutableListOf<DraftPathStepCandidate>()
+                val candidatesArray = step.optJSONArray("candidates")
+                if (candidatesArray != null) {
+                    for (candidateIndex in 0 until candidatesArray.length()) {
+                        val candidate = candidatesArray.optJSONObject(candidateIndex) ?: continue
+                        candidates += DraftPathStepCandidate(
+                            nodeIndex = candidate.optInt("nodeIndex", -1),
+                            tokenId = candidate.optInt("tokenId", -1),
+                            tokenText = candidate.optString("tokenText"),
+                            probability = candidate.optDouble("probability", 0.0).toFloat(),
+                            logProbability = candidate.optDouble(
+                                "logProbability",
+                                Double.NEGATIVE_INFINITY
+                            ).toFloat()
+                        )
+                    }
+                }
+                draftPathSteps += DraftPathStep(
+                    depth = step.optInt("depth", index),
+                    parentNodeIndex = step.optInt("parentNodeIndex", -1),
+                    acceptedPrefixTokenIds = acceptedPrefixTokenIds,
+                    candidates = candidates,
+                    bestTokenId = step.optInt("bestTokenId", -1),
+                    bestNodeIndex = step.optInt("bestNodeIndex", -1)
+                )
+            }
+        }
+
         return DraftTreeProposal(
             sessionId = sessionId,
             tokenMode = json.optString("tokenMode", "codepoint_legacy"),
@@ -516,7 +558,8 @@ internal class InferenceEngineImpl private constructor(
             branchFactor = json.optInt("branchFactor"),
             depthEvaluated = json.optInt("depthEvaluated"),
             nodeCount = json.optInt("nodeCount", nodes.size),
-            nodes = nodes
+            nodes = nodes,
+            draftPathSteps = draftPathSteps
         )
     }
 

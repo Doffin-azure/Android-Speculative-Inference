@@ -41,6 +41,7 @@ The current code below covers the present speculative scheme:
 13. experimental real-token verifier-mode wiring
 14. experimental unified-token `token_pq` acceptance
 15. observed-top-k residual correction on the experimental lane
+16. explicit EAGLE gap and the exact-lane boundary
 
 ## 1. Desktop Target-Session State
 
@@ -347,6 +348,7 @@ Explanation:
 - The same experimental lane now also aggregates `p(x)` across all observed top-k target candidates that begin with the same first token id, instead of letting one candidate overwrite another.
 - It now also queries a wider target top-k window than the old branch-expansion baseline, so `p(x)` and observed residual correction both have a broader candidate slice to work from.
 - It now also narrows `q(x)` to the current accepted draft branch when that branch context is available, instead of mixing every node from the same depth into one unconditional draft probability table.
+- When the step accepts every draft token, the experimental lane no longer appends a greedy top-1 follow-up token; it now does a deterministic sample from the observed target top-k distribution for that follow-up slot.
 
 Why this is core:
 
@@ -360,6 +362,64 @@ Why this is core:
 Why this is core:
 
 - This is where accepted-prefix and correction-token semantics stop being a stub and start depending on the target model.
+
+## 16. Explicit EAGLE Gap And The Exact-Lane Boundary
+
+Files:
+
+- `tools/desktop_inference_service.py`
+- `tools/desktop_target_runtime.cpp`
+- `lib/src/main/cpp/ai_chat.cpp`
+- `lib/src/main/java/com/example/myapplication/llama/InferenceEngine.kt`
+- `app/src/main/java/com/example/myapplication/inference/RemoteInferenceClient.kt`
+
+Core code:
+
+```python
+elif session.verifier_mode == "llama_eagle_aligned":
+    debug_token_mode = "real_token"
+    debug_acceptance_mode = "token_pq_exact"
+    computation = compute_eagle_aligned_verifier_result(
+        server,
+        target_session,
+        proposed_token_ids=proposed_token_ids,
+        max_correction_tokens=max_correction_tokens,
+        draft_tree=draft_tree,
+    )
+```
+
+```kotlin
+data class DraftPathStep(
+    val depth: Int,
+    val parentNodeIndex: Int,
+    val acceptedPrefixTokenIds: List<Int>,
+    val candidates: List<DraftPathStepCandidate>,
+    val bestTokenId: Int,
+    val bestNodeIndex: Int
+)
+```
+
+```cpp
+result << "],\"nodeCount\":" << global_node_index
+       << ",\"nodes\":[" << nodes_json.str() << "]"
+       << ",\"draftPathSteps\":";
+append_json_draft_path_steps(result, best_path_steps);
+```
+
+Explanation:
+
+- The project now makes an explicit distinction between:
+  - `llama_true_tree`
+  - `llama_true_tree_pq_tokens`
+  - `llama_eagle_aligned`
+- `llama_true_tree_pq_tokens` is frozen as the approximation lane.
+- `llama_eagle_aligned` is the only lane allowed to claim output-preserving semantics, and it is intentionally fail-closed until a native desktop target runtime helper can provide exact full-logits `p(x)`, exact residual correction, and persistent target-session state.
+- Android real-token draft payloads now have a new `draftPathSteps` field so the future exact desktop helper can read branch-conditioned `q(x | prefix_i)` directly instead of inferring it from every node at the same depth.
+
+Why this is core:
+
+- This is the implementation node where the project stops treating the current experimental real-token lane as the final design.
+- It records the exact remaining gap versus EAGLE and creates the first concrete exact-lane boundary that later native helper work can fill without quietly reusing the approximation path.
 
 ## 4. Desktop `propose` Mode Dispatch
 
