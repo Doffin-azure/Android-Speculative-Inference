@@ -1073,6 +1073,20 @@ def summed_first_token_probability(candidates: list[dict[str, Any]], token_id: i
     return total
 
 
+def aggregate_first_token_probabilities(candidates: list[dict[str, Any]]) -> dict[int, float]:
+    aggregated: dict[int, float] = {}
+    for candidate in candidates:
+        candidate_token_ids = [int(value) for value in candidate.get("tokenIds") or []]
+        if not candidate_token_ids:
+            raw_token_id = int(candidate.get("tokenId", -1))
+            candidate_token_ids = [raw_token_id] if raw_token_id >= 0 else []
+        if not candidate_token_ids:
+            continue
+        token_id = candidate_token_ids[0]
+        aggregated[token_id] = aggregated.get(token_id, 0.0) + candidate_probability(candidate)
+    return aggregated
+
+
 def choose_residual_token_id(
     target_prob_by_token: dict[int, float],
     draft_prob_by_token: dict[int, float],
@@ -1625,11 +1639,7 @@ def compute_true_tree_pq_token_verifier_result(
             if draft_tree is not None and depth < len(draft_tree.best_path_token_ids)
             else None
         )
-        target_prob_by_token = {
-            int(candidate.get("tokenId", -1)): candidate_probability(candidate)
-            for candidate in candidates
-            if int(candidate.get("tokenId", -1)) >= 0
-        }
+        target_prob_by_token = aggregate_first_token_probabilities(candidates)
         selected_target_prob = float(target_prob_by_token.get(proposed_token_id, 0.0) or 0.0)
         selected_draft_prob = float(draft_prob_by_token.get(proposed_token_id, 0.0) or 0.0)
         pq_acceptance_prob = -1.0

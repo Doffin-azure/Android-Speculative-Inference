@@ -162,6 +162,7 @@ Current strongest conclusion:
   - observed-top-k residual correction is now wired in
   - but follow-up / correction still uses only the currently observed top-k slice instead of a fuller target residual over the whole vocabulary
   - so the experimental lane is now past token-space unification failure, and the next pressure point is improving `p(x)` completeness and residual correction fidelity
+- the experimental verifier lane now also aggregates target probabilities across all observed top-k candidates that share the same first real token id, which makes `p(x)` less brittle when llama-server exposes several candidate continuations beginning with the same token
 
 ## Important Files
 
