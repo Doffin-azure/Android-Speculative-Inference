@@ -69,6 +69,14 @@ Current real stage:
 - that new real-token path is intentionally not yet the default speculative mainline; the current app regression path still runs through the legacy wire-compatible route until protocol and desktop verifier support catch up
 - the desktop service and Android app now also expose a first dedicated experimental verifier path, `llama_true_tree_pq_tokens`
 - when that verifier mode is active, the Android speculative loop now switches from legacy draft APIs to the new real-token draft APIs while still leaving `llama_true_tree` untouched as the regression baseline
+- the desktop experimental verifier path now also uses llama-server token ids directly at the target-candidate boundary instead of projecting candidate text back into character ids
+- the same experimental verifier path now also detokenizes accepted/correction token ids through llama-server `/detokenize`, so accepted assistant prefixes on that path are no longer reconstructed from debug-only character rendering
+- the experimental verifier path now also routes internal prefix advancement, target-preview debug rendering, and `lastTrueExpectedTokenText` through the same token-native tokenize/detokenize helpers, which removes another set of silent fallbacks to character rendering inside the verifier core
+- the experimental verifier path now also has its own dedicated token-native acceptance function instead of reusing the legacy piece-prefix tree verifier:
+  - it performs per-token `p/q` acceptance on real token ids
+  - it rejects at the first failed token
+  - when all draft tokens are accepted for the step, it appends one target follow-up token as correction/output continuation
+- Android speculative diagnostics now also surface explicit `tokenMode` and `acceptanceMode` values from desktop responses, so experimental runs can confirm they are actually on the `real_token + token_pq` lane
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -129,6 +137,13 @@ Current strongest conclusion:
 - the current best end-to-end behavior under `llama_true_tree` is now a piece-aware acceptance path that can produce natural fragments such as `I'm just` from the Android draft tree plus desktop target verification
 - the newest experimental blocker is now explicit: a paper-style per-token `p/q` gate cannot yet replace piece-aware acceptance because the project still mixes codepoint-compatible wire ids on Android with token-piece target candidates on desktop
 - the next durable route is therefore no longer "keep tweaking the mixed-space verifier"; it is unifying Android draft production, speculative payloads, and desktop target lookup around real `llama_token` ids
+- the first desktop-side move on that durable route is now in place on the experimental verifier path:
+  - target top-k candidates read llama-server `id` fields directly
+  - chunk-fallback tokenization can use llama-server `/tokenize`
+  - accepted assistant prefixes can be rendered through llama-server `/detokenize`
+- the remaining gap on that experimental path is that the internal tree-computation logic still largely reuses the old mixed-space structure and has not yet become a fully token-native verifier end-to-end
+- that remaining gap is now narrower than before: the main unresolved work has shifted from token/text conversion seams to the acceptance algorithm and tree-state logic itself
+- the main remaining gap is that this experimental token-native acceptance path still uses a shallow top-k lookup approximation for `p(x)` and still depends on the current Python-side replay/tree driver instead of a fuller persistent target runtime
 
 ## Important Files
 
@@ -168,6 +183,7 @@ Primary blocker:
 - the newest concrete blocker is that the current mixed token space (`codepoint-compatible` Android draft ids versus desktop token-piece candidates) prevents a stable implementation of standard paper-style per-token `p/q` acceptance
 - that means the verifier can currently use probability gates only as an experimental aid; the real implementation seam has shifted to token-space unification across Android native, speculative payloads, and desktop target lookup
 - the Android side now has the first experimental real-token draft APIs, but the next blocker remains wiring that real-token path through the speculative payload and desktop verifier without regressing the current tree-aware baseline
+- the desktop experimental path now has token-id lookup and detokenize helpers at its boundary, so the next blocker is narrowing the remaining mixed-space assumptions inside the verifier core itself rather than at the protocol edge
 
 Secondary blocker:
 

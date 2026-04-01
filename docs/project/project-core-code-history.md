@@ -1184,6 +1184,67 @@ Why this is core:
 - This node is not a completed runtime feature yet; it is the project-history point where the implementation direction changed.
 - After confirming EAGLE's design, the project now treats unified real `llama_token` ids as the required next mainline for standard paper-style `p/q` acceptance, rather than continuing to harden the mixed codepoint/piece bridge.
 
+## 46. Experimental Desktop Real-Token Boundary Lands
+
+Commit:
+
+- current working node
+
+Core code:
+
+```python
+if is_real_token_verifier_mode(target_session.verifier_mode):
+    raw_token_id = item.get("id", -1)
+    token_id = int(raw_token_id) if isinstance(raw_token_id, (int, float)) else -1
+    token_ids = [token_id] if token_id >= 0 else []
+```
+
+```python
+def detokenize_with_server(base_url: str, token_ids: list[int]) -> str:
+    response = request_json("POST", f"{base_url}/detokenize", {"tokens": token_ids})
+    return str(response.get("content") or "")
+```
+
+```python
+session.accepted_text = render_token_ids_for_verifier(config, target_session, session.accepted_token_ids)
+```
+
+Why this is core:
+
+- This is the first desktop-side implementation node where the experimental `llama_true_tree_pq_tokens` path stops projecting target candidates back into character ids and starts using llama-server token ids directly.
+- It also ensures accepted/correction token ids on that path can be rendered back into assistant text through llama-server detokenization, which is necessary before replay prompts and verifier state can stay meaningful in a unified real-token lane.
+- The same node now also centralizes internal verifier rendering and tokenization through shared helpers, so prefix advancement and debug state on the experimental path no longer quietly drop back into character-space semantics.
+
+## 47. Experimental Real-Token Verifier Gets Its Own `p/q` Acceptance Loop
+
+Commit:
+
+- current working node
+
+Core code:
+
+```python
+selected_target_prob = float(target_prob_by_token.get(proposed_token_id, 0.0) or 0.0)
+selected_draft_prob = float(draft_prob_by_token.get(proposed_token_id, 0.0) or 0.0)
+if selected_draft_prob > 0.0:
+    pq_acceptance_prob = min(1.0, selected_target_prob / selected_draft_prob)
+    pq_draw = deterministic_probability_draw(...)
+    pq_accepted = pq_draw <= pq_acceptance_prob
+```
+
+```python
+if pq_accepted:
+    accepted_step_token_ids.append(proposed_token_id)
+else:
+    correction_token_ids = [target_best_token_id][:max_correction_tokens]
+    break
+```
+
+Why this is core:
+
+- This is the first node where `llama_true_tree_pq_tokens` stops sharing the legacy piece-prefix acceptance behavior and starts running a distinct per-token acceptance loop on real token ids.
+- It also adds the "all accepted then append one target follow-up token" behavior that makes the experimental real-token lane much closer to the standard speculative decoding control flow than the older mixed-space tree verifier.
+
 ## Reviewed But Not Listed As Feature Nodes
 
 These commits were reviewed during the git pass but were not promoted to the main feature list because they were documentation-only, ignore-only, template-only, or cleanup-only:
