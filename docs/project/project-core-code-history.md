@@ -899,6 +899,291 @@ Why this is core:
 - This is the first verifier node that expands a shallow target-side candidate tree from `llama-server` top-k probabilities while keeping the current Android wire protocol unchanged.
 - It is the first concrete step from linear true verification toward an EAGLE-inspired multi-candidate verifier shape.
 
+## 39. Android First Dynamic Draft Tree Proposal
+
+Commit:
+
+- current working node
+
+Core code:
+
+```kotlin
+data class DraftTreeProposal(
+    val sessionId: String,
+    val rootAcceptedText: String,
+    val bestPathTokenIds: List<Int>,
+    val bestPathText: String,
+    val branchFactor: Int,
+    val depthEvaluated: Int,
+    val nodes: List<DraftTreeNode>
+)
+
+override suspend fun draftTreeProposal(
+    sessionId: String,
+    maxDepth: Int,
+    branchFactor: Int
+): DraftTreeProposal = withContext(llamaDispatcher) {
+    val runtime = draftSessions[sessionId]
+        ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+    resetDraftRuntime(runtime)
+    parseDraftTreeProposalJson(
+        sessionId = sessionId,
+        rootAcceptedText = runtime.acceptedText,
+        jsonText = generateDraftTreeJson(maxDepth, branchFactor)
+    )
+}
+```
+
+```cpp
+static std::vector<draft_tree_candidate> top_candidates_from_current_logits(int branch_factor) {
+    const float *logits = llama_get_logits(g_context);
+    ...
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftTreeJson(...) {
+    const auto candidates = top_candidates_from_current_logits(safe_branch_factor);
+    const auto &best_candidate = candidates.front();
+    common_sampler_accept(g_sampler, best_candidate.token_id, true);
+    ...
+}
+```
+
+Why this is core:
+
+- This is the first point where the Android local draft runtime can expose per-node probabilities and a dynamic best-path tree instead of only a flat token slice.
+- The implementation is still lightweight and codepoint-compatible, but it is the first Android-side speculative producer that actually reasons over next-step logits.
+
+## 40. Android Branch-Expanded Draft Tree Runtime
+
+Commit:
+
+- current working node
+
+Core code:
+
+```cpp
+static runtime_branch_snapshot capture_runtime_branch_snapshot() {
+    const size_t state_size = llama_state_get_size(g_context);
+    runtime_branch_snapshot snapshot {
+            std::vector<uint8_t>(state_size),
+            capture_host_runtime_snapshot()
+    };
+    const size_t saved_size = llama_state_get_data(g_context, snapshot.state_data.data(), snapshot.state_data.size());
+    snapshot.state_data.resize(saved_size);
+    return snapshot;
+}
+
+static bool restore_runtime_branch_snapshot(const runtime_branch_snapshot &snapshot) {
+    llama_state_set_data(g_context, snapshot.state_data.data(), snapshot.state_data.size());
+    ...
+    return rebuild_logits_cursor_from_snapshot(snapshot.host_snapshot);
+}
+```
+
+```cpp
+for (const auto &branch : active_branches) {
+    restore_runtime_branch_snapshot(branch.snapshot);
+    const auto candidates = top_candidates_from_current_logits(safe_branch_factor);
+
+    for (const auto &candidate : candidates) {
+        restore_runtime_branch_snapshot(branch.snapshot);
+        advance_runtime_with_token(candidate.token_id, candidate.token_text);
+
+        draft_tree_branch child_branch {
+                capture_runtime_branch_snapshot(),
+                node_index,
+                depth + 1,
+                branch.cumulative_log_probability + candidate.log_probability,
+                branch.path_text + candidate.token_text,
+                branch.path_ids
+        };
+        append_utf8_codepoints(candidate.token_text, child_branch.path_ids);
+        child_branch.path_node_indices = branch.path_node_indices;
+        child_branch.path_node_indices.push_back(node_index);
+    }
+}
+```
+
+Why this is core:
+
+- This is the first Android draft runtime node that truly expands more than one local branch from the same prefix instead of only rolling forward along top-1.
+- It turns the earlier probability-bearing draft tree into a branch-aware tree producer by using native runtime snapshots plus the verified restore-and-replay rule.
+- It also introduces explicit branch/node identity on the Android side, which is the first concrete skeleton for later keep/prune work.
+
+## 41. Remote Verifier Starts Consuming Draft Tree Metadata
+
+Commit:
+
+- current working node
+
+Core code:
+
+```kotlin
+data class SpeculativeProposeRequest(
+    val sessionId: String,
+    val draftStep: Int,
+    val proposedTokenIds: List<Int>,
+    val proposedText: String,
+    val maxCorrectionTokens: Int = 1,
+    val draftTree: DraftTreeProposal? = null
+)
+```
+
+```python
+draft_tree = parse_optional_draft_tree_payload(payload.get("draftTree"))
+...
+tree = build_true_tree_computation(
+    config,
+    target_session,
+    target_index=target_index,
+    proposed_token_ids=proposed_token_ids,
+    max_correction_tokens=max_correction_tokens,
+    draft_tree=draft_tree,
+)
+```
+
+Why this is core:
+
+- This is the first time the remote verifier consumes branch-aware draft-side structure instead of only a flat proposal token list.
+- It does not yet implement full posterior verification, but it establishes the first real cross-device path from Android draft tree production into desktop tree-aware verification.
+
+## 42. Desktop Candidate Projection Stops Collapsing Pieces To First Codepoints
+
+Commit:
+
+- current working node
+
+Core code:
+
+```python
+def common_prefix_length(left: Sequence[int], right: Sequence[int]) -> int:
+    limit = min(len(left), len(right))
+    index = 0
+    while index < limit and left[index] == right[index]:
+        index += 1
+    return index
+
+def candidate_probability(candidate: dict[str, Any]) -> float:
+    prob = float(candidate.get("prob", 0.0) or 0.0)
+    if prob > 0.0:
+        return prob
+    logprob = candidate.get("logprob")
+    if logprob is None:
+        return 0.0
+    return math.exp(float(logprob))
+```
+
+```python
+token_ids = token_ids_from_text(token_text)
+if token_ids:
+    normalized_candidates.append(
+        {
+            "tokenId": int(token_ids[0]),
+            "tokenIds": token_ids,
+            "tokenText": token_text,
+            "prob": prob,
+            "logprob": logprob,
+            "score": float(logprob if logprob is not None else math.log(max(prob, 1e-12))),
+        }
+    )
+```
+
+Why this is core:
+
+- This is the node where the desktop verifier stopped treating a whole target token piece like only its first character during comparison.
+- It removed the earlier failure mode where many target candidates such as `" doing"` and `" just"` collapsed into the same leading-space codepoint and forced the verifier toward meaningless space-heavy best paths.
+
+## 43. Piece-Aware Draft-Tree Verification Starts Producing Natural Fragments
+
+Commit:
+
+- current working node
+
+Core code:
+
+```python
+proposal_match_len = common_prefix_length(remaining_proposal, candidate_token_ids)
+draft_path_match_len = common_prefix_length(draft_best_suffix, candidate_token_ids)
+draft_overlap = len(set(candidate_token_ids) & set(draft_layer_prob_by_token.keys()))
+
+sort_key = (
+    draft_path_match_len,
+    1 if draft_best_token_id == candidate_token_ids[0] else 0,
+    proposal_match_len,
+    1 if candidate_token_ids and candidate_token_ids[0] in draft_layer_prob_by_token else 0,
+    draft_overlap,
+    candidate_probability(candidate),
+)
+```
+
+```python
+matched_count = common_prefix_length(remaining_proposal, best_candidate_token_ids)
+accepted = remaining_proposal[:matched_count]
+correction = best_candidate_token_ids[matched_count:matched_count + max_correction_tokens]
+```
+
+Why this is core:
+
+- This is the first node where the desktop verifier really used Android draft-tree metadata plus full candidate token sequences to accept meaningful proposal fragments instead of returning mostly spaces.
+- It produced the first stable end-to-end behavior such as `I'm just`, which proved that the remote verifier could do more than shallow overlap logging.
+
+## 44. Experimental Probability Gate Exposes The Mixed Token-Space Boundary
+
+Commit:
+
+- current working node
+
+Core code:
+
+```python
+selected_target_prob = summed_first_token_probability(candidates, proposed_token_id)
+selected_draft_prob = float(draft_prob_by_token.get(proposed_token_id, 0.0))
+
+if selected_target_prob > 0.0 and selected_draft_prob > 0.0:
+    acceptance_probability = min(1.0, selected_target_prob / selected_draft_prob)
+    probability_draw = deterministic_probability_draw(
+        target_session.request_id,
+        target_index,
+        depth,
+        proposed_token_id,
+    )
+    pq_accepted = probability_draw <= acceptance_probability
+```
+
+Why this is core:
+
+- This is the first end-to-end node where the verifier exposed real `p`, `q`, `accP`, `draw`, and `pqAccepted` diagnostics during live Android-to-desktop speculative runs.
+- It also established an equally important negative result: standard per-token `p/q` acceptance degrades in the current system because Android draft ids are still codepoint-compatible while desktop target candidates are still token-piece based.
+
+## 45. EAGLE Alignment Conclusion: Unify Real Token Space Before Standard `p/q`
+
+Commit:
+
+- current working node
+
+Core code:
+
+```python
+elif session.verifier_mode == "llama_true_tree_pq_tokens":
+    # reserved experimental path for unified real-token acceptance
+    ...
+```
+
+```kotlin
+data class DraftTreeNode(
+    val nodeIndex: Int,
+    val tokenId: Int,
+    val tokenText: String,
+    ...
+)
+```
+
+Why this is core:
+
+- This node is not a completed runtime feature yet; it is the project-history point where the implementation direction changed.
+- After confirming EAGLE's design, the project now treats unified real `llama_token` ids as the required next mainline for standard paper-style `p/q` acceptance, rather than continuing to harden the mixed codepoint/piece bridge.
+
 ## Reviewed But Not Listed As Feature Nodes
 
 These commits were reviewed during the git pass but were not promoted to the main feature list because they were documentation-only, ignore-only, template-only, or cleanup-only:

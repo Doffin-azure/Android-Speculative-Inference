@@ -13,6 +13,8 @@ import com.example.myapplication.inference.RemoteInferenceClient
 import com.example.myapplication.inference.SpeculativeCloseRequest
 import com.example.myapplication.inference.SpeculativeProposeRequest
 import com.example.myapplication.inference.SpeculativeStartRequest
+import com.example.myapplication.llama.DraftTreeProposal
+import com.example.myapplication.llama.debug.DraftRuntimeProbeDemo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,6 +50,9 @@ class MainViewModel(
         val treeBranchFactor: Int,
         val treeDepthEvaluated: Int,
         val treeDebugSummary: String,
+        val draftTreeNodeCount: Int,
+        val draftTreeDepthEvaluated: Int,
+        val draftTreeBestPathNodeIndices: List<Int>,
         val status: String,
         val finishReason: String
     )
@@ -70,6 +75,7 @@ class MainViewModel(
     }
 
     private val localLlm: LocalLlm = LocalLlmImpl(application.applicationContext)
+    private val draftRuntimeProbeDemo = DraftRuntimeProbeDemo(application.applicationContext)
     private val remoteClient = RemoteInferenceClient()
 
     private val _backendLabel = MutableStateFlow("Detecting backend...")
@@ -309,6 +315,47 @@ class MainViewModel(
         }
     }
 
+    fun runDraftRuntimeProbeDemo(prompt: String) {
+        viewModelScope.launch {
+            if (_isLoadingModel.value || _isGenerating.value) {
+                return@launch
+            }
+
+            if (!_isModelLoaded.value || _loadedModelPath.value.isBlank()) {
+                _statusMessage.value = "Load model first."
+                appendLog("Draft runtime probe blocked: model not loaded.")
+                return@launch
+            }
+
+            if (prompt.isBlank()) {
+                _statusMessage.value = "Please enter a prompt."
+                appendLog("Draft runtime probe blocked: prompt is empty.")
+                return@launch
+            }
+
+            _isGenerating.value = true
+            _statusMessage.value = "Running draft runtime probe..."
+            _lastError.value = ""
+            try {
+                appendLog("Draft runtime probe requested. Prompt length: ${prompt.length}")
+                val result = draftRuntimeProbeDemo.runTopKAndStateRoundTripDemo(
+                    modelPath = _loadedModelPath.value,
+                    userPrompt = prompt
+                )
+                _output.value = result
+                _statusMessage.value = "Draft runtime probe complete."
+                appendLog("Draft runtime probe completed.")
+            } catch (e: Exception) {
+                _lastError.value = e.message ?: "unknown error"
+                _statusMessage.value = "Draft runtime probe error: ${e.message}"
+                appendLog("Draft runtime probe error: ${e.message ?: "unknown error"}")
+            } finally {
+                _isGenerating.value = false
+                persistDiagnosticSnapshot()
+            }
+        }
+    }
+
     fun testRemoteConnectivity() {
         viewModelScope.launch {
             if (_isLoadingModel.value || _isGenerating.value) {
@@ -472,17 +519,28 @@ class MainViewModel(
                 )
 
                 val localDraftSupported = runCatching { localLlm.supportsDraftSession() }.getOrDefault(false)
-                if (localDraftSupported) {
-                    appendLog("Opening local draft session for speculative run.")
-                    val localDraftSession = localLlm.startDraftSession(
-                        systemPrompt = "",
-                        userPrompt = prompt,
-                        predictLength = SPECULATIVE_STUB_MAX_STEPS * SPECULATIVE_STUB_MAX_DRAFT_TOKENS
-                    )
-                    activeLocalDraftSessionId = localDraftSession.sessionId
-                    appendLog(
-                        "Local draft session started. sessionId=${localDraftSession.sessionId}, acceptedTokenCount=${localDraftSession.acceptedTokenCount}"
-                    )
+                val localDraftTreeSupported = runCatching { localLlm.supportsDraftTree() }.getOrDefault(false)
+                val localDraftReady = runCatching { localLlm.isModelLoaded() }.getOrDefault(false)
+                if (localDraftSupported && localDraftReady) {
+                    runCatching {
+                        appendLog("Opening local draft session for speculative run.")
+                        localLlm.startDraftSession(
+                            systemPrompt = "",
+                            userPrompt = prompt,
+                            predictLength = SPECULATIVE_STUB_MAX_STEPS * SPECULATIVE_STUB_MAX_DRAFT_TOKENS
+                        )
+                    }.onSuccess { localDraftSession ->
+                        activeLocalDraftSessionId = localDraftSession.sessionId
+                        appendLog(
+                            "Local draft session started. sessionId=${localDraftSession.sessionId}, acceptedTokenCount=${localDraftSession.acceptedTokenCount}"
+                        )
+                    }.onFailure { draftError ->
+                        appendLog(
+                            "Local draft session unavailable; speculative run will fall back to stub draft tokens. ${draftError.message ?: "unknown error"}"
+                        )
+                    }
+                } else if (localDraftSupported) {
+                    appendLog("Local draft session supported but local model is not ready; speculative run will use stub draft tokens.")
                 } else {
                     appendLog("Local draft session unsupported; speculative run will use stub draft tokens.")
                 }
@@ -492,6 +550,7 @@ class MainViewModel(
                     verifierMode = startResponse.verifierMode,
                     targetPreviewText = startResponse.targetPreviewText
                 )
+                val useRealTokenDraftPath = startResponse.verifierMode == "llama_true_tree_pq_tokens"
                 val draftSeedTokens = buildStubDraftTokensFromText(draftSeedText)
                 val stepTraces = mutableListOf<SpeculativeStepTrace>()
                 val committedTokenIds = mutableListOf<Int>()
@@ -500,12 +559,42 @@ class MainViewModel(
                 var lastFinishReason = ""
 
                 for (draftStep in 1..SPECULATIVE_STUB_MAX_STEPS) {
+                    var localDraftTreeProposal: DraftTreeProposal? = null
                     val baseTokens = if (activeLocalDraftSessionId != null) {
                         runCatching {
-                            localLlm.draftNextTokenIds(
-                                sessionId = activeLocalDraftSessionId,
-                                maxTokens = SPECULATIVE_STUB_MAX_DRAFT_TOKENS
-                            )
+                            if ((startResponse.verifierMode == "llama_true_tree" || useRealTokenDraftPath) && localDraftTreeSupported) {
+                                val treeProposal = localLlm.draftTreeProposal(
+                                    sessionId = activeLocalDraftSessionId,
+                                    maxDepth = SPECULATIVE_STUB_MAX_DRAFT_TOKENS,
+                                    branchFactor = 3
+                                )
+                                val selectedTreeProposal = if (useRealTokenDraftPath) {
+                                    localLlm.draftRealTokenTreeProposal(
+                                        sessionId = activeLocalDraftSessionId,
+                                        maxDepth = SPECULATIVE_STUB_MAX_DRAFT_TOKENS,
+                                        branchFactor = 3
+                                    )
+                                } else {
+                                    treeProposal
+                                }
+                                localDraftTreeProposal = selectedTreeProposal
+                                appendLog(
+                                    "Local draft tree proposal ready. tokenMode=${selectedTreeProposal.tokenMode}, depth=${selectedTreeProposal.depthEvaluated}, branchFactor=${selectedTreeProposal.branchFactor}, nodeCount=${selectedTreeProposal.nodeCount}, bestPath=${selectedTreeProposal.bestPathTokenIds.joinToString()}, bestPathNodes=${selectedTreeProposal.bestPathNodeIndices.joinToString()}"
+                                )
+                                selectedTreeProposal.bestPathTokenIds.take(SPECULATIVE_STUB_MAX_DRAFT_TOKENS)
+                            } else {
+                                if (useRealTokenDraftPath) {
+                                    localLlm.draftNextRealTokenIds(
+                                        sessionId = activeLocalDraftSessionId,
+                                        maxTokens = SPECULATIVE_STUB_MAX_DRAFT_TOKENS
+                                    )
+                                } else {
+                                    localLlm.draftNextTokenIds(
+                                        sessionId = activeLocalDraftSessionId,
+                                        maxTokens = SPECULATIVE_STUB_MAX_DRAFT_TOKENS
+                                    )
+                                }
+                            }
                         }.onFailure { draftError ->
                             appendLog("Local draft session fetch failed: ${draftError.message ?: "unknown error"}")
                         }.getOrElse { emptyList() }
@@ -524,7 +613,11 @@ class MainViewModel(
                         tokenIds = baseTokens,
                         draftStep = draftStep
                     )
-                    val draftText = tokenIdsToReadableText(proposedTokens)
+                    val draftText = if (useRealTokenDraftPath && activeLocalDraftSessionId != null) {
+                        runCatching { localLlm.renderTokenIds(proposedTokens) }.getOrElse { tokenIdsToReadableText(proposedTokens) }
+                    } else {
+                        tokenIdsToReadableText(proposedTokens)
+                    }
                     _statusMessage.value = "Sending speculative draft step $draftStep..."
                     val proposeResponse = remoteClient.proposeDraft(
                         baseUrl = baseUrl,
@@ -533,7 +626,8 @@ class MainViewModel(
                             draftStep = draftStep,
                             proposedTokenIds = proposedTokens,
                             proposedText = draftText,
-                            maxCorrectionTokens = 1
+                            maxCorrectionTokens = 1,
+                            draftTree = localDraftTreeProposal
                         )
                     )
                     appendLog(
@@ -545,10 +639,17 @@ class MainViewModel(
                     if (activeLocalDraftSessionId != null) {
                         val verifiedTokens = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
                         runCatching {
-                            localLlm.applyVerifiedTokens(
-                                sessionId = activeLocalDraftSessionId,
-                                tokenIds = verifiedTokens
-                            )
+                            if (useRealTokenDraftPath) {
+                                localLlm.applyVerifiedRealTokens(
+                                    sessionId = activeLocalDraftSessionId,
+                                    tokenIds = verifiedTokens
+                                )
+                            } else {
+                                localLlm.applyVerifiedTokens(
+                                    sessionId = activeLocalDraftSessionId,
+                                    tokenIds = verifiedTokens
+                                )
+                            }
                         }.onSuccess { handle ->
                             appendLog(
                                 "Local draft session advanced. sessionId=${handle.sessionId}, acceptedTokenCount=${handle.acceptedTokenCount}"
@@ -583,6 +684,9 @@ class MainViewModel(
                         treeBranchFactor = proposeResponse.treeBranchFactor,
                         treeDepthEvaluated = proposeResponse.treeDepthEvaluated,
                         treeDebugSummary = proposeResponse.treeDebugSummary,
+                        draftTreeNodeCount = proposeResponse.draftTreeNodeCount,
+                        draftTreeDepthEvaluated = proposeResponse.draftTreeDepthEvaluated,
+                        draftTreeBestPathNodeIndices = proposeResponse.draftTreeBestPathNodeIndices,
                         status = proposeResponse.status,
                         finishReason = proposeResponse.finishReason
                     )
@@ -626,11 +730,17 @@ class MainViewModel(
                         appendLine("Start replay prompt: ${startResponse.lastReplayPrompt}")
                     }
                     appendLine("Draft seed text: $draftSeedText")
+                    appendLine("Draft token mode: ${if (useRealTokenDraftPath) "real_token" else "codepoint_legacy"}")
                     appendLine("Local draft session supported: $localDraftSupported")
                     appendLine("Local draft session active: ${activeLocalDraftSessionId ?: ""}")
                     appendLine("Draft steps completed: ${stepTraces.size}")
                     appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
-                    appendLine("Committed text: ${tokenIdsToReadableText(committedTokenIds)}")
+                    appendLine(
+                        "Committed text: ${
+                            if (useRealTokenDraftPath) runCatching { localLlm.renderTokenIds(committedTokenIds) }.getOrElse { tokenIdsToReadableText(committedTokenIds) }
+                            else tokenIdsToReadableText(committedTokenIds)
+                        }"
+                    )
                     if (finalStep != null) {
                         appendLine("Final step status: ${finalStep.status}")
                         appendLine("Final accepted count: ${finalStep.acceptedCount}")
@@ -660,6 +770,9 @@ class MainViewModel(
                             appendLine("Final tree depth evaluated: ${finalStep.treeDepthEvaluated}")
                             appendLine("Final tree best path: ${finalStep.treeBestPathTokenIds.joinToString()}")
                             appendLine("Final tree debug: ${finalStep.treeDebugSummary}")
+                            appendLine("Final draft tree node count: ${finalStep.draftTreeNodeCount}")
+                            appendLine("Final draft tree depth evaluated: ${finalStep.draftTreeDepthEvaluated}")
+                            appendLine("Final draft tree best path nodes: ${finalStep.draftTreeBestPathNodeIndices.joinToString()}")
                         }
                     }
                     appendLine("Close status: ${closeResponse.status}")
@@ -703,6 +816,7 @@ class MainViewModel(
                     appendLine("Final correction count: ${finalStep?.correctionTokenIds?.size ?: 0}")
                     appendLine("Tree candidate count: ${finalStep?.treeCandidateCount ?: 0}")
                     appendLine("Tree depth evaluated: ${finalStep?.treeDepthEvaluated ?: 0}")
+                    appendLine("Draft tree node count: ${finalStep?.draftTreeNodeCount ?: 0}")
                     appendLine("Committed token count: ${committedTokenIds.size}")
                     appendLine("Local draft session supported: $localDraftSupported")
                     appendLine("Close accepted text: ${closeResponse.acceptedText}")
@@ -730,7 +844,7 @@ class MainViewModel(
                         appendLine("Step details:")
                         stepTraces.forEach { trace ->
                             appendLine(
-                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText} verifierStage=${trace.verifierStage} runtime=${trace.trueRuntimeBackend} slot=${trace.llamaServerSlotId} chunkStart=${trace.lastTrueChunkStart} chunkConsumed=${trace.lastTrueChunkConsumed} treeCandidates=${trace.treeCandidateCount} treeBestPath=${trace.treeBestPathTokenIds.joinToString()}"
+                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText} verifierStage=${trace.verifierStage} runtime=${trace.trueRuntimeBackend} slot=${trace.llamaServerSlotId} chunkStart=${trace.lastTrueChunkStart} chunkConsumed=${trace.lastTrueChunkConsumed} treeCandidates=${trace.treeCandidateCount} treeBestPath=${trace.treeBestPathTokenIds.joinToString()} draftTreeNodes=${trace.draftTreeNodeCount} draftBestNodes=${trace.draftTreeBestPathNodeIndices.joinToString()}"
                             )
                             if (trace.treeDebugSummary.isNotBlank()) {
                                 appendLine("  treeDebug=${trace.treeDebugSummary}")

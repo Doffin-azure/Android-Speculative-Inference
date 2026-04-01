@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
                 onTestRemoteConnectivity = viewModel::testRemoteConnectivity,
                 onSelectModelCandidate = viewModel::selectModelCandidate,
                 onLoadModel = { viewModel.loadModel() },
+                onRunDraftRuntimeProbeDemo = { prompt -> viewModel.runDraftRuntimeProbeDemo(prompt) },
                 onRun = { prompt -> viewModel.runInference(prompt) }
             )
         }

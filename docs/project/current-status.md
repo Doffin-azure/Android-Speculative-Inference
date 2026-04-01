@@ -52,7 +52,23 @@ Current real stage:
 - the Android app now also surfaces the desktop true-verifier runtime backend, server slot, and chunk-position debug fields
 - the `:lib` and app local-inference layers now expose an explicit draft-session interface boundary
 - the Android local runtime now also has a first real draft-session implementation that rebuilds native state from the verified assistant prefix and samples model-driven draft codepoint ids for the existing speculative wire format
+- the Android local runtime now also exposes a first dynamic draft-tree proposal path that returns top-k candidate nodes with probabilities while keeping the current speculative wire protocol unchanged
+- the codebase now also contains a standalone Android draft-runtime probe demo that can test top-k probability extraction and state save/restore without changing the main speculative interface
+- that standalone Android draft-runtime probe demo now also prints a compact summary of the local branch-expanded draft tree, including node count and best-path node indices
 - the desktop service now also exposes a first `llama_true_tree` verifier mode, which keeps the wire protocol unchanged while building a shallow target-side candidate tree from `llama-server` top-k results
+- the Android speculative client can now attach an optional local draft-tree payload to `propose`, and the desktop `llama_true_tree` verifier can now consume that draft-tree metadata when scoring target-side tree overlap
+- the desktop `llama_true_tree` verifier has now also been upgraded from first-character candidate projection to piece-aware candidate sequences, which removed the earlier "everything collapses to space" behavior
+- the desktop `llama_true_tree` verifier can now accept multi-token proposal prefixes against a best target candidate sequence, which moved end-to-end results from pure spaces to natural fragments such as `I'm just`
+- the desktop verifier now also contains a first experimental probability gate that reads `p`, `q`, `accP`, and `pqAccepted` debug fields while still running inside the old mixed token-space protocol
+- the latest experiments have also confirmed a new hard boundary: standard per-token `p/q` acceptance degrades under the current codepoint/piece mixed token-space and must be postponed until Android draft, protocol, and desktop target all use unified real `llama_token` ids
+- the Android `:lib` layer now also exposes a first parallel real-token draft skeleton alongside the legacy codepoint path:
+  - real-token draft token generation
+  - real-token draft tree generation
+  - token-id detokenize/render helper
+  - real-token apply-verified helper
+- that new real-token path is intentionally not yet the default speculative mainline; the current app regression path still runs through the legacy wire-compatible route until protocol and desktop verifier support catch up
+- the desktop service and Android app now also expose a first dedicated experimental verifier path, `llama_true_tree_pq_tokens`
+- when that verifier mode is active, the Android speculative loop now switches from legacy draft APIs to the new real-token draft APIs while still leaving `llama_true_tree` untouched as the regression baseline
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -104,7 +120,15 @@ Current strongest conclusion:
 - the Android-side debug harness can now expose whether true verification is using `llama-cli` replay or a `llama-server` slot-backed runtime
 - the codebase now has an explicit local draft-session boundary (`supportsDraftSession / startDraftSession / draftNextTokenIds / applyVerifiedTokens / closeDraftSession`)
 - that draft-session boundary now has a first real implementation in the Android local runtime, although it still returns codepoint-compatible draft ids instead of true libllama token ids
+- the Android local runtime can now also emit a branch-expanded dynamic draft-tree structure with per-node probabilities for `llama_true_tree`, using local runtime snapshot/restore and last-token replay to explore multiple shallow branches while still keeping codepoint-compatible ids
+- that branch-expanded Android draft tree now also returns explicit node identities, cumulative branch scores, and best-path node indices, which is the first real branch-object skeleton on the draft side
+- a separate draft-runtime probe demo now exists to validate top-k probability extraction and context state round-tripping before any branch-aware production runtime is attempted
 - the new `llama_true_tree` verifier now uses target-side top-k candidates from `llama-server` to score a shallow best path and map that result back into the existing accepted/correction protocol
+- that tree verifier no longer relies on first-character projection for candidate comparison; it now keeps full candidate token-id sequences on the desktop side, which fixed the earlier "leading-space collapse" failure mode
+- the Android draft tree is now proven to arrive at the desktop verifier during real device speculative runs, and the desktop debug output now surfaces draft-tree node counts, best-path nodes, overlap, and first-pass `p/q` acceptance diagnostics
+- the current best end-to-end behavior under `llama_true_tree` is now a piece-aware acceptance path that can produce natural fragments such as `I'm just` from the Android draft tree plus desktop target verification
+- the newest experimental blocker is now explicit: a paper-style per-token `p/q` gate cannot yet replace piece-aware acceptance because the project still mixes codepoint-compatible wire ids on Android with token-piece target candidates on desktop
+- the next durable route is therefore no longer "keep tweaking the mixed-space verifier"; it is unifying Android draft production, speculative payloads, and desktop target lookup around real `llama_token` ids
 
 ## Important Files
 
@@ -141,6 +165,9 @@ Primary blocker:
 - the next blocker is no longer the absence of any true verifier mode
 - the next blocker is strengthening the new `llama-server`-backed true verifier path beyond prompt-cache reuse and shallow target-side tree scoring toward a fuller persistent target runtime session implementation
 - the next blocker after that is upgrading the new Android local draft runtime from codepoint-compatible draft ids to true token/runtime semantics with less replay and stronger state continuity
+- the newest concrete blocker is that the current mixed token space (`codepoint-compatible` Android draft ids versus desktop token-piece candidates) prevents a stable implementation of standard paper-style per-token `p/q` acceptance
+- that means the verifier can currently use probability gates only as an experimental aid; the real implementation seam has shifted to token-space unification across Android native, speculative payloads, and desktop target lookup
+- the Android side now has the first experimental real-token draft APIs, but the next blocker remains wiring that real-token path through the speculative payload and desktop verifier without regressing the current tree-aware baseline
 
 Secondary blocker:
 
@@ -153,6 +180,7 @@ The next step should focus on one of these:
 1. keep `llama_replay_proxy` as the regression harness for desktop-side speculative verification
 2. replace replay-based proxy verification with real target-model token verification
 3. keep ordinary remote fallback active while the real verifier is introduced
+4. migrate the mixed codepoint/piece speculative path toward unified real `llama_token` ids before re-attempting standard per-token `p/q` acceptance
 
 ## Immediate Execution Order
 
@@ -167,7 +195,9 @@ Use this order unless a new runtime failure appears:
 7. let desktop verifier state flow through target-session helpers instead of direct speculative-session mutation
 8. use `llama_true_step` as the first true-target regression mode on desktop
 9. strengthen that true verifier toward a persistent target runtime session, now starting from the new `llama-server` slot-backed path when available
-10. only after the first speculative loop works, optimize chunking or transport
+10. once tree-aware verification is stable, unify Android draft ids, protocol payloads, and desktop target lookup on real `llama_token` ids
+11. only after the first real token-space path works, re-introduce standard per-token `p/q` acceptance
+12. only after the first speculative loop works, optimize chunking or transport
 
 Practical interpretation:
 
@@ -177,6 +207,7 @@ Practical interpretation:
 - use `docs/project/project-progress-summary.md` when you need the milestone-level view of everything completed so far
 - use `docs/project/speculative-core-code-explanation.md` when you need the current implementation's key code snippets instead of only milestone summaries
 - use `docs/project/project-core-code-history.md` when you need the historical ledger of completed feature nodes and their core code
+- use `docs/project/android-draft-eagle-runtime-gap.md` when you need the current capability gap analysis for pushing the Android draft runtime toward an EAGLE-style branch-aware implementation
 - use `docs/project/desktop-true-verifier-minimum-boundary.md` when deciding what the first real desktop verifier is allowed to change
 - use `docs/project/computer-inference-service-boundary.md` for architecture boundaries
 - use `docs/project/desktop-inference-service-runbook.md` for the working desktop-service baseline
@@ -191,6 +222,8 @@ The next node is complete when all of the following are true:
 
 - the desktop verifier no longer depends on prompt-derived or preview-text proxy token ids
 - the desktop `propose` path derives accepted/correction semantics from real target-model token work
+- Android draft proposals, draft-tree payloads, and desktop verifier lookup all operate in the same real token-id space
+- standard per-token `p/q` acceptance is performed against that unified token space instead of the current codepoint/piece bridge
 - ordinary remote fallback remains available
 - the Android speculative debug harness remains usable as the regression client
 - the close-out includes the required git-sync explanation and markdown summary update

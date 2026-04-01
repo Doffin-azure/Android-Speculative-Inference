@@ -51,6 +51,7 @@ fun MainScreen(
     onTestRemoteConnectivity: () -> Unit,
     onSelectModelCandidate: (String) -> Unit,
     onLoadModel: () -> Unit,
+    onRunDraftRuntimeProbeDemo: (String) -> Unit,
     onRun: (String) -> Unit
 ) {
     var prompt by remember { mutableStateOf("") }
@@ -254,6 +255,16 @@ fun MainScreen(
                 modifier = Modifier.padding(top = 16.dp)
             ) {
                 Text(if (isLoadingModel) "Loading..." else "Load Model")
+            }
+
+            if (isModelLoaded) {
+                OutlinedButton(
+                    onClick = { onRunDraftRuntimeProbeDemo(prompt) },
+                    enabled = !busy,
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text("Run Draft Probe Demo")
+                }
             }
         }
 
