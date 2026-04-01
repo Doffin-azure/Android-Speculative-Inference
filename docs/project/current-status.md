@@ -91,6 +91,10 @@ Current real stage:
   - `acceptanceMode=token_pq`
   - Android draft tokens and desktop target tokens matched directly in the same real-token id space
   - the verifier accepted and corrected on real token ids and produced a natural continuation (`I'm doing well, thank you for`) instead of the earlier character/piece proxy fragments
+- the project has now also locked in the next correctness conclusion:
+  - `llama_true_tree_pq_tokens` remains an approximation baseline only
+  - a new `llama_eagle_aligned` lane is required for any output-preserving claim
+  - that exact lane must fail closed until a native desktop target runtime helper exists
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -168,6 +172,25 @@ Current strongest conclusion:
   - it tracks the active draft parent node while tokens are accepted
   - it first reads `q` from that parent node's children at the next depth
   - only if branch context is unavailable does it fall back to the whole draft depth
+- when the experimental verifier accepts all draft tokens for a step, its follow-up token is no longer forced to target top-1:
+  - it now samples deterministically from the observed target top-k distribution
+  - this makes the follow-up closer to target-side distributional continuation instead of a pure greedy append
+
+## Explicit EAGLE Gap
+
+The project now has one successful unified real-token approximation lane, but it is still not EAGLE-equivalent. The exact remaining differences are:
+
+- EAGLE uses one unified token space by default; this project still keeps the older mixed-space verifier lanes alive beside the real-token experiment.
+- EAGLE compares draft and target on the same model-family token ids; the current correctness lane still depends on Python orchestration and an external desktop runtime boundary.
+- EAGLE reads target probabilities from full logits; the current experimental lane reads `p(x)` from observed top-k slices.
+- EAGLE samples rejection correction from full residual `max(p-q, 0)`; the current lane only approximates residual on the observed top-k slice.
+- EAGLE's follow-up continuation comes from the target distribution; the current lane still approximates follow-up from observed top-k.
+- EAGLE evaluates candidate paths against a persistent target runtime state; the current verifier still depends on replay-oriented Python coordination outside a native helper.
+- EAGLE's correctness proof assumes identical token space and identical conditional prefix; Android draft and desktop target still need stricter prefix-state alignment guarantees.
+- EAGLE may use explicit `d2t/t2d` mapping when vocabularies differ; the current lane assumes the same vocab and has no explicit mapping layer.
+- EAGLE is designed to preserve the verifier model's output distribution; the current experimental lane can still materially change target output because `p`, `q`, correction, and follow-up are all approximate.
+
+The new mainline therefore changes from "improve `llama_true_tree_pq_tokens`" to "build `llama_eagle_aligned` as a separate exact lane with a native desktop target runtime helper and exact branch-conditioned `draftPathSteps`."
 
 ## Important Files
 

@@ -26,6 +26,22 @@ Excluded from the main list but reviewed:
 - pure config-template commits
 - cleanup-only or refactor-only commits that did not complete a new capability by themselves
 
+## Explicit EAGLE Gap
+
+The project now records one explicit history-level conclusion before the next feature list continues:
+
+- EAGLE works in one unified token space by default; this project only recently added one experimental real-token lane and still retains older mixed-space verifier paths.
+- EAGLE compares draft and target on the same model-family token ids; this project still uses Python orchestration plus an external desktop runtime boundary.
+- EAGLE reads target probabilities from full logits; the current experimental lane reads `p(x)` from observed top-k slices.
+- EAGLE samples rejection correction from full residual `max(p-q, 0)`; the current lane only approximates residual on the observed top-k slice.
+- EAGLE samples follow-up continuation from the target distribution; the current lane still approximates follow-up from observed top-k.
+- EAGLE evaluates proposals against a persistent target runtime state; this project still depends on replay-oriented Python coordination for its approximation lane.
+- EAGLE's proof assumes identical token space and identical conditional prefix; Android draft and desktop target still need stricter prefix-state alignment guarantees.
+- EAGLE may use `d2t/t2d` when vocabularies differ; this project currently assumes the same vocab and has no explicit mapping layer.
+- EAGLE is designed to preserve the verifier model's output distribution; the current experimental lane can still materially change target output because `p`, `q`, correction, and follow-up remain approximate.
+
+This is why the new mainline is no longer "keep hardening `llama_true_tree_pq_tokens`". The new mainline is "build `llama_eagle_aligned` as a separate exact lane with a native desktop target runtime helper and exact branch-conditioned `draftPathSteps`."
+
 ## 1. Initial App + Lib Framework
 
 Commit:
@@ -382,6 +398,30 @@ Why this is core:
 
 - This is the first point where the experimental verifier starts reading draft-side `q(x)` from the currently accepted branch context instead of from an unconditional "all nodes at this depth" mixture.
 - It moves the verifier one step closer to the intended conditional probability semantics `q(x | prefix_i)`.
+
+## 54. Sampled Target Follow-Up On Full-Accept Steps
+
+Commit:
+
+- pending working-tree node after `3c5e290`
+
+Core code:
+
+```python
+sampled_followup_token_id, followup_draw = choose_sampled_token_id(
+    followup_prob_by_token,
+    request_id=target_session.request_id,
+    target_index=target_index,
+    depth=len(accepted_step_token_ids),
+    label="followup",
+    working_prefix=working_prefix,
+)
+```
+
+Why this is core:
+
+- On the experimental lane, "accept every draft token then append one more target token" is no longer hardcoded to greedy target top-1.
+- This moves the follow-up behavior one step closer to target-side distributional continuation, even though it still works over the observed top-k slice rather than over full logits.
 
 static void set_last_error(const std::string & message) {
     g_last_error = message;

@@ -445,5 +445,37 @@ class RemoteInferenceClient {
                 }
             }
         )
+        put(
+            "draftPathSteps",
+            JSONArray().apply {
+                draftPathSteps.forEach { step ->
+                    put(
+                        JSONObject().apply {
+                            put("depth", step.depth)
+                            put("parentNodeIndex", step.parentNodeIndex)
+                            put("acceptedPrefixTokenIds", JSONArray(step.acceptedPrefixTokenIds))
+                            put("bestTokenId", step.bestTokenId)
+                            put("bestNodeIndex", step.bestNodeIndex)
+                            put(
+                                "candidates",
+                                JSONArray().apply {
+                                    step.candidates.forEach { candidate ->
+                                        put(
+                                            JSONObject().apply {
+                                                put("nodeIndex", candidate.nodeIndex)
+                                                put("tokenId", candidate.tokenId)
+                                                put("tokenText", candidate.tokenText)
+                                                put("probability", candidate.probability.toDouble())
+                                                put("logProbability", candidate.logProbability.toDouble())
+                                            }
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                    )
+                }
+            }
+        )
     }
 }
