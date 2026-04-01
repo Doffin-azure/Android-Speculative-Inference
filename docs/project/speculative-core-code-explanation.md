@@ -39,6 +39,8 @@ The current code below covers the present speculative scheme:
 11. first experimental `p/q` gate and the token-space boundary
 12. Android parallel real-token draft API skeleton
 13. experimental real-token verifier-mode wiring
+14. experimental unified-token `token_pq` acceptance
+15. observed-top-k residual correction on the experimental lane
 
 ## 1. Desktop Target-Session State
 
@@ -258,6 +260,95 @@ Explanation:
 - The first mismatch returns one correction token.
 - Each real verifier step now also records the latest expected token and increments the true-verifier call counter inside the target session.
 - If the same accepted prefix is checked again, the verifier can now reuse the cached next-token observation instead of calling the target model again.
+
+## 14. Experimental Unified-Token `token_pq` Acceptance
+
+File:
+
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```python
+def compute_true_tree_pq_token_verifier_result(...):
+    for depth, proposed_token_id in enumerate(proposed_token_ids):
+        top_candidates = fetch_target_top_candidates(...)
+        target_prob_by_token = {
+            candidate.token_ids[0]: candidate.probability
+            for candidate in top_candidates
+            if candidate.token_ids
+        }
+        draft_prob_by_token = {
+            node.token_id: node.probability
+            for node in draft_tree.nodes
+            if node.depth == depth
+        }
+
+        target_probability = target_prob_by_token.get(proposed_token_id, 0.0)
+        draft_probability = draft_prob_by_token.get(proposed_token_id, 0.0)
+        acceptance_probability = min(1.0, target_probability / draft_probability)
+        pq_accepted = deterministic_probability_draw(...) <= acceptance_probability
+
+        if pq_accepted:
+            accepted_step_token_ids.append(proposed_token_id)
+            working_prefix += render_token_ids_for_verifier(...)
+            continue
+        ...
+```
+
+Explanation:
+
+- This is the first verifier path that runs accepted/rejected logic directly on real token ids instead of codepoint-compatible ids.
+- `p(x)` comes from the target-side top-k token ids returned by `llama-server`.
+- `q(x)` comes from the Android real-token draft tree at the same depth.
+- `accP = min(1, p/q)` is applied per proposal token on that shared real-token space.
+
+Why this is core:
+
+- This is the first implementation node that actually crosses the project’s token-space boundary and proves Android draft ids and desktop target ids can be compared directly.
+- The successful end-to-end run with:
+  - `verifierMode=llama_true_tree_pq_tokens`
+  - `tokenMode=real_token`
+  - `acceptanceMode=token_pq`
+  showed that the experimental lane can now accept and reject on unified real token ids instead of on debug-only text projections.
+
+## 15. Observed-Top-K Residual Correction
+
+File:
+
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```python
+def choose_residual_token_id(
+    target_prob_by_token: dict[int, float],
+    draft_prob_by_token: dict[int, float],
+    *,
+    request_id: str,
+    target_index: int,
+    depth: int,
+    working_prefix: str,
+) -> tuple[int, float, float]:
+    residual_items = []
+    for token_id, target_prob in target_prob_by_token.items():
+        residual = max(0.0, target_prob - draft_prob_by_token.get(token_id, 0.0))
+        if residual > 0.0:
+            residual_items.append((token_id, residual))
+    ...
+```
+
+Explanation:
+
+- On the experimental `token_pq` lane, rejection no longer jumps straight to target top-1 correction.
+- The verifier now first builds an observed residual `max(p-q, 0)` over the currently available target top-k token ids.
+- If that residual slice is non-empty, correction is sampled from the residual distribution with the same deterministic draw family used elsewhere.
+- Only if the observed residual is empty does the verifier fall back to target best-token correction.
+
+Why this is core:
+
+- This is the first correction-side move from heuristic "best token" correction toward a paper-style residual correction rule.
+- It is still only an approximation because the residual is computed over the observed top-k slice, not over full-vocabulary logits, but it establishes the right algorithmic seam for the next verifier-strengthening node.
 - The cache is now session-wide instead of single-entry, so multiple previously seen prefixes can be reused inside the same desktop target session.
 - The true verifier now also uses a dedicated helper to read the latest cache entry, so debug output no longer duplicates cache-selection logic in multiple response builders.
 - The true verifier now fetches a small continuation chunk for the current prefix and compares the proposal against that chunk, so one verifier call can now accept multiple tokens before returning a correction.
@@ -1038,6 +1129,7 @@ Explanation:
 - The Android client now also records `tokenMode` and `acceptanceMode` from desktop debug fields, so runs on this lane are distinguishable from the older legacy verifier path in UI diagnostics and copied logs.
 - The same experimental lane now also has an explicit fallback contract: if desktop does not receive a `real_token` draft tree, it falls back to piece-prefix acceptance and reports that through `acceptanceMode=fallback_piece_prefix`; if Android does not have a local real-token draft session, it logs the same kind of fallback on the client side.
 - The response-status mapping now also treats "all draft tokens accepted plus one target follow-up token" as an accepted step on this lane, which keeps the experimental logs closer to standard speculative-decoding semantics.
+- Rejection handling on this lane is now also closer to the paper direction: before falling back to target top-1 correction, the verifier computes an observed-top-k residual distribution `max(p-q, 0)` and chooses correction from that residual when it is available.
 
 Why this is core:
 

@@ -77,10 +77,20 @@ Current real stage:
   - it rejects at the first failed token
   - when all draft tokens are accepted for the step, it appends one target follow-up token as correction/output continuation
 - on that experimental lane, "all draft tokens accepted + one target follow-up token appended" is now treated as an accepted step instead of being mislabeled as a correction step
+- when the experimental lane rejects a token, it now no longer defaults directly to target top-1:
+  - it first computes an observed-top-k residual distribution `max(p-q, 0)`
+  - it chooses correction from that residual distribution when available
+  - only then does it fall back to target best-token correction
 - Android speculative diagnostics now also surface explicit `tokenMode` and `acceptanceMode` values from desktop responses, so experimental runs can confirm they are actually on the `real_token + token_pq` lane
 - the experimental verifier lane now also has an explicit fallback rule:
   - if Android does not have an active local real-token draft session, the app falls back to the legacy/stub draft path
   - if desktop does not receive a `real_token` draft tree on `llama_true_tree_pq_tokens`, it falls back to piece-prefix acceptance and reports `acceptanceMode=fallback_piece_prefix`
+- the experimental unified-token lane has now also completed a first real end-to-end device validation:
+  - `verifierMode=llama_true_tree_pq_tokens`
+  - `tokenMode=real_token`
+  - `acceptanceMode=token_pq`
+  - Android draft tokens and desktop target tokens matched directly in the same real-token id space
+  - the verifier accepted and corrected on real token ids and produced a natural continuation (`I'm doing well, thank you for`) instead of the earlier character/piece proxy fragments
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -148,6 +158,10 @@ Current strongest conclusion:
 - the remaining gap on that experimental path is that the internal tree-computation logic still largely reuses the old mixed-space structure and has not yet become a fully token-native verifier end-to-end
 - that remaining gap is now narrower than before: the main unresolved work has shifted from token/text conversion seams to the acceptance algorithm and tree-state logic itself
 - the main remaining gap is that this experimental token-native acceptance path still uses a shallow top-k lookup approximation for `p(x)` and still depends on the current Python-side replay/tree driver instead of a fuller persistent target runtime
+- the latest successful `real_token + token_pq` run also clarifies the next concrete correction-side gap:
+  - observed-top-k residual correction is now wired in
+  - but follow-up / correction still uses only the currently observed top-k slice instead of a fuller target residual over the whole vocabulary
+  - so the experimental lane is now past token-space unification failure, and the next pressure point is improving `p(x)` completeness and residual correction fidelity
 
 ## Important Files
 

@@ -258,6 +258,57 @@ Core code:
 ```cpp
 static std::string g_last_error;
 
+## 49. Experimental Unified-Token `token_pq` Verifier
+
+Commit:
+
+- pending working-tree node after `58cdbf8`
+
+Core code:
+
+```python
+def compute_true_tree_pq_token_verifier_result(...):
+    target_prob_by_token = {
+        candidate.token_ids[0]: candidate.probability
+        for candidate in top_candidates
+        if candidate.token_ids
+    }
+    draft_prob_by_token = {
+        node.token_id: node.probability
+        for node in draft_tree.nodes
+        if node.depth == depth
+    }
+    acceptance_probability = min(1.0, target_probability / draft_probability)
+    pq_accepted = deterministic_probability_draw(...) <= acceptance_probability
+```
+
+Why this is core:
+
+- This is the first verifier path in the project that performs `p/q` acceptance directly on unified real token ids.
+- It is the implementation seam that turned `llama_true_tree_pq_tokens` from pure mode wiring into a real experimental acceptance path.
+
+## 50. Observed-Top-K Residual Correction
+
+Commit:
+
+- pending working-tree node after `58cdbf8`
+
+Core code:
+
+```python
+residual = max(0.0, target_prob - draft_prob_by_token.get(token_id, 0.0))
+...
+if residual_token_id >= 0:
+    correction_token_ids = [residual_token_id][:max_correction_tokens]
+else:
+    correction_token_ids = [target_best_token_id][:max_correction_tokens]
+```
+
+Why this is core:
+
+- This is the first correction rule on the experimental real-token lane that moves toward `max(p-q, 0)` instead of always taking target top-1.
+- It is still an approximation over the observed top-k slice, but it establishes the correction seam needed before full-vocabulary residual sampling becomes practical.
+
 static void set_last_error(const std::string & message) {
     g_last_error = message;
 }
@@ -1244,6 +1295,28 @@ Why this is core:
 
 - This is the first node where `llama_true_tree_pq_tokens` stops sharing the legacy piece-prefix acceptance behavior and starts running a distinct per-token acceptance loop on real token ids.
 - It also adds the "all accepted then append one target follow-up token" behavior that makes the experimental real-token lane much closer to the standard speculative decoding control flow than the older mixed-space tree verifier.
+
+## 48. Experimental Real-Token Verifier Adds Residual Correction
+
+Commit:
+
+- current working node
+
+Core code:
+
+```python
+residual = max(0.0, float(target_prob) - float(draft_prob_by_token.get(token_id, 0.0) or 0.0))
+```
+
+```python
+residual_token_id, residual_total, residual_draw = choose_residual_token_id(...)
+correction_token_id = residual_token_id if residual_token_id >= 0 else target_best_token_id
+```
+
+Why this is core:
+
+- This is the first node where rejection correction on the experimental real-token lane stops defaulting directly to target top-1.
+- Instead, the verifier now approximates the paper-style `max(p-q, 0)` correction distribution over the observed target top-k set and only falls back to target best-token correction if no positive residual mass is available.
 
 ## Reviewed But Not Listed As Feature Nodes
 
