@@ -346,6 +346,7 @@ Explanation:
 - Only if the observed residual is empty does the verifier fall back to target best-token correction.
 - The same experimental lane now also aggregates `p(x)` across all observed top-k target candidates that begin with the same first token id, instead of letting one candidate overwrite another.
 - It now also queries a wider target top-k window than the old branch-expansion baseline, so `p(x)` and observed residual correction both have a broader candidate slice to work from.
+- It now also narrows `q(x)` to the current accepted draft branch when that branch context is available, instead of mixing every node from the same depth into one unconditional draft probability table.
 
 Why this is core:
 

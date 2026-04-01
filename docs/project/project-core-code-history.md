@@ -355,6 +355,34 @@ Why this is core:
   - tree width for debug/path exploration
   - target top-k width for real-token probability lookup
 
+## 53. Contextual Draft-Branch `q(x)` On The Experimental Lane
+
+Commit:
+
+- pending working-tree node after `0bb7241`
+
+Core code:
+
+```python
+draft_nodes_at_depth = select_contextual_draft_nodes(
+    draft_nodes_by_depth,
+    depth=depth,
+    active_parent_node_index=active_draft_parent_node_index,
+)
+...
+matched_draft_node = choose_contextual_draft_node(
+    draft_nodes_at_depth,
+    token_id=proposed_token_id,
+)
+if matched_draft_node is not None:
+    active_draft_parent_node_index = matched_draft_node.node_index
+```
+
+Why this is core:
+
+- This is the first point where the experimental verifier starts reading draft-side `q(x)` from the currently accepted branch context instead of from an unconditional "all nodes at this depth" mixture.
+- It moves the verifier one step closer to the intended conditional probability semantics `q(x | prefix_i)`.
+
 static void set_last_error(const std::string & message) {
     g_last_error = message;
 }
