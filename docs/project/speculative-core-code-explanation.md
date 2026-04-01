@@ -344,6 +344,7 @@ Explanation:
 - The verifier now first builds an observed residual `max(p-q, 0)` over the currently available target top-k token ids.
 - If that residual slice is non-empty, correction is sampled from the residual distribution with the same deterministic draw family used elsewhere.
 - Only if the observed residual is empty does the verifier fall back to target best-token correction.
+- The same experimental lane now also aggregates `p(x)` across all observed top-k target candidates that begin with the same first token id, instead of letting one candidate overwrite another.
 
 Why this is core:
 

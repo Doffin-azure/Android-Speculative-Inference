@@ -309,6 +309,29 @@ Why this is core:
 - This is the first correction rule on the experimental real-token lane that moves toward `max(p-q, 0)` instead of always taking target top-1.
 - It is still an approximation over the observed top-k slice, but it establishes the correction seam needed before full-vocabulary residual sampling becomes practical.
 
+## 51. Aggregated First-Token `p(x)` On The Experimental Lane
+
+Commit:
+
+- pending working-tree node after `e19501e`
+
+Core code:
+
+```python
+def aggregate_first_token_probabilities(candidates: list[dict[str, Any]]) -> dict[int, float]:
+    aggregated: dict[int, float] = {}
+    for candidate in candidates:
+        candidate_token_ids = [int(value) for value in candidate.get("tokenIds") or []]
+        ...
+        token_id = candidate_token_ids[0]
+        aggregated[token_id] = aggregated.get(token_id, 0.0) + candidate_probability(candidate)
+```
+
+Why this is core:
+
+- This changes the experimental verifier's `p(x)` from "one candidate's probability" to "the sum of all observed target top-k candidates that begin with token `x`".
+- It is a small but important improvement because the real-token lane can otherwise undercount `p(x)` whenever llama-server exposes multiple continuation pieces that share the same first token.
+
 static void set_last_error(const std::string & message) {
     g_last_error = message;
 }
