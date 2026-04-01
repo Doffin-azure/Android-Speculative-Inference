@@ -77,6 +77,9 @@ Current real stage:
   - it rejects at the first failed token
   - when all draft tokens are accepted for the step, it appends one target follow-up token as correction/output continuation
 - Android speculative diagnostics now also surface explicit `tokenMode` and `acceptanceMode` values from desktop responses, so experimental runs can confirm they are actually on the `real_token + token_pq` lane
+- the experimental verifier lane now also has an explicit fallback rule:
+  - if Android does not have an active local real-token draft session, the app falls back to the legacy/stub draft path
+  - if desktop does not receive a `real_token` draft tree on `llama_true_tree_pq_tokens`, it falls back to piece-prefix acceptance and reports `acceptanceMode=fallback_piece_prefix`
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings

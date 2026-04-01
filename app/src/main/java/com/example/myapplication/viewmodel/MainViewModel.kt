@@ -552,7 +552,13 @@ class MainViewModel(
                     verifierMode = startResponse.verifierMode,
                     targetPreviewText = startResponse.targetPreviewText
                 )
-                val useRealTokenDraftPath = startResponse.verifierMode == "llama_true_tree_pq_tokens"
+                val useRealTokenDraftPath = (
+                    startResponse.verifierMode == "llama_true_tree_pq_tokens" &&
+                        activeLocalDraftSessionId != null
+                )
+                if (startResponse.verifierMode == "llama_true_tree_pq_tokens" && !useRealTokenDraftPath) {
+                    appendLog("Experimental real-token verifier requested, but no local real-token draft session is active; falling back to legacy/stub draft path.")
+                }
                 val draftSeedTokens = buildStubDraftTokensFromText(draftSeedText)
                 val stepTraces = mutableListOf<SpeculativeStepTrace>()
                 val committedTokenIds = mutableListOf<Int>()

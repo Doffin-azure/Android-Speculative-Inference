@@ -69,6 +69,8 @@ Instead:
   Use this when you want the short node record for the first parallel Android draft APIs that expose real token ids without removing the legacy speculative baseline.
 - `archive/2026-04-01-real-token-verifier-mode-wiring.md`
   Use this when you want the short node record for the first end-to-end experimental verifier mode that switches the Android speculative loop onto the new real-token draft APIs.
+- `archive/2026-04-01-experimental-real-token-pq-verifier.md`
+  Use this when you want the short node record for the first experimental verifier node that actually performs per-token `p/q` acceptance on the real-token lane.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
 - `workflow/collaboration-rules.md`
@@ -111,6 +113,8 @@ Instead:
   The archive note for the first experimental Android real-token draft API skeleton that now exists beside the legacy codepoint-compatible path.
 - `docs/archive/2026-04-01-real-token-verifier-mode-wiring.md`
   The archive note for the first experimental verifier mode, `llama_true_tree_pq_tokens`, that now routes the Android speculative loop through the parallel real-token draft APIs.
+- `docs/archive/2026-04-01-experimental-real-token-pq-verifier.md`
+  The archive note for the first experimental verifier node where the real-token lane begins running its own per-token `p/q` acceptance behavior.
 - `docs/workflow/collaboration-rules.md`
   The collaboration contract for git sync, Android Studio verification, the Windows git-command fallback, and the "user does bundle" boundary.
 - `docs/archive/root-document-map.md`
