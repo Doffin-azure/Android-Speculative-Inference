@@ -1073,6 +1073,36 @@ def summed_first_token_probability(candidates: list[dict[str, Any]], token_id: i
     return total
 
 
+def choose_residual_token_id(
+    target_prob_by_token: dict[int, float],
+    draft_prob_by_token: dict[int, float],
+    *,
+    request_id: str,
+    target_index: int,
+    depth: int,
+    working_prefix: str,
+) -> tuple[int, float, float]:
+    residual_items: list[tuple[int, float]] = []
+    for token_id, target_prob in target_prob_by_token.items():
+        residual = max(0.0, float(target_prob) - float(draft_prob_by_token.get(token_id, 0.0) or 0.0))
+        if residual > 0.0:
+            residual_items.append((int(token_id), residual))
+    if not residual_items:
+        return -1, 0.0, -1.0
+
+    residual_items.sort(key=lambda item: (-item[1], item[0]))
+    residual_total = sum(weight for _, weight in residual_items)
+    draw = deterministic_probability_draw(request_id, target_index, depth, "residual", working_prefix)
+    threshold = draw * residual_total
+    running = 0.0
+    for token_id, weight in residual_items:
+        running += weight
+        if running >= threshold:
+            return token_id, residual_total, draw
+    token_id, _ = residual_items[-1]
+    return token_id, residual_total, draw
+
+
 def build_target_preview_text(
     config: ServiceConfig,
     *,
@@ -1605,6 +1635,9 @@ def compute_true_tree_pq_token_verifier_result(
         pq_acceptance_prob = -1.0
         pq_draw = -1.0
         pq_accepted = False
+        residual_token_id = -1
+        residual_total = 0.0
+        residual_draw = -1.0
         if selected_draft_prob > 0.0:
             pq_acceptance_prob = min(1.0, selected_target_prob / selected_draft_prob)
             pq_draw = deterministic_probability_draw(
@@ -1615,6 +1648,15 @@ def compute_true_tree_pq_token_verifier_result(
                 working_prefix,
             )
             pq_accepted = pq_draw <= pq_acceptance_prob
+        if not pq_accepted:
+            residual_token_id, residual_total, residual_draw = choose_residual_token_id(
+                target_prob_by_token,
+                draft_prob_by_token,
+                request_id=target_session.request_id,
+                target_index=target_index,
+                depth=depth,
+                working_prefix=working_prefix,
+            )
 
         proposal_in_topk = proposed_token_id in target_prob_by_token
         overlap_count = len(set(target_prob_by_token.keys()) & set(draft_prob_by_token.keys()))
@@ -1622,7 +1664,8 @@ def compute_true_tree_pq_token_verifier_result(
             f"d{depth}:best={target_best_token_id} proposal={proposed_token_id} "
             f"inTopK={proposal_in_topk} draftBest={draft_best_token if draft_best_token is not None else '-'} "
             f"overlap={overlap_count} p={selected_target_prob:.4f} q={selected_draft_prob:.4f} "
-            f"accP={pq_acceptance_prob:.4f} draw={pq_draw:.4f} pqAccepted={pq_accepted}"
+            f"accP={pq_acceptance_prob:.4f} draw={pq_draw:.4f} pqAccepted={pq_accepted} "
+            f"residualBest={residual_token_id} residualTotal={residual_total:.4f} residualDraw={residual_draw:.4f}"
         )
 
         if pq_accepted:
@@ -1631,8 +1674,9 @@ def compute_true_tree_pq_token_verifier_result(
             continue
 
         rejected_from_index = depth
-        if target_best_token_id >= 0:
-            correction_token_ids = [target_best_token_id][:max_correction_tokens]
+        correction_token_id = residual_token_id if residual_token_id >= 0 else target_best_token_id
+        if correction_token_id >= 0:
+            correction_token_ids = [correction_token_id][:max_correction_tokens]
             working_prefix += render_token_ids_for_verifier(config, target_session, correction_token_ids)
         break
 
