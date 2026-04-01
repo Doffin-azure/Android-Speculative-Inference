@@ -76,6 +76,7 @@ Current real stage:
   - it performs per-token `p/q` acceptance on real token ids
   - it rejects at the first failed token
   - when all draft tokens are accepted for the step, it appends one target follow-up token as correction/output continuation
+- on that experimental lane, "all draft tokens accepted + one target follow-up token appended" is now treated as an accepted step instead of being mislabeled as a correction step
 - Android speculative diagnostics now also surface explicit `tokenMode` and `acceptanceMode` values from desktop responses, so experimental runs can confirm they are actually on the `real_token + token_pq` lane
 - the experimental verifier lane now also has an explicit fallback rule:
   - if Android does not have an active local real-token draft session, the app falls back to the legacy/stub draft path

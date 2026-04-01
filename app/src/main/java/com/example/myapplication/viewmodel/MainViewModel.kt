@@ -848,6 +848,12 @@ class MainViewModel(
                     appendLine("Speculative multi-step stub completed.")
                     appendLine("Verifier mode: ${startResponse.verifierMode}")
                     appendLine("Verifier stage: ${startResponse.verifierStage}")
+                    if (stepTraces.lastOrNull()?.tokenMode?.isNotBlank() == true) {
+                        appendLine("Token mode: ${stepTraces.last().tokenMode}")
+                    }
+                    if (stepTraces.lastOrNull()?.acceptanceMode?.isNotBlank() == true) {
+                        appendLine("Acceptance mode: ${stepTraces.last().acceptanceMode}")
+                    }
                     if (startResponse.trueRuntimeBackend.isNotBlank()) {
                         appendLine("True runtime backend: ${startResponse.trueRuntimeBackend}")
                     }
