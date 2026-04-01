@@ -332,6 +332,29 @@ Why this is core:
 - This changes the experimental verifier's `p(x)` from "one candidate's probability" to "the sum of all observed target top-k candidates that begin with token `x`".
 - It is a small but important improvement because the real-token lane can otherwise undercount `p(x)` whenever llama-server exposes multiple continuation pieces that share the same first token.
 
+## 52. Wider Target Top-K On The Experimental `token_pq` Lane
+
+Commit:
+
+- pending working-tree node after `659add5`
+
+Core code:
+
+```python
+effective_branch_factor = max(
+    branch_factor,
+    draft_tree.branch_factor if draft_tree is not None else branch_factor,
+    DEFAULT_TOKEN_PQ_TARGET_TOPK,
+)
+```
+
+Why this is core:
+
+- The experimental verifier no longer lets `p(x)` and residual correction depend on the same narrow branch-factor budget used by the older tree-expansion path.
+- This creates a cleaner separation between:
+  - tree width for debug/path exploration
+  - target top-k width for real-token probability lookup
+
 static void set_last_error(const std::string & message) {
     g_last_error = message;
 }

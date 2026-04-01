@@ -33,6 +33,7 @@ DEFAULT_LLAMA_PREVIEW_MAX_TOKENS = 8
 DEFAULT_LLAMA_REPLAY_MAX_TOKENS = 8
 DEFAULT_TRUE_VERIFY_MAX_TOKENS = 8
 DEFAULT_TRUE_TREE_BRANCH_FACTOR = 3
+DEFAULT_TOKEN_PQ_TARGET_TOPK = 8
 
 
 def read_gradle_local_properties() -> dict[str, str]:
@@ -1607,6 +1608,7 @@ def compute_true_tree_pq_token_verifier_result(
         effective_branch_factor = max(
             branch_factor,
             draft_tree.branch_factor if draft_tree is not None else branch_factor,
+            DEFAULT_TOKEN_PQ_TARGET_TOPK,
         )
         top_result = fetch_target_top_candidates(
             config,
@@ -1671,7 +1673,7 @@ def compute_true_tree_pq_token_verifier_result(
         proposal_in_topk = proposed_token_id in target_prob_by_token
         overlap_count = len(set(target_prob_by_token.keys()) & set(draft_prob_by_token.keys()))
         debug_lines.append(
-            f"d{depth}:best={target_best_token_id} proposal={proposed_token_id} "
+            f"d{depth}:topK={effective_branch_factor} best={target_best_token_id} proposal={proposed_token_id} "
             f"inTopK={proposal_in_topk} draftBest={draft_best_token if draft_best_token is not None else '-'} "
             f"overlap={overlap_count} p={selected_target_prob:.4f} q={selected_draft_prob:.4f} "
             f"accP={pq_acceptance_prob:.4f} draw={pq_draw:.4f} pqAccepted={pq_accepted} "
@@ -1699,6 +1701,7 @@ def compute_true_tree_pq_token_verifier_result(
             branch_factor=max(
                 branch_factor,
                 draft_tree.branch_factor if draft_tree is not None else branch_factor,
+                DEFAULT_TOKEN_PQ_TARGET_TOPK,
             ),
         )
         target_session.true_runtime_backend = str(followup_result.get("runtimeBackend") or target_session.true_runtime_backend)

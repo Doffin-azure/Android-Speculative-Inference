@@ -345,6 +345,7 @@ Explanation:
 - If that residual slice is non-empty, correction is sampled from the residual distribution with the same deterministic draw family used elsewhere.
 - Only if the observed residual is empty does the verifier fall back to target best-token correction.
 - The same experimental lane now also aggregates `p(x)` across all observed top-k target candidates that begin with the same first token id, instead of letting one candidate overwrite another.
+- It now also queries a wider target top-k window than the old branch-expansion baseline, so `p(x)` and observed residual correction both have a broader candidate slice to work from.
 
 Why this is core:
 
