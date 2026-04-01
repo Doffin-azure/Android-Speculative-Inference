@@ -31,6 +31,8 @@ class MainViewModel(
         val draftStep: Int,
         val proposedTokenIds: List<Int>,
         val proposedText: String,
+        val tokenMode: String,
+        val acceptanceMode: String,
         val acceptedCount: Int,
         val acceptedTokenIds: List<Int>,
         val rejectedFromIndex: Int,
@@ -563,11 +565,6 @@ class MainViewModel(
                     val baseTokens = if (activeLocalDraftSessionId != null) {
                         runCatching {
                             if ((startResponse.verifierMode == "llama_true_tree" || useRealTokenDraftPath) && localDraftTreeSupported) {
-                                val treeProposal = localLlm.draftTreeProposal(
-                                    sessionId = activeLocalDraftSessionId,
-                                    maxDepth = SPECULATIVE_STUB_MAX_DRAFT_TOKENS,
-                                    branchFactor = 3
-                                )
                                 val selectedTreeProposal = if (useRealTokenDraftPath) {
                                     localLlm.draftRealTokenTreeProposal(
                                         sessionId = activeLocalDraftSessionId,
@@ -575,7 +572,11 @@ class MainViewModel(
                                         branchFactor = 3
                                     )
                                 } else {
-                                    treeProposal
+                                    localLlm.draftTreeProposal(
+                                        sessionId = activeLocalDraftSessionId,
+                                        maxDepth = SPECULATIVE_STUB_MAX_DRAFT_TOKENS,
+                                        branchFactor = 3
+                                    )
                                 }
                                 localDraftTreeProposal = selectedTreeProposal
                                 appendLog(
@@ -665,6 +666,8 @@ class MainViewModel(
                         draftStep = draftStep,
                         proposedTokenIds = proposedTokens,
                         proposedText = draftText,
+                        tokenMode = proposeResponse.tokenMode,
+                        acceptanceMode = proposeResponse.acceptanceMode,
                         acceptedCount = proposeResponse.acceptedCount,
                         acceptedTokenIds = proposeResponse.acceptedTokenIds,
                         rejectedFromIndex = proposeResponse.rejectedFromIndex,
@@ -743,6 +746,12 @@ class MainViewModel(
                     )
                     if (finalStep != null) {
                         appendLine("Final step status: ${finalStep.status}")
+                        if (finalStep.tokenMode.isNotBlank()) {
+                            appendLine("Final token mode: ${finalStep.tokenMode}")
+                        }
+                        if (finalStep.acceptanceMode.isNotBlank()) {
+                            appendLine("Final acceptance mode: ${finalStep.acceptanceMode}")
+                        }
                         appendLine("Final accepted count: ${finalStep.acceptedCount}")
                         appendLine("Final rejected from index: ${finalStep.rejectedFromIndex}")
                         appendLine("Final correction token ids: ${finalStep.correctionTokenIds.joinToString()}")
@@ -811,6 +820,12 @@ class MainViewModel(
                     }
                     appendLine("Steps completed: ${stepTraces.size}")
                     appendLine("Final verify status: ${finalStep?.status ?: "not_run"}")
+                    if (!finalStep?.tokenMode.isNullOrBlank()) {
+                        appendLine("Token mode: ${finalStep?.tokenMode}")
+                    }
+                    if (!finalStep?.acceptanceMode.isNullOrBlank()) {
+                        appendLine("Acceptance mode: ${finalStep?.acceptanceMode}")
+                    }
                     appendLine("Final accepted count: ${finalStep?.acceptedCount ?: 0}")
                     appendLine("Final rejected from index: ${finalStep?.rejectedFromIndex ?: -1}")
                     appendLine("Final correction count: ${finalStep?.correctionTokenIds?.size ?: 0}")
@@ -839,12 +854,17 @@ class MainViewModel(
                     appendLine("Local draft session supported: $localDraftSupported")
                     appendLine("Local draft session id: ${activeLocalDraftSessionId ?: ""}")
                     appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
-                    appendLine("Committed text: ${tokenIdsToReadableText(committedTokenIds)}")
+                    appendLine(
+                        "Committed text: ${
+                            if (useRealTokenDraftPath) runCatching { localLlm.renderTokenIds(committedTokenIds) }.getOrElse { tokenIdsToReadableText(committedTokenIds) }
+                            else tokenIdsToReadableText(committedTokenIds)
+                        }"
+                    )
                     if (stepTraces.isNotEmpty()) {
                         appendLine("Step details:")
                         stepTraces.forEach { trace ->
                             appendLine(
-                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText} verifierStage=${trace.verifierStage} runtime=${trace.trueRuntimeBackend} slot=${trace.llamaServerSlotId} chunkStart=${trace.lastTrueChunkStart} chunkConsumed=${trace.lastTrueChunkConsumed} treeCandidates=${trace.treeCandidateCount} treeBestPath=${trace.treeBestPathTokenIds.joinToString()} draftTreeNodes=${trace.draftTreeNodeCount} draftBestNodes=${trace.draftTreeBestPathNodeIndices.joinToString()}"
+                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} tokenMode=${trace.tokenMode} acceptanceMode=${trace.acceptanceMode} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText} verifierStage=${trace.verifierStage} runtime=${trace.trueRuntimeBackend} slot=${trace.llamaServerSlotId} chunkStart=${trace.lastTrueChunkStart} chunkConsumed=${trace.lastTrueChunkConsumed} treeCandidates=${trace.treeCandidateCount} treeBestPath=${trace.treeBestPathTokenIds.joinToString()} draftTreeNodes=${trace.draftTreeNodeCount} draftBestNodes=${trace.draftTreeBestPathNodeIndices.joinToString()}"
                             )
                             if (trace.treeDebugSummary.isNotBlank()) {
                                 appendLine("  treeDebug=${trace.treeDebugSummary}")

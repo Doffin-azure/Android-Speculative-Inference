@@ -926,6 +926,122 @@ Explanation:
 - Android checks that verifier mode at session start and, only on that path, switches from the legacy draft APIs to the new real-token draft APIs.
 - This creates a separate end-to-end experimental lane for unified-token work without replacing the current `llama_true_tree` regression baseline.
 
+## 18. Experimental Desktop Token-Id Lookup Boundary
+
+File:
+
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```python
+def tokenize_with_server(base_url: str, content: str, *, with_pieces: bool = False):
+    response = request_json(
+        "POST",
+        f"{base_url}/tokenize",
+        {
+            "content": content,
+            "add_special": False,
+            "parse_special": True,
+            "with_pieces": with_pieces,
+        },
+    )
+    return response.get("tokens") if isinstance(response.get("tokens"), list) else []
+
+def detokenize_with_server(base_url: str, token_ids: list[int]) -> str:
+    response = request_json("POST", f"{base_url}/detokenize", {"tokens": token_ids})
+    return str(response.get("content") or "")
+```
+
+```python
+if is_real_token_verifier_mode(target_session.verifier_mode):
+    raw_token_id = item.get("id", -1)
+    token_id = int(raw_token_id) if isinstance(raw_token_id, (int, float)) else -1
+    token_ids = [token_id] if token_id >= 0 else []
+else:
+    token_ids = token_ids_from_text(token_text) if token_text else []
+    token_id = token_ids[0] if token_ids else -1
+```
+
+```python
+session.accepted_text = render_token_ids_for_verifier(config, target_session, session.accepted_token_ids)
+target_text_delta = render_token_ids_for_verifier(
+    config,
+    target_session,
+    accepted_step_token_ids + correction_token_ids,
+)
+```
+
+Explanation:
+
+- The experimental verifier lane now has its first true token-native desktop boundary.
+- On `llama_true_tree_pq_tokens`, target top-k candidates no longer get projected back into character ids; the verifier reads llama-server `completion_probabilities[*].id` directly and treats each target candidate as a real token id.
+- The same lane now renders accepted/correction token ids through llama-server `/detokenize`, so replay prompts on that path no longer depend on debug-only character rendering.
+- Fallback chunk tokenization on that path can also use llama-server `/tokenize`, which removes another protocol-edge character bridge.
+- The same helper layer now also drives internal prefix advancement, target-preview debug strings, and `lastTrueExpectedTokenText`, so the experimental lane no longer silently falls back to character rendering after token ids have already crossed the protocol boundary.
+
+Why this is core:
+
+- The previous real-token work only created a parallel Android API surface and verifier-mode switch.
+- This code is the first place where the desktop verifier itself starts consuming and emitting real token ids at the boundary, which is the prerequisite before the inner tree computation can become fully token-native.
+
+## 19. Experimental Token-Native `p/q` Acceptance Function
+
+File:
+
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```python
+def compute_true_tree_pq_token_verifier_result(...):
+    for depth, proposed_token_id in enumerate(proposed_token_ids):
+        top_result = fetch_target_top_candidates(...)
+        candidates = list(top_result.get("candidates") or [])
+        target_best_candidate = max(candidates, key=candidate_probability)
+        target_prob_by_token = {
+            int(candidate.get("tokenId", -1)): candidate_probability(candidate)
+            for candidate in candidates
+            if int(candidate.get("tokenId", -1)) >= 0
+        }
+        selected_target_prob = float(target_prob_by_token.get(proposed_token_id, 0.0) or 0.0)
+        selected_draft_prob = float(draft_prob_by_token.get(proposed_token_id, 0.0) or 0.0)
+        if selected_draft_prob > 0.0:
+            pq_acceptance_prob = min(1.0, selected_target_prob / selected_draft_prob)
+            pq_draw = deterministic_probability_draw(...)
+            pq_accepted = pq_draw <= pq_acceptance_prob
+```
+
+```python
+        if pq_accepted:
+            accepted_step_token_ids.append(proposed_token_id)
+            working_prefix += render_token_ids_for_verifier(config, target_session, [proposed_token_id])
+            continue
+
+        rejected_from_index = depth
+        correction_token_ids = [target_best_token_id][:max_correction_tokens]
+        break
+```
+
+```python
+    if rejected_from_index == -1 and max_correction_tokens > 0:
+        followup_result = fetch_target_top_candidates(...)
+        ...
+        correction_token_ids = followup_token_ids[:max_correction_tokens]
+```
+
+Explanation:
+
+- The experimental `llama_true_tree_pq_tokens` lane no longer reuses the old piece-prefix acceptance function.
+- It now performs a dedicated per-token `p/q` acceptance step on real token ids, rejects at the first failed token, and when all proposal tokens for the step are accepted it appends one target follow-up token.
+- This is the first verifier function in the project that is shaped primarily around the paper-style token-by-token acceptance loop instead of around a piece-prefix candidate comparison.
+- The Android client now also records `tokenMode` and `acceptanceMode` from desktop debug fields, so runs on this lane are distinguishable from the older legacy verifier path in UI diagnostics and copied logs.
+
+Why this is core:
+
+- This is the first point where the experimental real-token lane stops being only a protocol and lookup skeleton and starts having a distinct acceptance algorithm of its own.
+- It does not yet make the whole verifier fully final, but it is the necessary node between "real token ids exist" and "real token speculative acceptance actually runs end-to-end".
+
 ## 12. Android Draft Runtime Uses Assistant Prefill Continuation
 
 Files:

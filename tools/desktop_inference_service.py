@@ -982,6 +982,88 @@ def candidate_probability(candidate: dict[str, Any]) -> float:
     return 0.0
 
 
+def is_real_token_verifier_mode(verifier_mode: str) -> bool:
+    return verifier_mode == "llama_true_tree_pq_tokens"
+
+
+def tokenize_with_server(
+    base_url: str,
+    content: str,
+    *,
+    add_special: bool = False,
+    parse_special: bool = True,
+    with_pieces: bool = False,
+) -> list[dict[str, Any]] | list[int]:
+    response = request_json(
+        "POST",
+        f"{base_url}/tokenize",
+        {
+            "content": content,
+            "add_special": add_special,
+            "parse_special": parse_special,
+            "with_pieces": with_pieces,
+        },
+        timeout_seconds=10.0,
+    )
+    tokens = response.get("tokens")
+    if isinstance(tokens, list):
+        return tokens
+    return []
+
+
+def detokenize_with_server(base_url: str, token_ids: list[int]) -> str:
+    if not token_ids:
+        return ""
+    response = request_json(
+        "POST",
+        f"{base_url}/detokenize",
+        {"tokens": token_ids},
+        timeout_seconds=10.0,
+    )
+    return str(response.get("content") or "")
+
+
+def render_token_ids_for_verifier(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    token_ids: list[int],
+) -> str:
+    if not token_ids:
+        return ""
+    if is_real_token_verifier_mode(target_session.verifier_mode) and config.llama_server_base_url:
+        try:
+            return detokenize_with_server(config.llama_server_base_url, token_ids)
+        except Exception:
+            pass
+    return token_ids_to_debug_text(token_ids)
+
+
+def tokenize_text_for_verifier(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    text: str,
+) -> list[int]:
+    if not text:
+        return []
+    if is_real_token_verifier_mode(target_session.verifier_mode) and config.llama_server_base_url:
+        try:
+            token_entries = tokenize_with_server(
+                config.llama_server_base_url,
+                text,
+                add_special=False,
+                parse_special=True,
+                with_pieces=True,
+            )
+            return [
+                int(item.get("id", -1))
+                for item in token_entries
+                if isinstance(item, dict) and int(item.get("id", -1)) >= 0
+            ]
+        except Exception:
+            pass
+    return token_ids_from_text(text)
+
+
 def summed_first_token_probability(candidates: list[dict[str, Any]], token_id: int) -> float:
     total = 0.0
     for candidate in candidates:
@@ -1352,9 +1434,14 @@ def compute_true_verifier_result(
     target_session.target_preview_text = next_text
     target_session.last_true_chunk_start = target_index
     if not bool(chunk_response.get("debug", {}).get("cacheHit")):
-        record_true_verifier_observation(target_session, prefix_text=working_prefix, next_text=next_text)
+        record_true_verifier_observation(
+            config,
+            target_session,
+            prefix_text=working_prefix,
+            next_text=next_text,
+        )
 
-    expected_token_ids = token_ids_from_text(next_text) if next_text else []
+    expected_token_ids = tokenize_text_for_verifier(config, target_session, next_text)
     preview_debug_parts.extend(list(next_text[: min(len(next_text), 16)]))
 
     for index, proposed_token_id in enumerate(proposed_token_ids):
@@ -1378,7 +1465,7 @@ def compute_true_verifier_result(
 
     committed_token_ids = accepted_step_token_ids + correction_token_ids
     target_session.last_true_chunk_consumed = len(committed_token_ids)
-    target_text_delta = token_ids_to_debug_text(committed_token_ids)
+    target_text_delta = render_token_ids_for_verifier(config, target_session, committed_token_ids)
     finish_reason = ""
     if correction_token_ids:
         finish_reason = ""
@@ -1391,7 +1478,11 @@ def compute_true_verifier_result(
         finish_reason=finish_reason,
         target_index_before_step=target_index,
         target_remaining_count=len(preview_debug_parts),
-        target_preview_debug="".join(preview_debug_parts) or target_session.target_preview_text[:16],
+        target_preview_debug=(
+            render_token_ids_for_verifier(config, target_session, expected_token_ids[:16])
+            if expected_token_ids
+            else "".join(preview_debug_parts) or target_session.target_preview_text[:16]
+        ),
     )
 
 
@@ -1418,7 +1509,11 @@ def compute_true_tree_verifier_result(
     target_session.last_true_chunk_consumed = len(tree.accepted_token_ids) + len(tree.correction_token_ids)
     if tree.best_path_token_ids:
         target_session.last_true_expected_token_id = tree.best_path_token_ids[0]
-        target_session.last_true_expected_token_text = token_ids_to_debug_text([tree.best_path_token_ids[0]])
+        target_session.last_true_expected_token_text = render_token_ids_for_verifier(
+            config,
+            target_session,
+            [tree.best_path_token_ids[0]],
+        )
     target_session.true_verifier_call_count += 1
     return VerifyComputation(
         accepted_token_ids=tree.accepted_token_ids,
@@ -1428,7 +1523,7 @@ def compute_true_tree_verifier_result(
         finish_reason="",
         target_index_before_step=target_index,
         target_remaining_count=tree.tree_depth_evaluated,
-        target_preview_debug=token_ids_to_debug_text(tree.best_path_token_ids[:16]),
+        target_preview_debug=render_token_ids_for_verifier(config, target_session, tree.best_path_token_ids[:16]),
         tree_candidate_count=tree.candidate_count,
         tree_best_path_token_ids=tree.best_path_token_ids,
         tree_branch_factor=tree.tree_branch_factor,
@@ -1437,7 +1532,170 @@ def compute_true_tree_verifier_result(
     )
 
 
+def compute_true_tree_pq_token_verifier_result(
+    config: ServiceConfig,
+    target_session: TargetSessionState,
+    *,
+    accepted_token_ids: list[int],
+    accepted_token_count: int,
+    proposed_token_ids: list[int],
+    max_correction_tokens: int,
+    draft_tree: DraftTreePayload | None = None,
+    branch_factor: int = DEFAULT_TRUE_TREE_BRANCH_FACTOR,
+) -> VerifyComputation:
+    target_index = accepted_token_count
+    working_prefix = target_session.accepted_text
+    accepted_step_token_ids: list[int] = []
+    correction_token_ids: list[int] = []
+    best_path_token_ids: list[int] = []
+    debug_lines: list[str] = []
+    rejected_from_index = -1
+    total_candidate_count = 0
+    draft_nodes_by_depth: dict[int, list[DraftTreePayloadNode]] = {}
+    if draft_tree is not None:
+        debug_lines.append(
+            f"draftTree:mode={draft_tree.token_mode} nodes={draft_tree.node_count} depth={draft_tree.depth_evaluated} bestNodes={','.join(str(index) for index in draft_tree.best_path_node_indices)}"
+        )
+        for node in draft_tree.nodes:
+            draft_nodes_by_depth.setdefault(node.depth, []).append(node)
+
+    for depth, proposed_token_id in enumerate(proposed_token_ids):
+        effective_branch_factor = max(
+            branch_factor,
+            draft_tree.branch_factor if draft_tree is not None else branch_factor,
+        )
+        top_result = fetch_target_top_candidates(
+            config,
+            target_session,
+            prefix_text=working_prefix,
+            step_index=target_index + depth,
+            branch_factor=effective_branch_factor,
+        )
+        target_session.true_runtime_backend = str(top_result.get("runtimeBackend") or target_session.true_runtime_backend)
+        target_session.last_replay_prompt = str(top_result.get("replayPrompt") or target_session.last_replay_prompt)
+        candidates = list(top_result.get("candidates") or [])
+        total_candidate_count += len(candidates)
+        if not candidates:
+            rejected_from_index = depth
+            break
+
+        target_best_candidate = max(candidates, key=candidate_probability)
+        target_best_token_ids = [int(token_id) for token_id in target_best_candidate.get("tokenIds") or []]
+        if not target_best_token_ids:
+            raw_best_token_id = int(target_best_candidate.get("tokenId", -1))
+            target_best_token_ids = [raw_best_token_id] if raw_best_token_id >= 0 else []
+        target_best_token_id = target_best_token_ids[0] if target_best_token_ids else -1
+        if target_best_token_id >= 0:
+            best_path_token_ids.append(target_best_token_id)
+
+        draft_nodes_at_depth = draft_nodes_by_depth.get(depth, [])
+        draft_prob_by_token = {node.token_id: node.probability for node in draft_nodes_at_depth}
+        draft_best_token = (
+            draft_tree.best_path_token_ids[depth]
+            if draft_tree is not None and depth < len(draft_tree.best_path_token_ids)
+            else None
+        )
+        target_prob_by_token = {
+            int(candidate.get("tokenId", -1)): candidate_probability(candidate)
+            for candidate in candidates
+            if int(candidate.get("tokenId", -1)) >= 0
+        }
+        selected_target_prob = float(target_prob_by_token.get(proposed_token_id, 0.0) or 0.0)
+        selected_draft_prob = float(draft_prob_by_token.get(proposed_token_id, 0.0) or 0.0)
+        pq_acceptance_prob = -1.0
+        pq_draw = -1.0
+        pq_accepted = False
+        if selected_draft_prob > 0.0:
+            pq_acceptance_prob = min(1.0, selected_target_prob / selected_draft_prob)
+            pq_draw = deterministic_probability_draw(
+                target_session.request_id,
+                target_index,
+                depth,
+                proposed_token_id,
+                working_prefix,
+            )
+            pq_accepted = pq_draw <= pq_acceptance_prob
+
+        proposal_in_topk = proposed_token_id in target_prob_by_token
+        overlap_count = len(set(target_prob_by_token.keys()) & set(draft_prob_by_token.keys()))
+        debug_lines.append(
+            f"d{depth}:best={target_best_token_id} proposal={proposed_token_id} "
+            f"inTopK={proposal_in_topk} draftBest={draft_best_token if draft_best_token is not None else '-'} "
+            f"overlap={overlap_count} p={selected_target_prob:.4f} q={selected_draft_prob:.4f} "
+            f"accP={pq_acceptance_prob:.4f} draw={pq_draw:.4f} pqAccepted={pq_accepted}"
+        )
+
+        if pq_accepted:
+            accepted_step_token_ids.append(proposed_token_id)
+            working_prefix += render_token_ids_for_verifier(config, target_session, [proposed_token_id])
+            continue
+
+        rejected_from_index = depth
+        if target_best_token_id >= 0:
+            correction_token_ids = [target_best_token_id][:max_correction_tokens]
+            working_prefix += render_token_ids_for_verifier(config, target_session, correction_token_ids)
+        break
+
+    if rejected_from_index == -1 and max_correction_tokens > 0:
+        followup_result = fetch_target_top_candidates(
+            config,
+            target_session,
+            prefix_text=working_prefix,
+            step_index=target_index + len(accepted_step_token_ids),
+            branch_factor=max(
+                branch_factor,
+                draft_tree.branch_factor if draft_tree is not None else branch_factor,
+            ),
+        )
+        target_session.true_runtime_backend = str(followup_result.get("runtimeBackend") or target_session.true_runtime_backend)
+        target_session.last_replay_prompt = str(followup_result.get("replayPrompt") or target_session.last_replay_prompt)
+        followup_candidates = list(followup_result.get("candidates") or [])
+        total_candidate_count += len(followup_candidates)
+        if followup_candidates:
+            followup_best = max(followup_candidates, key=candidate_probability)
+            followup_token_ids = [int(token_id) for token_id in followup_best.get("tokenIds") or []]
+            if not followup_token_ids:
+                raw_followup_id = int(followup_best.get("tokenId", -1))
+                followup_token_ids = [raw_followup_id] if raw_followup_id >= 0 else []
+            if followup_token_ids:
+                correction_token_ids = followup_token_ids[:max_correction_tokens]
+                best_path_token_ids.extend(followup_token_ids[:1])
+                working_prefix += render_token_ids_for_verifier(config, target_session, correction_token_ids)
+                debug_lines.append(
+                    f"followup:best={followup_token_ids[0]} correction={','.join(str(token_id) for token_id in correction_token_ids)}"
+                )
+
+    committed_token_ids = accepted_step_token_ids + correction_token_ids
+    target_text_delta = render_token_ids_for_verifier(config, target_session, committed_token_ids)
+    target_session.last_true_chunk_start = target_index
+    target_session.last_true_chunk_consumed = len(committed_token_ids)
+    if best_path_token_ids:
+        target_session.last_true_expected_token_id = best_path_token_ids[0]
+        target_session.last_true_expected_token_text = render_token_ids_for_verifier(
+            config,
+            target_session,
+            [best_path_token_ids[0]],
+        )
+    target_session.true_verifier_call_count += 1
+    return VerifyComputation(
+        accepted_token_ids=accepted_step_token_ids,
+        correction_token_ids=correction_token_ids[:max_correction_tokens],
+        rejected_from_index=rejected_from_index,
+        target_text_delta=target_text_delta,
+        finish_reason="",
+        target_index_before_step=target_index,
+        target_remaining_count=len(best_path_token_ids),
+        target_preview_debug=render_token_ids_for_verifier(config, target_session, best_path_token_ids[:16]),
+        tree_candidate_count=total_candidate_count,
+        tree_best_path_token_ids=best_path_token_ids,
+        tree_branch_factor=max(branch_factor, draft_tree.branch_factor if draft_tree is not None else branch_factor),
+        tree_depth_evaluated=len(best_path_token_ids),
+        tree_debug_summary="; ".join(debug_lines),
+    )
+
+
 def apply_verify_computation_to_sessions(
+    config: ServiceConfig,
     session: SpeculativeSession,
     target_session: TargetSessionState,
     *,
@@ -1453,7 +1711,7 @@ def apply_verify_computation_to_sessions(
     session.accepted_token_ids.extend(committed_token_ids)
     session.accepted_token_count = len(session.accepted_token_ids)
     session.correction_token_ids = computation.correction_token_ids[:max_correction_tokens]
-    session.accepted_text = token_ids_to_debug_text(session.accepted_token_ids)
+    session.accepted_text = render_token_ids_for_verifier(config, target_session, session.accepted_token_ids)
     session.last_target_text_delta = computation.target_text_delta
     session.last_finish_reason = computation.finish_reason
     session.status = "verifying"
@@ -1469,14 +1727,19 @@ def apply_verify_computation_to_sessions(
 
 
 def record_true_verifier_observation(
+    config: ServiceConfig,
     target_session: TargetSessionState,
     *,
     prefix_text: str,
     next_text: str,
 ) -> None:
     target_session.true_verifier_call_count += 1
-    target_session.last_true_expected_token_text = next_text[:1]
-    target_session.last_true_expected_token_id = ord(next_text[0]) if next_text else -1
+    next_token_ids = tokenize_text_for_verifier(config, target_session, next_text[:64])
+    target_session.last_true_expected_token_id = next_token_ids[0] if next_token_ids else -1
+    target_session.last_true_expected_token_text = (
+        render_token_ids_for_verifier(config, target_session, next_token_ids[:1])
+        if next_token_ids else ""
+    )
     target_session.true_prefix_cache[prefix_text] = next_text
     target_session.true_cache_hit_streak = 0
     target_session.true_fetch_streak += 1
@@ -1556,8 +1819,13 @@ def fetch_target_top_candidates(
             if not isinstance(item, dict):
                 continue
             token_text = str(item.get("token") or "")
-            token_ids = token_ids_from_text(token_text) if token_text else []
-            token_id = token_ids[0] if token_ids else -1
+            if is_real_token_verifier_mode(target_session.verifier_mode):
+                raw_token_id = item.get("id", -1)
+                token_id = int(raw_token_id) if isinstance(raw_token_id, (int, float)) else -1
+                token_ids = [token_id] if token_id >= 0 else []
+            else:
+                token_ids = token_ids_from_text(token_text) if token_text else []
+                token_id = token_ids[0] if token_ids else -1
             prob = float(item.get("prob", 0.0) or 0.0)
             logprob = float(item.get("logprob", 0.0) or 0.0)
             effective_prob = prob if prob > 0.0 else (math.exp(logprob) if logprob < 0.0 else 0.0)
@@ -1588,10 +1856,27 @@ def fetch_target_top_candidates(
         desired_tokens=1,
     )
     next_text = str(chunk_response.get("outputText") or "")
-    next_token_ids = token_ids_from_text(next_text) if next_text else []
+    if is_real_token_verifier_mode(target_session.verifier_mode) and config.llama_server_base_url and next_text:
+        try:
+            token_entries = tokenize_with_server(
+                config.llama_server_base_url,
+                next_text,
+                add_special=False,
+                parse_special=True,
+                with_pieces=True,
+            )
+            next_token_ids = [
+                int(item.get("id", -1))
+                for item in token_entries
+                if isinstance(item, dict) and int(item.get("id", -1)) >= 0
+            ]
+        except Exception:
+            next_token_ids = []
+    else:
+        next_token_ids = token_ids_from_text(next_text) if next_text else []
     selected_token_id = next_token_ids[0] if next_token_ids else -1
     return {
-        "selectedContent": next_text[:1],
+        "selectedContent": next_text[:1] if next_text else "",
         "candidates": [
             {
                 "tokenId": selected_token_id,
@@ -1794,7 +2079,7 @@ def build_true_tree_computation(
         if proposal_cursor < len(proposed_token_ids):
             if pq_accepted and proposed_token_id is not None:
                 accepted_step_token_ids.append(proposed_token_id)
-                working_prefix += token_ids_to_debug_text([proposed_token_id])
+                working_prefix += render_token_ids_for_verifier(config, target_session, [proposed_token_id])
                 proposal_cursor += 1
                 parent_index = len(tree_nodes) - len(candidates)
                 if proposal_cursor >= len(proposed_token_ids):
@@ -1807,7 +2092,7 @@ def build_true_tree_computation(
             rejected_from_index = proposal_cursor
             correction_source = target_best_candidate_token_ids or best_candidate_token_ids
             correction_token_ids = correction_source[:max_correction_tokens]
-            working_prefix += token_ids_to_debug_text(correction_token_ids)
+            working_prefix += render_token_ids_for_verifier(config, target_session, correction_token_ids)
             parent_index = len(tree_nodes) - len(candidates)
             break
 
@@ -1815,12 +2100,16 @@ def build_true_tree_computation(
             correction_token_ids.extend(
                 target_best_candidate_token_ids[: max_correction_tokens - len(correction_token_ids)]
             )
-            working_prefix += token_ids_to_debug_text(correction_token_ids[-1:])
+            working_prefix += render_token_ids_for_verifier(config, target_session, correction_token_ids[-1:])
             parent_index = len(tree_nodes) - len(candidates)
             if len(correction_token_ids) >= max_correction_tokens:
                 break
 
-    target_text_delta = token_ids_to_debug_text(accepted_step_token_ids + correction_token_ids)
+    target_text_delta = render_token_ids_for_verifier(
+        config,
+        target_session,
+        accepted_step_token_ids + correction_token_ids,
+    )
     return TreeVerifyComputation(
         accepted_token_ids=accepted_step_token_ids,
         correction_token_ids=correction_token_ids[:max_correction_tokens],
@@ -1895,6 +2184,7 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         target_session.last_replay_prompt = str(true_preview.get("debug", {}).get("replayPrompt") or "")
         if target_session.target_preview_text and not bool(true_preview.get("debug", {}).get("cacheHit")):
             record_true_verifier_observation(
+                server.config,
                 target_session,
                 prefix_text=target_session.accepted_text,
                 next_text=target_session.target_preview_text,
@@ -1993,7 +2283,17 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             proposed_token_ids=proposed_token_ids,
             max_correction_tokens=max_correction_tokens,
         )
-    elif session.verifier_mode in {"llama_true_tree", "llama_true_tree_pq_tokens"}:
+    elif session.verifier_mode == "llama_true_tree_pq_tokens":
+        computation = compute_true_tree_pq_token_verifier_result(
+            server.config,
+            target_session,
+            accepted_token_ids=session.accepted_token_ids,
+            accepted_token_count=session.accepted_token_count,
+            proposed_token_ids=proposed_token_ids,
+            max_correction_tokens=max_correction_tokens,
+            draft_tree=draft_tree,
+        )
+    elif session.verifier_mode == "llama_true_tree":
         computation = compute_true_tree_verifier_result(
             server.config,
             target_session,
@@ -2013,6 +2313,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         )
     accepted_count = len(computation.accepted_token_ids)
     apply_verify_computation_to_sessions(
+        server.config,
         session,
         target_session,
         draft_step=draft_step,
@@ -2091,6 +2392,18 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "debug": {
             "targetSessionId": session.target_session_id,
             "verifierMode": session.verifier_mode,
+            "tokenMode": (
+                draft_tree.token_mode
+                if draft_tree is not None
+                else ("real_token" if is_real_token_verifier_mode(session.verifier_mode) else "codepoint_legacy")
+            ),
+            "acceptanceMode": (
+                "token_pq"
+                if session.verifier_mode == "llama_true_tree_pq_tokens"
+                else "piece_prefix"
+                if session.verifier_mode == "llama_true_tree"
+                else "other"
+            ),
             "targetIndexBeforeStep": computation.target_index_before_step,
             "targetRemainingCount": computation.target_remaining_count,
             "targetPreview": computation.target_preview_debug,
