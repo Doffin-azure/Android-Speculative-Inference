@@ -1037,6 +1037,7 @@ Explanation:
 - This is the first verifier function in the project that is shaped primarily around the paper-style token-by-token acceptance loop instead of around a piece-prefix candidate comparison.
 - The Android client now also records `tokenMode` and `acceptanceMode` from desktop debug fields, so runs on this lane are distinguishable from the older legacy verifier path in UI diagnostics and copied logs.
 - The same experimental lane now also has an explicit fallback contract: if desktop does not receive a `real_token` draft tree, it falls back to piece-prefix acceptance and reports that through `acceptanceMode=fallback_piece_prefix`; if Android does not have a local real-token draft session, it logs the same kind of fallback on the client side.
+- The response-status mapping now also treats "all draft tokens accepted plus one target follow-up token" as an accepted step on this lane, which keeps the experimental logs closer to standard speculative-decoding semantics.
 
 Why this is core:
 

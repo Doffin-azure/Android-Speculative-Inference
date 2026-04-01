@@ -2348,7 +2348,10 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             sync_target_session_state(target_session, session)
     latest_cached_prefix, latest_cached_next = latest_true_cache_entry(target_session) if target_session is not None else ("", "")
 
-    base_status = "accepted" if not computation.correction_token_ids and computation.rejected_from_index == -1 else "corrected"
+    if session.verifier_mode == "llama_true_tree_pq_tokens" and computation.rejected_from_index == -1:
+        base_status = "accepted"
+    else:
+        base_status = "accepted" if not computation.correction_token_ids and computation.rejected_from_index == -1 else "corrected"
     if session.verifier_mode == "llama_replay_proxy":
         status = f"{base_status}_by_llama_replay"
     elif session.verifier_mode == "llama_true_step":
