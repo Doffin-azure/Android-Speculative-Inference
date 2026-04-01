@@ -8,6 +8,7 @@ import java.net.URL
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.myapplication.llama.DraftTreeProposal
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -75,7 +76,8 @@ data class SpeculativeProposeRequest(
     val draftStep: Int,
     val proposedTokenIds: List<Int>,
     val proposedText: String,
-    val maxCorrectionTokens: Int = 1
+    val maxCorrectionTokens: Int = 1,
+    val draftTree: DraftTreeProposal? = null
 )
 
 data class SpeculativeProposeResponse(
@@ -101,6 +103,9 @@ data class SpeculativeProposeResponse(
     val treeBranchFactor: Int,
     val treeDepthEvaluated: Int,
     val treeDebugSummary: String,
+    val draftTreeNodeCount: Int,
+    val draftTreeDepthEvaluated: Int,
+    val draftTreeBestPathNodeIndices: List<Int>,
     val warning: String,
     val finishReason: String,
     val error: String
@@ -277,6 +282,9 @@ class RemoteInferenceClient {
             put("proposedTokenIds", JSONArray(request.proposedTokenIds))
             put("proposedText", request.proposedText)
             put("maxCorrectionTokens", request.maxCorrectionTokens)
+            if (request.draftTree != null) {
+                put("draftTree", request.draftTree.toJson())
+            }
         }
 
         try {
@@ -315,6 +323,9 @@ class RemoteInferenceClient {
                 treeBranchFactor = json.optJSONObject("debug")?.optInt("treeBranchFactor", 0) ?: 0,
                 treeDepthEvaluated = json.optJSONObject("debug")?.optInt("treeDepthEvaluated", 0) ?: 0,
                 treeDebugSummary = json.optJSONObject("debug")?.optString("treeDebugSummary").orEmpty(),
+                draftTreeNodeCount = json.optJSONObject("debug")?.optInt("draftTreeNodeCount", 0) ?: 0,
+                draftTreeDepthEvaluated = json.optJSONObject("debug")?.optInt("draftTreeDepthEvaluated", 0) ?: 0,
+                draftTreeBestPathNodeIndices = json.optJSONObject("debug")?.optJSONArray("draftTreeBestPathNodeIndices").toIntList(),
                 warning = json.optString("warning"),
                 finishReason = json.optString("finishReason"),
                 error = error
@@ -399,5 +410,36 @@ class RemoteInferenceClient {
         for (index in 0 until this@toIntList.length()) {
             add(this@toIntList.optInt(index))
         }
+    }
+
+    private fun DraftTreeProposal.toJson(): JSONObject = JSONObject().apply {
+        put("sessionId", sessionId)
+        put("tokenMode", tokenMode)
+        put("rootAcceptedText", rootAcceptedText)
+        put("bestPathTokenIds", JSONArray(bestPathTokenIds))
+        put("bestPathNodeIndices", JSONArray(bestPathNodeIndices))
+        put("bestPathText", bestPathText)
+        put("branchFactor", branchFactor)
+        put("depthEvaluated", depthEvaluated)
+        put("nodeCount", nodeCount)
+        put(
+            "nodes",
+            JSONArray().apply {
+                nodes.forEach { node ->
+                    put(
+                        JSONObject().apply {
+                            put("nodeIndex", node.nodeIndex)
+                            put("tokenId", node.tokenId)
+                            put("tokenText", node.tokenText)
+                            put("depth", node.depth)
+                            put("parentNodeIndex", node.parentNodeIndex)
+                            put("probability", node.probability.toDouble())
+                            put("logProbability", node.logProbability.toDouble())
+                            put("cumulativeLogProbability", node.cumulativeLogProbability.toDouble())
+                        }
+                    )
+                }
+            }
+        )
     }
 }

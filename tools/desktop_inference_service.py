@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import shlex
 import socket
 import subprocess
@@ -307,12 +309,39 @@ class VerifyComputation:
 @dataclass
 class TreeCandidateNode:
     token_id: int
+    token_ids: list[int]
     depth: int
     parent_index: int
     prefix_text: str
     score: float
     token_text: str
     draft_selected_prob: float | None = None
+
+
+@dataclass
+class DraftTreePayloadNode:
+    node_index: int
+    token_id: int
+    token_text: str
+    depth: int
+    parent_node_index: int
+    probability: float
+    log_probability: float
+    cumulative_log_probability: float
+
+
+@dataclass
+class DraftTreePayload:
+    session_id: str
+    token_mode: str
+    root_accepted_text: str
+    best_path_token_ids: list[int]
+    best_path_node_indices: list[int]
+    best_path_text: str
+    branch_factor: int
+    depth_evaluated: int
+    node_count: int
+    nodes: list[DraftTreePayloadNode]
 
 
 @dataclass
@@ -331,7 +360,7 @@ class TreeVerifyComputation:
 def infer_verifier_stage(verifier_mode: str) -> str:
     if verifier_mode == "prompt_stub":
         return "prompt_stub"
-    if verifier_mode in {"llama_true_step", "llama_true_tree"}:
+    if verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"}:
         return "true_target"
     if verifier_mode in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
         return "proxy_target"
@@ -389,7 +418,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--speculative-verifier-mode",
-        choices=("prompt_stub", "llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree"),
+        choices=("prompt_stub", "llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"),
         default=DEFAULT_SPECULATIVE_VERIFIER_MODE,
         help="Verifier mode for speculative propose handling.",
     )
@@ -871,6 +900,43 @@ def parse_int_list(name: str, value: Any) -> list[int]:
     return parsed
 
 
+def parse_optional_draft_tree_payload(value: Any) -> DraftTreePayload | None:
+    if not isinstance(value, dict):
+        return None
+
+    raw_nodes = value.get("nodes")
+    nodes: list[DraftTreePayloadNode] = []
+    if isinstance(raw_nodes, list):
+        for index, item in enumerate(raw_nodes):
+            if not isinstance(item, dict):
+                continue
+            nodes.append(
+                DraftTreePayloadNode(
+                    node_index=int(item.get("nodeIndex", index)),
+                    token_id=int(item.get("tokenId", -1)),
+                    token_text=str(item.get("tokenText") or ""),
+                    depth=int(item.get("depth", 0)),
+                    parent_node_index=int(item.get("parentNodeIndex", -1)),
+                    probability=float(item.get("probability", 0.0) or 0.0),
+                    log_probability=float(item.get("logProbability", 0.0) or 0.0),
+                    cumulative_log_probability=float(item.get("cumulativeLogProbability", 0.0) or 0.0),
+                )
+            )
+
+    return DraftTreePayload(
+        session_id=str(value.get("sessionId") or ""),
+        token_mode=str(value.get("tokenMode") or "codepoint_legacy"),
+        root_accepted_text=str(value.get("rootAcceptedText") or ""),
+        best_path_token_ids=parse_int_list("draftTree.bestPathTokenIds", value.get("bestPathTokenIds") or []),
+        best_path_node_indices=parse_int_list("draftTree.bestPathNodeIndices", value.get("bestPathNodeIndices") or []),
+        best_path_text=str(value.get("bestPathText") or ""),
+        branch_factor=max(1, int(value.get("branchFactor", 1) or 1)),
+        depth_evaluated=max(0, int(value.get("depthEvaluated", 0) or 0)),
+        node_count=max(0, int(value.get("nodeCount", len(nodes)) or len(nodes))),
+        nodes=nodes,
+    )
+
+
 def build_stub_target_token_ids(system_prompt: str, user_prompt: str) -> list[int]:
     source = user_prompt.strip() or build_prompt(system_prompt, user_prompt)
     token_ids = [ord(char) for char in source][:256]
@@ -887,6 +953,44 @@ def first_wire_token_id_from_text(text: str) -> int:
     return token_ids[0] if token_ids else -1
 
 
+def common_prefix_length(left: list[int], right: list[int]) -> int:
+    length = 0
+    for left_token_id, right_token_id in zip(left, right):
+        if left_token_id != right_token_id:
+            break
+        length += 1
+    return length
+
+
+def deterministic_probability_draw(*parts: Any) -> float:
+    payload = "|".join(str(part) for part in parts).encode("utf-8", errors="replace")
+    digest = hashlib.sha256(payload).digest()
+    value = int.from_bytes(digest[:8], byteorder="big", signed=False)
+    return value / float(1 << 64)
+
+
+def candidate_probability(candidate: dict[str, Any]) -> float:
+    prob = float(candidate.get("prob", 0.0) or 0.0)
+    if prob > 0.0:
+        return prob
+    logprob = float(candidate.get("logprob", 0.0) or 0.0)
+    if logprob < 0.0:
+        try:
+            return math.exp(logprob)
+        except OverflowError:
+            return 0.0
+    return 0.0
+
+
+def summed_first_token_probability(candidates: list[dict[str, Any]], token_id: int) -> float:
+    total = 0.0
+    for candidate in candidates:
+        candidate_token_ids = [int(value) for value in candidate.get("tokenIds") or []]
+        if candidate_token_ids and candidate_token_ids[0] == token_id:
+            total += candidate_probability(candidate)
+    return total
+
+
 def build_target_preview_text(
     config: ServiceConfig,
     *,
@@ -899,10 +1003,10 @@ def build_target_preview_text(
     temperature: float,
     top_p: float,
 ) -> tuple[str, str]:
-    if verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree"}:
+    if verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"}:
         return "", ""
 
-    if verifier_mode in {"llama_true_step", "llama_true_tree"}:
+    if verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"}:
         response = run_true_target_chunk_text(
             config,
             request_id=f"{request_id}-true-preview",
@@ -962,7 +1066,7 @@ def resolve_target_token_ids(
         if target_preview_text.strip():
             return prefix_token_ids + token_ids_from_text(target_preview_text)
         return prefix_token_ids or [0]
-    if verifier_mode in {"llama_true_step", "llama_true_tree"}:
+    if verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"}:
         return accepted_token_ids[:] if accepted_token_ids else [0]
     if verifier_mode in {"llama_preview", "llama_step_proxy"} and target_preview_text.strip():
         return token_ids_from_text(target_preview_text)
@@ -998,10 +1102,10 @@ def refresh_llama_proxy_preview_for_target_session(
     accepted_token_ids: list[int],
     min_target_chars: int,
 ) -> None:
-    if target_session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree"}:
+    if target_session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"}:
         return
 
-    if target_session.verifier_mode in {"llama_true_step", "llama_true_tree"}:
+    if target_session.verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"}:
         return
 
     current_chars = max(0, len(target_session.target_token_ids) - target_session.accepted_token_count)
@@ -1089,7 +1193,7 @@ def build_target_session_state(session: SpeculativeSession) -> TargetSessionStat
         last_true_expected_token_id=-1,
         last_true_expected_token_text="",
         true_prefix_cache={},
-        true_runtime_backend="llama_server_slot" if session.verifier_mode in {"llama_true_step", "llama_true_tree"} else "proxy_target",
+        true_runtime_backend="llama_server_slot" if session.verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"} else "proxy_target",
         llama_server_slot_id=-1,
         last_true_chunk_start=0,
         last_true_chunk_consumed=0,
@@ -1299,6 +1403,7 @@ def compute_true_tree_verifier_result(
     accepted_token_count: int,
     proposed_token_ids: list[int],
     max_correction_tokens: int,
+    draft_tree: DraftTreePayload | None = None,
 ) -> VerifyComputation:
     target_index = accepted_token_count
     tree = build_true_tree_computation(
@@ -1307,6 +1412,7 @@ def compute_true_tree_verifier_result(
         target_index=target_index,
         proposed_token_ids=proposed_token_ids,
         max_correction_tokens=max_correction_tokens,
+        draft_tree=draft_tree,
     )
     target_session.last_true_chunk_start = target_index
     target_session.last_true_chunk_consumed = len(tree.accepted_token_ids) + len(tree.correction_token_ids)
@@ -1450,16 +1556,19 @@ def fetch_target_top_candidates(
             if not isinstance(item, dict):
                 continue
             token_text = str(item.get("token") or "")
-            token_id = first_wire_token_id_from_text(token_text) if token_text else -1
+            token_ids = token_ids_from_text(token_text) if token_text else []
+            token_id = token_ids[0] if token_ids else -1
             prob = float(item.get("prob", 0.0) or 0.0)
             logprob = float(item.get("logprob", 0.0) or 0.0)
-            score = prob if prob > 0.0 else logprob
+            effective_prob = prob if prob > 0.0 else (math.exp(logprob) if logprob < 0.0 else 0.0)
+            score = effective_prob if effective_prob > 0.0 else logprob
             candidates.append(
                 {
                     "tokenId": token_id,
+                    "tokenIds": token_ids,
                     "tokenText": token_text,
                     "score": score,
-                    "prob": prob,
+                    "prob": effective_prob,
                     "logprob": logprob,
                 }
             )
@@ -1486,6 +1595,7 @@ def fetch_target_top_candidates(
         "candidates": [
             {
                 "tokenId": selected_token_id,
+                "tokenIds": next_token_ids[:1],
                 "tokenText": next_text[:1],
                 "score": 1.0 if selected_token_id >= 0 else 0.0,
                 "prob": 1.0 if selected_token_id >= 0 else 0.0,
@@ -1504,6 +1614,7 @@ def build_true_tree_computation(
     target_index: int,
     proposed_token_ids: list[int],
     max_correction_tokens: int,
+    draft_tree: DraftTreePayload | None = None,
     branch_factor: int = DEFAULT_TRUE_TREE_BRANCH_FACTOR,
 ) -> TreeVerifyComputation:
     accepted_step_token_ids: list[int] = []
@@ -1514,62 +1625,197 @@ def build_true_tree_computation(
     rejected_from_index = -1
     working_prefix = target_session.accepted_text
     parent_index = -1
+    proposal_cursor = 0
+    draft_nodes_by_depth: dict[int, list[DraftTreePayloadNode]] = {}
+    if draft_tree is not None:
+        debug_lines.append(
+            f"draftTree:mode={draft_tree.token_mode} nodes={draft_tree.node_count} depth={draft_tree.depth_evaluated} bestNodes={','.join(str(index) for index in draft_tree.best_path_node_indices)}"
+        )
+        for node in draft_tree.nodes:
+            draft_nodes_by_depth.setdefault(node.depth, []).append(node)
 
-    total_depth = len(proposed_token_ids) + max(0, max_correction_tokens)
+    total_depth = max(1, len(proposed_token_ids) + max(0, max_correction_tokens))
     for depth in range(total_depth):
+        effective_branch_factor = max(
+            branch_factor,
+            draft_tree.branch_factor if draft_tree is not None else branch_factor,
+        )
         top_result = fetch_target_top_candidates(
             config,
             target_session,
             prefix_text=working_prefix,
             step_index=target_index + depth,
-            branch_factor=branch_factor,
+            branch_factor=effective_branch_factor,
         )
         target_session.true_runtime_backend = str(top_result.get("runtimeBackend") or target_session.true_runtime_backend)
         target_session.last_replay_prompt = str(top_result.get("replayPrompt") or target_session.last_replay_prompt)
         candidates = list(top_result.get("candidates") or [])
         if not candidates:
             if depth < len(proposed_token_ids):
-                rejected_from_index = depth
+                rejected_from_index = proposal_cursor
             break
 
         current_parent_index = parent_index
+        draft_nodes_at_depth = draft_nodes_by_depth.get(depth, [])
+        draft_prob_by_token = {node.token_id: node.probability for node in draft_nodes_at_depth}
+        draft_best_token = (
+            draft_tree.best_path_token_ids[depth]
+            if draft_tree is not None and depth < len(draft_tree.best_path_token_ids)
+            else None
+        )
+        draft_remaining_token_ids = (
+            draft_tree.best_path_token_ids[proposal_cursor:]
+            if draft_tree is not None and proposal_cursor < len(draft_tree.best_path_token_ids)
+            else []
+        )
         for candidate in candidates:
+            candidate_token_ids = [int(token_id) for token_id in candidate.get("tokenIds") or []]
             tree_nodes.append(
                 TreeCandidateNode(
                     token_id=int(candidate.get("tokenId", -1)),
+                    token_ids=candidate_token_ids,
                     depth=depth,
                     parent_index=current_parent_index,
                     prefix_text=working_prefix,
                     score=float(candidate.get("score", 0.0) or 0.0),
                     token_text=str(candidate.get("tokenText") or ""),
+                    draft_selected_prob=draft_prob_by_token.get(int(candidate.get("tokenId", -1))),
                 )
             )
 
-        best_candidate = candidates[0]
-        best_token_id = int(best_candidate.get("tokenId", -1))
-        best_path_token_ids.append(best_token_id)
-        proposed_token_id = proposed_token_ids[depth] if depth < len(proposed_token_ids) else None
-        proposal_in_topk = proposed_token_id in {int(item.get("tokenId", -1)) for item in candidates}
-        debug_lines.append(
-            f"d{depth}:best={best_token_id} proposal={proposed_token_id if proposed_token_id is not None else '-'} inTopK={proposal_in_topk}"
+        target_best_candidate = max(
+            candidates,
+            key=lambda candidate: (
+                candidate_probability(candidate),
+                common_prefix_length(
+                    [int(token_id) for token_id in candidate.get("tokenIds") or []],
+                    draft_remaining_token_ids,
+                ),
+            ),
         )
 
-        if depth < len(proposed_token_ids):
-            if proposed_token_id == best_token_id:
-                accepted_step_token_ids.append(best_token_id)
-                working_prefix += chr(best_token_id) if best_token_id >= 0 else ""
+        def candidate_sort_key(candidate: dict[str, Any]) -> tuple[float, ...]:
+            candidate_token_id = int(candidate.get("tokenId", -1))
+            candidate_prob = candidate_probability(candidate)
+            candidate_token_ids = [int(token_id) for token_id in candidate.get("tokenIds") or []]
+            draft_match_length = common_prefix_length(candidate_token_ids, draft_remaining_token_ids)
+            proposal_match_length = common_prefix_length(
+                candidate_token_ids,
+                proposed_token_ids[proposal_cursor:],
+            )
+            draft_prob = draft_prob_by_token.get(candidate_token_id, 0.0)
+            overlap_flag = 1.0 if candidate_token_id in draft_prob_by_token else 0.0
+            draft_best_flag = 1.0 if draft_best_token is not None and candidate_token_id == draft_best_token else 0.0
+            # Prefer candidates that continue the Android draft best path, then those
+            # that overlap with the draft tree at all, then target confidence.
+            return (
+                float(draft_match_length),
+                float(draft_best_flag),
+                float(proposal_match_length),
+                float(overlap_flag),
+                float(candidate_prob + draft_prob),
+                float(candidate_prob),
+            )
+
+        overlapping_candidates = [
+            candidate for candidate in candidates
+            if int(candidate.get("tokenId", -1)) in draft_prob_by_token
+        ]
+        ranked_candidates = sorted(candidates, key=candidate_sort_key, reverse=True)
+        best_candidate = ranked_candidates[0]
+        proposed_remaining_token_ids = proposed_token_ids[proposal_cursor:]
+        proposal_candidate_matches = [
+            candidate for candidate in candidates
+            if common_prefix_length(
+                [int(token_id) for token_id in candidate.get("tokenIds") or []],
+                proposed_remaining_token_ids,
+            ) > 0
+        ]
+        proposal_candidate = None
+        if proposal_candidate_matches:
+            proposal_candidate = max(
+                proposal_candidate_matches,
+                key=lambda candidate: (
+                    common_prefix_length(
+                        [int(token_id) for token_id in candidate.get("tokenIds") or []],
+                        proposed_remaining_token_ids,
+                    ),
+                    candidate_probability(candidate),
+                ),
+            )
+        pq_acceptance_prob = -1.0
+        pq_draw = -1.0
+        pq_accepted = False
+        selected_target_prob = 0.0
+        selected_draft_prob = 0.0
+        proposed_token_id = proposed_token_ids[proposal_cursor] if proposal_cursor < len(proposed_token_ids) else None
+        if (
+            proposal_candidate is not None
+            and proposed_token_id is not None
+        ):
+            selected_target_prob = summed_first_token_probability(candidates, proposed_token_id)
+            selected_draft_prob = float(draft_prob_by_token.get(proposed_token_id, 0.0) or 0.0)
+            if selected_draft_prob > 0.0:
+                pq_acceptance_prob = min(1.0, selected_target_prob / selected_draft_prob)
+                pq_draw = deterministic_probability_draw(
+                    target_session.request_id,
+                    target_index,
+                    depth,
+                    proposal_cursor,
+                    proposed_token_id,
+                    working_prefix,
+                )
+                pq_accepted = pq_draw <= pq_acceptance_prob
+        best_candidate_token_ids = [int(token_id) for token_id in best_candidate.get("tokenIds") or []]
+        if not best_candidate_token_ids:
+            best_token_id = int(best_candidate.get("tokenId", -1))
+            best_candidate_token_ids = [best_token_id] if best_token_id >= 0 else []
+        else:
+            best_token_id = best_candidate_token_ids[0]
+        target_best_candidate_token_ids = [int(token_id) for token_id in target_best_candidate.get("tokenIds") or []]
+        if not target_best_candidate_token_ids:
+            target_best_token_id = int(target_best_candidate.get("tokenId", -1))
+            target_best_candidate_token_ids = [target_best_token_id] if target_best_token_id >= 0 else []
+        else:
+            target_best_token_id = target_best_candidate_token_ids[0]
+        best_path_token_ids.append(target_best_token_id)
+        proposal_in_topk = proposed_token_id in {int(item.get("tokenId", -1)) for item in candidates}
+        overlap_count = len(overlapping_candidates)
+        draft_match_count = common_prefix_length(target_best_candidate_token_ids, draft_remaining_token_ids)
+        debug_lines.append(
+            f"d{depth}:best={target_best_token_id} proposal={proposed_token_id if proposed_token_id is not None else '-'} "
+            f"inTopK={proposal_in_topk} draftBest={draft_best_token if draft_best_token is not None else '-'} "
+            f"overlap={overlap_count} targetMatch={common_prefix_length(target_best_candidate_token_ids, proposed_remaining_token_ids)}/{len(target_best_candidate_token_ids)} "
+            f"draftMatch={draft_match_count}/{len(target_best_candidate_token_ids)} "
+            f"p={selected_target_prob:.4f} q={selected_draft_prob:.4f} "
+            f"accP={pq_acceptance_prob:.4f} draw={pq_draw:.4f} pqAccepted={pq_accepted}"
+        )
+
+        if proposal_cursor < len(proposed_token_ids):
+            if pq_accepted and proposed_token_id is not None:
+                accepted_step_token_ids.append(proposed_token_id)
+                working_prefix += token_ids_to_debug_text([proposed_token_id])
+                proposal_cursor += 1
                 parent_index = len(tree_nodes) - len(candidates)
+                if proposal_cursor >= len(proposed_token_ids):
+                    correction_source = target_best_candidate_token_ids or best_candidate_token_ids
+                    if correction_source and len(correction_token_ids) < max_correction_tokens:
+                        correction_token_ids.append(correction_source[0])
+                    break
                 continue
 
-            rejected_from_index = depth
-            correction_token_ids = [best_token_id] if best_token_id >= 0 else []
-            working_prefix += chr(best_token_id) if best_token_id >= 0 else ""
+            rejected_from_index = proposal_cursor
+            correction_source = target_best_candidate_token_ids or best_candidate_token_ids
+            correction_token_ids = correction_source[:max_correction_tokens]
+            working_prefix += token_ids_to_debug_text(correction_token_ids)
             parent_index = len(tree_nodes) - len(candidates)
-            continue
+            break
 
-        if len(correction_token_ids) < max_correction_tokens and best_token_id >= 0:
-            correction_token_ids.append(best_token_id)
-            working_prefix += chr(best_token_id)
+        if len(correction_token_ids) < max_correction_tokens and target_best_candidate_token_ids:
+            correction_token_ids.extend(
+                target_best_candidate_token_ids[: max_correction_tokens - len(correction_token_ids)]
+            )
+            working_prefix += token_ids_to_debug_text(correction_token_ids[-1:])
             parent_index = len(tree_nodes) - len(candidates)
             if len(correction_token_ids) >= max_correction_tokens:
                 break
@@ -1583,7 +1829,7 @@ def build_true_tree_computation(
         candidate_count=len(tree_nodes),
         best_path_token_ids=best_path_token_ids,
         tree_debug_summary="; ".join(debug_lines),
-        tree_branch_factor=branch_factor,
+        tree_branch_factor=max(branch_factor, draft_tree.branch_factor if draft_tree is not None else branch_factor),
         tree_depth_evaluated=len(best_path_token_ids),
     )
 
@@ -1635,7 +1881,7 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
 def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
     session = build_speculative_session(payload, server.config)
     target_session = build_target_session_state(session)
-    if session.verifier_mode in {"llama_true_step", "llama_true_tree"} and server.config.llama_server_base_url:
+    if session.verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"} and server.config.llama_server_base_url:
         target_session.true_runtime_backend = "llama_server_slot"
         target_session.llama_server_slot_id = choose_llama_server_slot(server.config.llama_server_base_url)
         true_preview = get_or_fetch_true_target_chunk_text(
@@ -1724,6 +1970,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
 
     draft_step = int(payload.get("draftStep") or 0)
     proposed_token_ids = parse_int_list("proposedTokenIds", payload.get("proposedTokenIds"))
+    draft_tree = parse_optional_draft_tree_payload(payload.get("draftTree"))
     max_correction_tokens = max(1, int(payload.get("maxCorrectionTokens") or 1))
     if not proposed_token_ids:
         raise ValueError("proposedTokenIds must not be empty.")
@@ -1746,7 +1993,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             proposed_token_ids=proposed_token_ids,
             max_correction_tokens=max_correction_tokens,
         )
-    elif session.verifier_mode == "llama_true_tree":
+    elif session.verifier_mode in {"llama_true_tree", "llama_true_tree_pq_tokens"}:
         computation = compute_true_tree_verifier_result(
             server.config,
             target_session,
@@ -1754,6 +2001,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             accepted_token_count=session.accepted_token_count,
             proposed_token_ids=proposed_token_ids,
             max_correction_tokens=max_correction_tokens,
+            draft_tree=draft_tree,
         )
     else:
         computation = compute_proxy_verifier_result(
@@ -1784,6 +2032,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         status = f"{base_status}_by_llama_true_step"
     elif session.verifier_mode == "llama_true_tree":
         status = f"{base_status}_by_llama_true_tree"
+    elif session.verifier_mode == "llama_true_tree_pq_tokens":
+        status = f"{base_status}_by_llama_true_tree_pq_tokens"
     elif session.verifier_mode in {"llama_preview", "llama_step_proxy"}:
         status = f"{base_status}_by_llama_preview"
     else:
@@ -1800,10 +2050,15 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "but it still does not directly hold libllama state inside this Python process."
         if session.verifier_mode == "llama_true_step"
         else
-        "Desktop speculative verification is now building a shallow target-side tree from llama-server top-k candidates. "
-        "This first tree verifier node keeps the wire protocol unchanged and uses target-side top-k expansion to score a best path, "
+        "Desktop speculative verification is now building a shallow target-side tree from llama-server top-k candidates and can also consume optional Android draft-tree metadata. "
+        "This first tree verifier node still keeps the wire protocol largely unchanged and uses draft/target tree overlap to score a best path, "
         "but it is still not a full EAGLE-style posterior/KV-copy implementation."
         if session.verifier_mode == "llama_true_tree"
+        else
+        "Desktop speculative verification is now using the experimental unified-token tree verifier path. "
+        "Android may send real-token draft ids and real-token draft-tree metadata on this path, but the desktop verifier is still only at the first integration stage "
+        "and does not yet implement the full final paper-style posterior/correction algorithm."
+        if session.verifier_mode == "llama_true_tree_pq_tokens"
         else
         "Desktop speculative verification is currently using llama preview text as a target proxy. "
         "It now computes accepted prefixes and correction tokens from the preview text, but it still does not run true target-model token verification yet."
@@ -1859,6 +2114,9 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             "treeBranchFactor": computation.tree_branch_factor,
             "treeDepthEvaluated": computation.tree_depth_evaluated,
             "treeDebugSummary": computation.tree_debug_summary,
+            "draftTreeNodeCount": draft_tree.node_count if draft_tree is not None else 0,
+            "draftTreeDepthEvaluated": draft_tree.depth_evaluated if draft_tree is not None else 0,
+            "draftTreeBestPathNodeIndices": draft_tree.best_path_node_indices if draft_tree is not None else [],
         },
     }
 
@@ -1921,7 +2179,7 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
         target_session = server.target_sessions.pop(session.target_session_id, None)
     if (
         target_session is not None
-        and target_session.verifier_mode in {"llama_true_step", "llama_true_tree"}
+        and target_session.verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"}
         and server.config.llama_server_base_url
         and target_session.llama_server_slot_id >= 0
     ):

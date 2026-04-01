@@ -1,6 +1,8 @@
 package com.example.myapplication.llama.internal
 
 import com.example.myapplication.llama.InferenceEngine
+import com.example.myapplication.llama.DraftTreeProposal
+import com.example.myapplication.llama.DraftTreeNode
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -105,6 +107,48 @@ class StubInferenceEngine : InferenceEngine {
         lastError = "No model loaded."
         systemPrompt = ""
         mutableState.value = InferenceEngine.State.Uninitialized
+    }
+
+    override suspend fun draftTreeProposal(
+        sessionId: String,
+        maxDepth: Int,
+        branchFactor: Int
+    ): DraftTreeProposal {
+        return DraftTreeProposal(
+            sessionId = sessionId,
+            tokenMode = "codepoint_legacy",
+            rootAcceptedText = "",
+            bestPathTokenIds = emptyList(),
+            bestPathNodeIndices = emptyList(),
+            bestPathText = "",
+            branchFactor = branchFactor,
+            depthEvaluated = 0,
+            nodeCount = 0,
+            nodes = emptyList()
+        )
+    }
+
+    override suspend fun renderTokenIds(tokenIds: List<Int>): String {
+        if (tokenIds.isEmpty()) {
+            return ""
+        }
+        return tokenIds.joinToString(separator = " ") { it.toString() }
+    }
+
+    override suspend fun draftNextRealTokenIds(sessionId: String, maxTokens: Int): List<Int> {
+        return emptyList()
+    }
+
+    override suspend fun draftRealTokenTreeProposal(
+        sessionId: String,
+        maxDepth: Int,
+        branchFactor: Int
+    ): DraftTreeProposal {
+        return draftTreeProposal(sessionId, maxDepth, branchFactor)
+    }
+
+    override suspend fun applyVerifiedRealTokens(sessionId: String, tokenIds: List<Int>): com.example.myapplication.llama.DraftSessionHandle {
+        throw UnsupportedOperationException("StubInferenceEngine does not keep real-token draft sessions.")
     }
 
     override fun destroy() {

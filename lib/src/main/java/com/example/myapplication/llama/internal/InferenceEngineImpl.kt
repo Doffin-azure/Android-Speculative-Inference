@@ -3,6 +3,8 @@ package com.example.myapplication.llama.internal
 import android.content.Context
 import android.util.Log
 import com.example.myapplication.llama.DraftSessionHandle
+import com.example.myapplication.llama.DraftTreeNode
+import com.example.myapplication.llama.DraftTreeProposal
 import com.example.myapplication.llama.InferenceEngine
 import dalvik.annotation.optimization.FastNative
 import java.io.File
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 internal class InferenceEngineImpl private constructor(
     private val nativeLibDir: String
@@ -34,7 +37,8 @@ internal class InferenceEngineImpl private constructor(
         val systemPrompt: String,
         val userPrompt: String,
         val predictLength: Int,
-        val acceptedText: String = ""
+        val acceptedText: String = "",
+        val acceptedTokenIds: List<Int> = emptyList()
     )
 
     companion object {
@@ -93,6 +97,18 @@ internal class InferenceEngineImpl private constructor(
 
     @FastNative
     private external fun generateDraftTokenIds(maxTokens: Int): IntArray
+
+    @FastNative
+    private external fun generateDraftTreeJson(maxDepth: Int, branchFactor: Int): String
+
+    @FastNative
+    private external fun renderTokenIds(tokenIds: IntArray): String
+
+    @FastNative
+    private external fun generateDraftRealTokenIds(maxTokens: Int): IntArray
+
+    @FastNative
+    private external fun generateDraftRealTokenTreeJson(maxDepth: Int, branchFactor: Int): String
 
     @FastNative
     private external fun unload()
@@ -292,6 +308,8 @@ internal class InferenceEngineImpl private constructor(
 
     override fun supportsDraftSession(): Boolean = true
 
+    override fun supportsDraftTree(): Boolean = true
+
     override suspend fun startDraftSession(
         systemPrompt: String,
         userPrompt: String,
@@ -324,6 +342,80 @@ internal class InferenceEngineImpl private constructor(
         require(maxTokens > 0) { "maxTokens must be > 0." }
         resetDraftRuntime(runtime)
         generateDraftTokenIds(maxTokens).toList()
+    }
+
+    override suspend fun draftTreeProposal(
+        sessionId: String,
+        maxDepth: Int,
+        branchFactor: Int
+    ): DraftTreeProposal = withContext(llamaDispatcher) {
+        val runtime = draftSessions[sessionId]
+            ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+        require(maxDepth > 0) { "maxDepth must be > 0." }
+        require(branchFactor > 0) { "branchFactor must be > 0." }
+        resetDraftRuntime(runtime)
+        parseDraftTreeProposalJson(
+            sessionId = sessionId,
+            rootAcceptedText = runtime.acceptedText,
+            jsonText = generateDraftTreeJson(maxDepth, branchFactor)
+        )
+    }
+
+    override suspend fun renderTokenIds(tokenIds: List<Int>): String = withContext(llamaDispatcher) {
+        if (tokenIds.isEmpty()) {
+            return@withContext ""
+        }
+        renderTokenIds(tokenIds.toIntArray())
+    }
+
+    override suspend fun draftNextRealTokenIds(sessionId: String, maxTokens: Int): List<Int> = withContext(llamaDispatcher) {
+        val runtime = draftSessions[sessionId]
+            ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+        require(maxTokens > 0) { "maxTokens must be > 0." }
+        resetDraftRuntime(runtime)
+        generateDraftRealTokenIds(maxTokens).toList()
+    }
+
+    override suspend fun draftRealTokenTreeProposal(
+        sessionId: String,
+        maxDepth: Int,
+        branchFactor: Int
+    ): DraftTreeProposal = withContext(llamaDispatcher) {
+        val runtime = draftSessions[sessionId]
+            ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+        require(maxDepth > 0) { "maxDepth must be > 0." }
+        require(branchFactor > 0) { "branchFactor must be > 0." }
+        resetDraftRuntime(runtime)
+        parseDraftTreeProposalJson(
+            sessionId = sessionId,
+            rootAcceptedText = runtime.acceptedText,
+            jsonText = generateDraftRealTokenTreeJson(maxDepth, branchFactor)
+        )
+    }
+
+    override suspend fun applyVerifiedRealTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle = withContext(llamaDispatcher) {
+        val runtime = draftSessions[sessionId]
+            ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+
+        val safeTokenIds = tokenIds.filter { it >= 0 }
+        val updatedTokenIds = runtime.acceptedTokenIds + safeTokenIds
+        val updatedText = if (updatedTokenIds.isEmpty()) {
+            ""
+        } else {
+            renderTokenIds(updatedTokenIds.toIntArray())
+        }
+        val updatedRuntime = runtime.copy(
+            acceptedText = updatedText,
+            acceptedTokenIds = updatedTokenIds
+        )
+        resetDraftRuntime(updatedRuntime)
+        draftSessions[sessionId] = updatedRuntime
+        DraftSessionHandle(
+            sessionId = updatedRuntime.sessionId,
+            runtimeLabel = "ai-chat draft session",
+            acceptedText = updatedRuntime.acceptedText,
+            acceptedTokenCount = updatedRuntime.acceptedTokenIds.size
+        )
     }
 
     override suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle = withContext(llamaDispatcher) {
@@ -370,6 +462,62 @@ internal class InferenceEngineImpl private constructor(
             currentError = "Failed to reset draft runtime: $result"
             throw IOException(currentError)
         }
+    }
+
+    private fun parseDraftTreeProposalJson(
+        sessionId: String,
+        rootAcceptedText: String,
+        jsonText: String
+    ): DraftTreeProposal {
+        val json = JSONObject(jsonText)
+        val bestPathTokenIds = mutableListOf<Int>()
+        val bestPathArray = json.optJSONArray("bestPathTokenIds")
+        if (bestPathArray != null) {
+            for (index in 0 until bestPathArray.length()) {
+                bestPathTokenIds += bestPathArray.optInt(index)
+            }
+        }
+        val bestPathNodeIndices = mutableListOf<Int>()
+        val bestPathNodeArray = json.optJSONArray("bestPathNodeIndices")
+        if (bestPathNodeArray != null) {
+            for (index in 0 until bestPathNodeArray.length()) {
+                bestPathNodeIndices += bestPathNodeArray.optInt(index)
+            }
+        }
+
+        val nodes = mutableListOf<DraftTreeNode>()
+        val nodesArray = json.optJSONArray("nodes")
+        if (nodesArray != null) {
+            for (index in 0 until nodesArray.length()) {
+                val node = nodesArray.optJSONObject(index) ?: continue
+                nodes += DraftTreeNode(
+                    nodeIndex = node.optInt("nodeIndex", index),
+                    tokenId = node.optInt("tokenId"),
+                    tokenText = node.optString("tokenText"),
+                    depth = node.optInt("depth"),
+                    parentNodeIndex = node.optInt("parentNodeIndex", -1),
+                    probability = node.optDouble("probability", 0.0).toFloat(),
+                    logProbability = node.optDouble("logProbability", Double.NEGATIVE_INFINITY).toFloat(),
+                    cumulativeLogProbability = node.optDouble(
+                        "cumulativeLogProbability",
+                        node.optDouble("logProbability", Double.NEGATIVE_INFINITY)
+                    ).toFloat()
+                )
+            }
+        }
+
+        return DraftTreeProposal(
+            sessionId = sessionId,
+            tokenMode = json.optString("tokenMode", "codepoint_legacy"),
+            rootAcceptedText = rootAcceptedText,
+            bestPathTokenIds = bestPathTokenIds,
+            bestPathNodeIndices = bestPathNodeIndices,
+            bestPathText = json.optString("bestPathText"),
+            branchFactor = json.optInt("branchFactor"),
+            depthEvaluated = json.optInt("depthEvaluated"),
+            nodeCount = json.optInt("nodeCount", nodes.size),
+            nodes = nodes
+        )
     }
 
     override fun cleanUp() {

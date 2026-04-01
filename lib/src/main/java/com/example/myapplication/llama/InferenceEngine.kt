@@ -10,6 +10,30 @@ data class DraftSessionHandle(
     val acceptedTokenCount: Int = 0
 )
 
+data class DraftTreeNode(
+    val nodeIndex: Int,
+    val tokenId: Int,
+    val tokenText: String,
+    val depth: Int,
+    val parentNodeIndex: Int,
+    val probability: Float,
+    val logProbability: Float,
+    val cumulativeLogProbability: Float
+)
+
+data class DraftTreeProposal(
+    val sessionId: String,
+    val tokenMode: String,
+    val rootAcceptedText: String,
+    val bestPathTokenIds: List<Int>,
+    val bestPathNodeIndices: List<Int>,
+    val bestPathText: String,
+    val branchFactor: Int,
+    val depthEvaluated: Int,
+    val nodeCount: Int,
+    val nodes: List<DraftTreeNode>
+)
+
 interface InferenceEngine {
     val state: StateFlow<State>
 
@@ -31,6 +55,8 @@ interface InferenceEngine {
 
     fun supportsDraftSession(): Boolean = false
 
+    fun supportsDraftTree(): Boolean = false
+
     suspend fun startDraftSession(
         systemPrompt: String,
         userPrompt: String,
@@ -41,6 +67,34 @@ interface InferenceEngine {
 
     suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> {
         throw UnsupportedOperationException("Draft token generation is not implemented by this engine.")
+    }
+
+    suspend fun draftTreeProposal(
+        sessionId: String,
+        maxDepth: Int,
+        branchFactor: Int
+    ): DraftTreeProposal {
+        throw UnsupportedOperationException("Draft tree generation is not implemented by this engine.")
+    }
+
+    suspend fun renderTokenIds(tokenIds: List<Int>): String {
+        throw UnsupportedOperationException("Token rendering is not implemented by this engine.")
+    }
+
+    suspend fun draftNextRealTokenIds(sessionId: String, maxTokens: Int): List<Int> {
+        throw UnsupportedOperationException("Real-token draft generation is not implemented by this engine.")
+    }
+
+    suspend fun draftRealTokenTreeProposal(
+        sessionId: String,
+        maxDepth: Int,
+        branchFactor: Int
+    ): DraftTreeProposal {
+        throw UnsupportedOperationException("Real-token draft tree generation is not implemented by this engine.")
+    }
+
+    suspend fun applyVerifiedRealTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {
+        throw UnsupportedOperationException("Applying verified real tokens is not implemented by this engine.")
     }
 
     suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {

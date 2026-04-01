@@ -34,6 +34,11 @@ The current code below covers the present speculative scheme:
 6. Android draft-session interface boundary
 7. Android first local draft-session runtime
 8. Desktop first tree-shaped true verifier
+9. desktop piece-aware candidate projection
+10. draft-tree-aware piece-prefix acceptance
+11. first experimental `p/q` gate and the token-space boundary
+12. Android parallel real-token draft API skeleton
+13. experimental real-token verifier-mode wiring
 
 ## 1. Desktop Target-Session State
 
@@ -509,6 +514,450 @@ Why this is core:
 
 - This is the first verifier node that moves beyond linear chunk comparison and starts approximating the “one target evaluation looks at multiple candidate continuations” idea behind EAGLE-style verification.
 - It does so without breaking the current Android regression client or forcing an immediate protocol redesign.
+
+## 9. Android First Dynamic Draft Tree Proposal
+
+File:
+
+- `lib/src/main/java/com/example/myapplication/llama/InferenceEngine.kt`
+- `lib/src/main/java/com/example/myapplication/llama/internal/InferenceEngineImpl.kt`
+- `lib/src/main/cpp/ai_chat.cpp`
+- `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
+
+Core code:
+
+```kotlin
+data class DraftTreeNode(
+    val nodeIndex: Int,
+    val tokenId: Int,
+    val tokenText: String,
+    val depth: Int,
+    val parentNodeIndex: Int,
+    val probability: Float,
+    val logProbability: Float,
+    val cumulativeLogProbability: Float
+)
+
+data class DraftTreeProposal(
+    val sessionId: String,
+    val rootAcceptedText: String,
+    val bestPathTokenIds: List<Int>,
+    val bestPathNodeIndices: List<Int>,
+    val bestPathText: String,
+    val branchFactor: Int,
+    val depthEvaluated: Int,
+    val nodeCount: Int,
+    val nodes: List<DraftTreeNode>
+)
+```
+
+```kotlin
+override suspend fun draftTreeProposal(
+    sessionId: String,
+    maxDepth: Int,
+    branchFactor: Int
+): DraftTreeProposal = withContext(llamaDispatcher) {
+    val runtime = draftSessions[sessionId]
+        ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+    resetDraftRuntime(runtime)
+    parseDraftTreeProposalJson(
+        sessionId = sessionId,
+        rootAcceptedText = runtime.acceptedText,
+        jsonText = generateDraftTreeJson(maxDepth, branchFactor)
+    )
+}
+```
+
+```cpp
+static std::vector<draft_tree_candidate> top_candidates_from_current_logits(int branch_factor) {
+    const float *logits = llama_get_logits(g_context);
+    ...
+    std::partial_sort(...);
+    ...
+    candidates.push_back({
+        token_id,
+        common_token_to_piece(g_context, token_id),
+        probability,
+        log_probability,
+    });
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftTreeJson(...) {
+    const auto candidates = top_candidates_from_current_logits(safe_branch_factor);
+    const auto &best_candidate = candidates.front();
+    common_sampler_accept(g_sampler, best_candidate.token_id, true);
+    ...
+}
+```
+
+```kotlin
+if (startResponse.verifierMode == "llama_true_tree" && localDraftTreeSupported) {
+    val treeProposal = localLlm.draftTreeProposal(
+        sessionId = activeLocalDraftSessionId,
+        maxDepth = SPECULATIVE_STUB_MAX_DRAFT_TOKENS,
+        branchFactor = 3
+    )
+    treeProposal.bestPathTokenIds.take(SPECULATIVE_STUB_MAX_DRAFT_TOKENS)
+}
+```
+
+Explanation:
+
+- Android draft sessions can now return a first dynamic tree proposal instead of only a flat draft token slice.
+- Native code reads the current next-step logits from `g_context`, derives top-k candidates with probabilities, and can now expand multiple shallow branches by saving/restoring runtime state and replaying the last token after restore.
+- The current tree is still intentionally lightweight: it keeps the existing codepoint-compatible wire format and does not do KV-copy parallelism, but it no longer collapses everything into a single top-1 rollout.
+- `MainViewModel` can now prefer this local tree proposal when desktop is running `llama_true_tree`, while still falling back to the older linear draft path when the tree runtime is unavailable.
+
+Why this is core:
+
+- This is the first point where Android can produce probability-bearing speculative draft structure instead of only a linear token list.
+- It is the first concrete Android-side step toward an EAGLE-inspired draft producer while preserving the current cross-device protocol.
+
+## 10. Android Branch-Expanded Draft Tree
+
+File:
+
+- `lib/src/main/cpp/ai_chat.cpp`
+
+Core code:
+
+```cpp
+static runtime_branch_snapshot capture_runtime_branch_snapshot() {
+    const size_t state_size = llama_state_get_size(g_context);
+    runtime_branch_snapshot snapshot {
+            std::vector<uint8_t>(state_size),
+            capture_host_runtime_snapshot()
+    };
+    const size_t saved_size = llama_state_get_data(g_context, snapshot.state_data.data(), snapshot.state_data.size());
+    snapshot.state_data.resize(saved_size);
+    return snapshot;
+}
+
+static bool restore_runtime_branch_snapshot(const runtime_branch_snapshot &snapshot) {
+    llama_state_set_data(g_context, snapshot.state_data.data(), snapshot.state_data.size());
+    ...
+    return rebuild_logits_cursor_from_snapshot(snapshot.host_snapshot);
+}
+```
+
+```cpp
+for (const auto &branch : active_branches) {
+    restore_runtime_branch_snapshot(branch.snapshot);
+    const auto candidates = top_candidates_from_current_logits(safe_branch_factor);
+
+    for (const auto &candidate : candidates) {
+        restore_runtime_branch_snapshot(branch.snapshot);
+        advance_runtime_with_token(candidate.token_id, candidate.token_text);
+
+        draft_tree_branch child_branch {
+                capture_runtime_branch_snapshot(),
+                node_index,
+                depth + 1,
+                branch.cumulative_log_probability + candidate.log_probability,
+                branch.path_text + candidate.token_text,
+                branch.path_ids
+        };
+        append_utf8_codepoints(candidate.token_text, child_branch.path_ids);
+        ...
+    }
+}
+```
+
+Explanation:
+
+- This is the first Android draft-tree implementation that actually explores multiple local branches instead of only following the top-1 token at every layer.
+- The branch expansion is sequential, not parallel KV-copy branching, but it already uses real runtime state snapshots and the verified restore+replay rule from the probe demo.
+- The returned tree now also exposes explicit node identities and cumulative branch scores, which is the first real branch-object skeleton for the Android draft runtime.
+
+## 11. Remote Verifier Consumes Android Draft Tree
+
+Files:
+
+- `app/src/main/java/com/example/myapplication/inference/RemoteInferenceClient.kt`
+- `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```kotlin
+data class SpeculativeProposeRequest(
+    val sessionId: String,
+    val draftStep: Int,
+    val proposedTokenIds: List<Int>,
+    val proposedText: String,
+    val maxCorrectionTokens: Int = 1,
+    val draftTree: DraftTreeProposal? = null
+)
+```
+
+```kotlin
+val proposeResponse = remoteClient.proposeDraft(
+    baseUrl = baseUrl,
+    request = SpeculativeProposeRequest(
+        sessionId = startResponse.sessionId,
+        draftStep = draftStep,
+        proposedTokenIds = proposedTokens,
+        proposedText = draftText,
+        maxCorrectionTokens = 1,
+        draftTree = localDraftTreeProposal
+    )
+)
+```
+
+```python
+draft_tree = parse_optional_draft_tree_payload(payload.get("draftTree"))
+...
+tree = build_true_tree_computation(
+    config,
+    target_session,
+    target_index=target_index,
+    proposed_token_ids=proposed_token_ids,
+    max_correction_tokens=max_correction_tokens,
+    draft_tree=draft_tree,
+)
+```
+
+Explanation:
+
+- This is the first remote-verifier node where Android is no longer limited to sending only a linear token slice.
+- `llama_true_tree` can now receive the local Android draft tree as optional metadata and use draft/target overlap at each depth when choosing the target-side best candidate.
+- The protocol remains backward-compatible because the old `proposedTokenIds` path is still required and still works when `draftTree` is absent.
+
+## 13. Desktop Piece-Aware Candidate Projection
+
+Files:
+
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```python
+def common_prefix_length(left: Sequence[int], right: Sequence[int]) -> int:
+    limit = min(len(left), len(right))
+    index = 0
+    while index < limit and left[index] == right[index]:
+        index += 1
+    return index
+
+def candidate_probability(candidate: dict[str, Any]) -> float:
+    prob = float(candidate.get("prob", 0.0) or 0.0)
+    if prob > 0.0:
+        return prob
+    logprob = candidate.get("logprob")
+    if logprob is None:
+        return 0.0
+    return math.exp(float(logprob))
+```
+
+```python
+token_ids = token_ids_from_text(token_text)
+if token_ids:
+    normalized_candidates.append(
+        {
+            "tokenId": int(token_ids[0]),
+            "tokenIds": token_ids,
+            "tokenText": token_text,
+            "prob": prob,
+            "logprob": logprob,
+            "score": float(logprob if logprob is not None else math.log(max(prob, 1e-12))),
+        }
+    )
+```
+
+Explanation:
+
+- The desktop verifier no longer treats a target candidate like only its first codepoint during comparison.
+- It now preserves the whole candidate token-id sequence on the desktop side and centralizes probability normalization.
+- This removed the earlier failure mode where many target token pieces with leading spaces collapsed into the same apparent token and forced the verifier toward space-heavy best paths.
+
+## 14. Draft-Tree-Aware Piece-Prefix Acceptance
+
+Files:
+
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```python
+proposal_match_len = common_prefix_length(remaining_proposal, candidate_token_ids)
+draft_path_match_len = common_prefix_length(draft_best_suffix, candidate_token_ids)
+draft_overlap = len(set(candidate_token_ids) & set(draft_layer_prob_by_token.keys()))
+
+sort_key = (
+    draft_path_match_len,
+    1 if draft_best_token_id == candidate_token_ids[0] else 0,
+    proposal_match_len,
+    1 if candidate_token_ids and candidate_token_ids[0] in draft_layer_prob_by_token else 0,
+    draft_overlap,
+    candidate_probability(candidate),
+)
+```
+
+```python
+matched_count = common_prefix_length(remaining_proposal, best_candidate_token_ids)
+accepted = remaining_proposal[:matched_count]
+correction = best_candidate_token_ids[matched_count:matched_count + max_correction_tokens]
+```
+
+Explanation:
+
+- This is the current best working verifier behavior.
+- The desktop side uses Android draft-tree best-path alignment, overlap, and proposal-prefix agreement to choose a best target candidate.
+- It then accepts the longest common prefix between the proposal remainder and that candidate sequence, and uses the remaining candidate suffix as correction.
+- This is the path that first produced natural accepted text such as `I'm just` instead of repeated spaces.
+
+## 15. Experimental `p/q` Gate And The Token-Space Boundary
+
+Files:
+
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```python
+selected_target_prob = summed_first_token_probability(candidates, proposed_token_id)
+selected_draft_prob = float(draft_prob_by_token.get(proposed_token_id, 0.0))
+
+if selected_target_prob > 0.0 and selected_draft_prob > 0.0:
+    acceptance_probability = min(1.0, selected_target_prob / selected_draft_prob)
+    probability_draw = deterministic_probability_draw(
+        target_session.request_id,
+        target_index,
+        depth,
+        proposed_token_id,
+    )
+    pq_accepted = probability_draw <= acceptance_probability
+```
+
+Explanation:
+
+- This first experimental gate exposes real `p`, `q`, `accP`, `draw`, and `pqAccepted` diagnostics in live Android-to-desktop speculative runs.
+- It also exposed the new hard boundary for the next implementation step: standard paper-style per-token `p/q` acceptance does not remain stable while Android still exports codepoint-compatible draft ids and the desktop target still reasons over token-piece candidates.
+- In other words, this code showed that the next mainline is token-space unification, not more mixed-space acceptance tweaks.
+
+## 16. Android Parallel Real-Token Draft API Skeleton
+
+Files:
+
+- `lib/src/main/java/com/example/myapplication/llama/internal/InferenceEngineImpl.kt`
+- `lib/src/main/cpp/ai_chat.cpp`
+
+Core code:
+
+```kotlin
+private external fun generateDraftRealTokenIds(maxTokens: Int): IntArray
+private external fun generateDraftRealTokenTreeJson(maxDepth: Int, branchFactor: Int): String
+private external fun renderTokenIds(tokenIds: IntArray): String
+
+override suspend fun draftNextRealTokenIds(sessionId: String, maxTokens: Int): List<Int> = withContext(llamaDispatcher) {
+    resetDraftRuntime(runtime)
+    generateDraftRealTokenIds(maxTokens).toList()
+}
+
+override suspend fun applyVerifiedRealTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle = withContext(llamaDispatcher) {
+    val updatedTokenIds = runtime.acceptedTokenIds + tokenIds.filter { it >= 0 }
+    val updatedText = renderTokenIds(updatedTokenIds.toIntArray())
+    ...
+}
+```
+
+```cpp
+JNIEXPORT jintArray JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftRealTokenIds(...) {
+    ...
+    draft_ids.push_back(static_cast<jint>(new_token_id));
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftRealTokenTreeJson(...) {
+    ...
+    child_branch.path_ids.push_back(static_cast<int>(candidate.token_id));
+}
+
+static std::string detokenize_token_ids(const std::vector<int> &token_ids, const bool special = true) {
+    ...
+    return common_detokenize(g_context, tokens, special);
+}
+```
+
+Explanation:
+
+- The Android runtime now has a parallel experimental path that exposes real `llama_token` ids for draft-token generation and draft-tree generation.
+- It also has a native detokenize helper so accepted real-token prefixes can be rendered back into assistant text without treating token ids like Unicode codepoints.
+- The older legacy draft APIs were intentionally kept in place so the current speculative regression path can stay wire-compatible while the new token-space path is wired through protocol and desktop verification.
+
+## 17. Experimental Real-Token Verifier-Mode Wiring
+
+Files:
+
+- `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```kotlin
+val useRealTokenDraftPath = startResponse.verifierMode == "llama_true_tree_pq_tokens"
+
+if ((startResponse.verifierMode == "llama_true_tree" || useRealTokenDraftPath) && localDraftTreeSupported) {
+    val selectedTreeProposal = if (useRealTokenDraftPath) {
+        localLlm.draftRealTokenTreeProposal(...)
+    } else {
+        localLlm.draftTreeProposal(...)
+    }
+    ...
+}
+
+val draftText = if (useRealTokenDraftPath && activeLocalDraftSessionId != null) {
+    localLlm.renderTokenIds(proposedTokens)
+} else {
+    tokenIdsToReadableText(proposedTokens)
+}
+```
+
+```python
+elif session.verifier_mode in {"llama_true_tree", "llama_true_tree_pq_tokens"}:
+    computation = compute_true_tree_verifier_result(...)
+```
+
+Explanation:
+
+- The desktop service now recognizes a separate experimental verifier mode, `llama_true_tree_pq_tokens`.
+- Android checks that verifier mode at session start and, only on that path, switches from the legacy draft APIs to the new real-token draft APIs.
+- This creates a separate end-to-end experimental lane for unified-token work without replacing the current `llama_true_tree` regression baseline.
+
+## 12. Android Draft Runtime Uses Assistant Prefill Continuation
+
+Files:
+
+- `lib/src/main/cpp/ai_chat.cpp`
+
+Core code:
+
+```cpp
+static int process_assistant_prefill_text(const std::string &text) {
+    auto tokens = common_tokenize(
+            g_context,
+            text,
+            false,
+            true);
+    if (decode_tokens_in_batches(g_context, g_batch, tokens, current_position, true)) {
+        return 2;
+    }
+    append_runtime_tokens(tokens);
+    current_position += token_count;
+    assistant_ss << text;
+    return 0;
+}
+...
+const int assistant_result = process_assistant_prefill_text(assistant);
+```
+
+Explanation:
+
+- The draft runtime no longer re-wraps the already accepted assistant prefix as a full assistant chat message during `resetDraftContext(...)`.
+- Instead, it first formats system/user up to the assistant generation point and then directly prefills the accepted assistant continuation tokens.
+- This matches the `llama.cpp` server-side assistant-prefill idea more closely and avoids later draft-tree steps drifting into chat-template control tokens like `<|start_header_id|>`.
 
 ## 5. Android Speculative Multi-Step Regression Loop
 

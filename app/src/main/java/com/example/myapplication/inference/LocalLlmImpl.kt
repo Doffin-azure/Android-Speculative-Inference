@@ -2,6 +2,7 @@ package com.example.myapplication.inference
 
 import android.content.Context
 import com.example.myapplication.llama.DraftSessionHandle
+import com.example.myapplication.llama.DraftTreeProposal
 import com.example.myapplication.llama.AiChat
 import com.example.myapplication.llama.InferenceEngine
 import kotlinx.coroutines.flow.toList
@@ -27,6 +28,10 @@ class LocalLlmImpl(context: Context) : LocalLlm {
 
     override fun supportsDraftSession(): Boolean {
         return engine.supportsDraftSession()
+    }
+
+    override fun supportsDraftTree(): Boolean {
+        return engine.supportsDraftTree()
     }
 
     override suspend fun loadModel(modelPath: String): Boolean {
@@ -65,6 +70,26 @@ class LocalLlmImpl(context: Context) : LocalLlm {
 
     override suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> {
         return engine.draftNextTokenIds(sessionId, maxTokens)
+    }
+
+    override suspend fun draftTreeProposal(sessionId: String, maxDepth: Int, branchFactor: Int): DraftTreeProposal {
+        return engine.draftTreeProposal(sessionId, maxDepth, branchFactor)
+    }
+
+    override suspend fun renderTokenIds(tokenIds: List<Int>): String {
+        return engine.renderTokenIds(tokenIds)
+    }
+
+    override suspend fun draftNextRealTokenIds(sessionId: String, maxTokens: Int): List<Int> {
+        return engine.draftNextRealTokenIds(sessionId, maxTokens)
+    }
+
+    override suspend fun draftRealTokenTreeProposal(sessionId: String, maxDepth: Int, branchFactor: Int): DraftTreeProposal {
+        return engine.draftRealTokenTreeProposal(sessionId, maxDepth, branchFactor)
+    }
+
+    override suspend fun applyVerifiedRealTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {
+        return engine.applyVerifiedRealTokens(sessionId, tokenIds)
     }
 
     override suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {

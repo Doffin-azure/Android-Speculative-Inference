@@ -38,7 +38,13 @@ The desktop true verifier can now also route target continuation fetches through
 
 The Android and `:lib` layers now also have an explicit draft-session interface boundary, and that boundary now has a first real local draft runtime behind it, so true draft work is no longer blocked on discovering where to place the API surface.
 
+That same local draft runtime can now also expose a branch-expanded dynamic draft-tree proposal with per-node probabilities, which is the first Android-side move from linear speculative drafts toward an EAGLE-inspired tree producer.
+That branch-expanded tree now also exposes node identities and best-path node indices, so the Android side now has the first explicit branch-object skeleton instead of only anonymous candidate rows.
+
 The desktop verifier now also has a first tree-shaped true-target mode, `llama_true_tree`, which expands a shallow target-side candidate tree from `llama-server` top-k results without changing the Android wire protocol.
+That tree-verifier path can now also receive the Android local draft-tree payload, which is the first point where the remote verifier starts consuming branch-aware draft-side structure instead of only a linear token slice.
+That same tree-verifier path has now also crossed an important second boundary: the desktop side no longer collapses token pieces to their first codepoint when scoring candidates, and the best current piece-aware path can already produce natural fragments such as `I'm just`.
+The newest experiments also established a new hard constraint for the next node: paper-style per-token `p/q` acceptance cannot be made stable while Android draft ids are still codepoint-compatible and the desktop target still reasons over token pieces. The next mainline therefore becomes unified real `llama_token` space, not more mixed-space heuristics.
 
 ## Milestone 1: Android Local Baseline
 
@@ -328,6 +334,68 @@ Why it matters:
 - the project now has a first real target-model verification mode instead of only proxy modes
 - the next verifier work can focus on making this true mode more efficient and more persistent rather than still debating whether the verifier is real
 
+## Milestone 18: Android Branch-Expanded Draft Tree
+
+Already complete:
+
+- the Android local runtime can now build a branch-expanded draft tree from real logits
+- draft-tree nodes now carry:
+  - node identity
+  - parent identity
+  - node probability
+  - cumulative branch score
+  - best-path node indices
+- the native draft runtime now uses snapshot/restore plus replay-last-token to explore multiple shallow branches without permanently disturbing the live session
+
+Important result:
+
+- the Android side is no longer limited to a linear flat proposal slice; it can now expose a true probability-bearing draft tree for remote verification
+
+## Milestone 19: Desktop Draft-Tree-Aware True Verifier
+
+Already complete:
+
+- `llama_true_tree` now consumes optional Android `draftTree` payloads
+- the desktop verifier now records:
+  - draft-tree node count
+  - best-path nodes
+  - overlap debug
+- the desktop candidate parser no longer relies on first-character projection alone; it now keeps full candidate token-id sequences on the desktop side
+- piece-aware target/draft comparison now works well enough to accept natural fragments such as ` I'm` and ` just`
+
+Important result:
+
+- the system has now moved past "Android can send a tree" to "desktop can actually use that tree when verifying proposals"
+
+## Milestone 20: Experimental Probability Gate Boundary
+
+Already complete:
+
+- the desktop tree verifier now has a first experimental probability gate that records:
+  - `p`
+  - `q`
+  - `accP`
+  - `draw`
+  - `pqAccepted`
+- the verifier can now show, in real device runs, whether a target/draft candidate was admitted through the first-pass probability gate
+
+Important result:
+
+- this experiment proved that probability diagnostics are now available end to end
+
+Important negative result:
+
+- a direct paper-style per-token `p/q` acceptance implementation regressed behavior under the current mixed token-space protocol
+- the failure mode is now explicit:
+  - leading-space tokens can align
+  - later draft tokens quickly fall out of the target candidate space
+  - the verifier then collapses back toward space-heavy corrections
+
+Why it matters:
+
+- the project no longer has to guess whether standard `p/q` is blocked by verifier logic or by token-space mismatch
+- the answer is now clear: token-space mismatch is the next real implementation barrier
+
 ## What Is Proven Right Now
 
 These statements should now be treated as established:
@@ -342,6 +410,10 @@ These statements should now be treated as established:
 - llama-backed preview refresh during speculative propose is proven
 - replay-based target continuation proxy verification is proven
 - Android-side multi-step speculative tracing is proven in the codebase
+- Android branch-expanded draft-tree production is proven in the codebase
+- remote draft-tree-aware verification is proven in the codebase
+- piece-aware acceptance against target candidate sequences is proven in the codebase
+- first-pass end-to-end `p/q` diagnostics are proven in the codebase
 
 ## What Is Still Stubbed
 
@@ -352,6 +424,9 @@ These parts are still not the final implementation:
 - `llama_preview`, `llama_step_proxy`, and `llama_replay_proxy` are still proxy verifiers, not full target token verification
 - `llama_true_step` uses real next-token target checks, but it still replays prompts through `llama-cli` instead of holding a persistent in-memory target runtime session
 - speculative sessions are still debug-first, not performance-first
+- the Android draft runtime still exports codepoint-compatible ids instead of real `llama_token` ids
+- the current `llama_true_tree` path is still a mixed token-space verifier, not yet a unified real-token verifier
+- the current probability gate is diagnostic-first and not yet a stable paper-style per-token acceptance path
 
 ## Current Main Technical Gap
 
@@ -363,7 +438,13 @@ After that, the next missing layer will be:
 
 - replace Android placeholder draft tokens with real local-model draft tokens
 
-That ordering is still the lowest-risk path.
+That ordering has now narrowed further:
+
+1. keep the now-proven branch-expanded Android draft tree and piece-aware desktop tree verifier as the regression baseline
+2. unify Android draft ids, speculative payloads, and desktop target lookup around real `llama_token` ids
+3. only then re-introduce standard per-token `p/q` acceptance
+
+That ordering is now the lowest-risk path.
 
 ## Recommended Next Implementation Order
 
@@ -371,8 +452,11 @@ That ordering is still the lowest-risk path.
 2. keep the Android multi-step speculative stub loop as the regression client
 3. keep `llama_replay_proxy` as the highest-fidelity verifier harness while true verification is being built
 4. replace desktop replay-based proxy verification with real target-model token verification
-5. only then move down into `:lib` to expose real local draft tokens on Android
-6. keep ordinary remote fallback active throughout
+5. keep the current branch-expanded draft tree and piece-aware tree verifier as the regression path
+6. move down into `:lib` to expose real local draft tokens on Android
+7. unify the speculative payload with real token ids
+8. only then bring back standard per-token `p/q` acceptance
+9. keep ordinary remote fallback active throughout
 
 ## Useful File Map
 
@@ -402,3 +486,4 @@ If work resumes later, use this sequence:
 2. read this file for the milestone summary
 3. read `docs/project/desktop-inference-service-runbook.md` if desktop service behavior is involved
 4. continue from the desktop-side real verifier replacement, not from earlier baseline bring-up
+5. if probability-acceptance work resumes, resume from token-space unification rather than from the failed mixed-space per-token gate

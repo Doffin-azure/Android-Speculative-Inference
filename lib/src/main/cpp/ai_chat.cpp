@@ -1,10 +1,13 @@
 #include <android/log.h>
+#include <algorithm>
 #include <jni.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <iomanip>
+#include <limits>
 #include <mutex>
+#include <utility>
 #include <sampling.h>
 #include <sys/stat.h>
 #include <string>
@@ -367,11 +370,13 @@ constexpr const char *ROLE_ASSISTANT = "assistant";
 static std::vector<common_chat_msg> chat_msgs;
 static llama_pos system_prompt_position;
 static llama_pos current_position;
+static std::vector<llama_token> runtime_token_history;
 
 static void reset_long_term_states(const bool clear_kv_cache = true) {
     chat_msgs.clear();
     system_prompt_position = 0;
     current_position = 0;
+    runtime_token_history.clear();
 
     if (clear_kv_cache) {
         llama_memory_clear(llama_get_memory(g_context), false);
@@ -428,6 +433,355 @@ static int decode_tokens_in_batches(
         const llama_pos start_pos,
         const bool compute_last_logit);
 
+static bool is_valid_utf8(const char *string);
+
+struct draft_tree_candidate {
+    llama_token token_id;
+    std::string token_text;
+    float probability;
+    float log_probability;
+};
+
+struct host_runtime_probe_snapshot {
+    llama_pos system_prompt_position;
+    llama_pos current_position;
+    llama_pos stop_generation_position;
+    std::string cached_token_chars;
+    std::string assistant_text;
+    std::vector<llama_token> runtime_token_history;
+};
+
+struct runtime_branch_snapshot {
+    std::vector<uint8_t> state_data;
+    host_runtime_probe_snapshot host_snapshot;
+};
+
+struct draft_tree_branch {
+    runtime_branch_snapshot snapshot;
+    int parent_node_index;
+    int depth;
+    float cumulative_log_probability;
+    std::string path_text;
+    std::vector<int> path_ids;
+    std::vector<int> path_node_indices;
+};
+
+static std::string detokenize_token_ids(const std::vector<int> &token_ids, const bool special = true) {
+    if (g_context == nullptr || token_ids.empty()) {
+        return "";
+    }
+
+    std::vector<llama_token> tokens;
+    tokens.reserve(token_ids.size());
+    for (const int token_id : token_ids) {
+        if (token_id >= 0) {
+            tokens.push_back(static_cast<llama_token>(token_id));
+        }
+    }
+    if (tokens.empty()) {
+        return "";
+    }
+    return common_detokenize(g_context, tokens, special);
+}
+
+static void append_runtime_tokens(const llama_tokens &tokens) {
+    runtime_token_history.insert(runtime_token_history.end(), tokens.begin(), tokens.end());
+}
+
+static host_runtime_probe_snapshot capture_host_runtime_snapshot() {
+    return {
+            system_prompt_position,
+            current_position,
+            stop_generation_position,
+            cached_token_chars,
+            assistant_ss.str(),
+            runtime_token_history
+    };
+}
+
+static std::string json_escape(const std::string &input) {
+    std::ostringstream out;
+    for (const unsigned char ch: input) {
+        switch (ch) {
+            case '\\':
+                out << "\\\\";
+                break;
+            case '"':
+                out << "\\\"";
+                break;
+            case '\b':
+                out << "\\b";
+                break;
+            case '\f':
+                out << "\\f";
+                break;
+            case '\n':
+                out << "\\n";
+                break;
+            case '\r':
+                out << "\\r";
+                break;
+            case '\t':
+                out << "\\t";
+                break;
+            default:
+                if (ch < 0x20) {
+                    out << "\\u"
+                        << std::hex
+                        << std::setw(4)
+                        << std::setfill('0')
+                        << static_cast<int>(ch)
+                        << std::dec;
+                } else {
+                    out << static_cast<char>(ch);
+                }
+                break;
+        }
+    }
+    return out.str();
+}
+
+static void append_utf8_codepoints(const std::string &emitted, std::vector<int> &out_ids) {
+    for (size_t i = 0; i < emitted.size();) {
+        uint32_t codepoint = 0;
+        const unsigned char lead = static_cast<unsigned char>(emitted[i]);
+        int length = 1;
+        if ((lead & 0x80u) == 0) {
+            codepoint = lead;
+        } else if ((lead & 0xE0u) == 0xC0u && i + 1 < emitted.size()) {
+            codepoint = ((lead & 0x1Fu) << 6) |
+                        (static_cast<unsigned char>(emitted[i + 1]) & 0x3Fu);
+            length = 2;
+        } else if ((lead & 0xF0u) == 0xE0u && i + 2 < emitted.size()) {
+            codepoint = ((lead & 0x0Fu) << 12) |
+                        ((static_cast<unsigned char>(emitted[i + 1]) & 0x3Fu) << 6) |
+                        (static_cast<unsigned char>(emitted[i + 2]) & 0x3Fu);
+            length = 3;
+        } else if ((lead & 0xF8u) == 0xF0u && i + 3 < emitted.size()) {
+            codepoint = ((lead & 0x07u) << 18) |
+                        ((static_cast<unsigned char>(emitted[i + 1]) & 0x3Fu) << 12) |
+                        ((static_cast<unsigned char>(emitted[i + 2]) & 0x3Fu) << 6) |
+                        (static_cast<unsigned char>(emitted[i + 3]) & 0x3Fu);
+            length = 4;
+        } else {
+            codepoint = lead;
+        }
+        out_ids.push_back((int) codepoint);
+        i += length;
+    }
+}
+
+static jint first_codepoint_id_from_text(const std::string &text) {
+    std::vector<int> codepoints;
+    append_utf8_codepoints(text, codepoints);
+    return codepoints.empty() ? -1 : codepoints.front();
+}
+
+static std::vector<draft_tree_candidate> top_candidates_from_current_logits(int branch_factor) {
+    std::vector<draft_tree_candidate> candidates;
+    if (branch_factor <= 0) {
+        return candidates;
+    }
+
+    const float *logits = llama_get_logits(g_context);
+    if (logits == nullptr) {
+        return candidates;
+    }
+
+    const int vocab_size = static_cast<int>(llama_vocab_n_tokens(llama_model_get_vocab(g_model)));
+    if (vocab_size <= 0) {
+        return candidates;
+    }
+
+    std::vector<int> token_indices(vocab_size);
+    for (int token_id = 0; token_id < vocab_size; ++token_id) {
+        token_indices[token_id] = token_id;
+    }
+
+    const int keep = std::min(branch_factor, vocab_size);
+    std::partial_sort(
+            token_indices.begin(),
+            token_indices.begin() + keep,
+            token_indices.end(),
+            [&](const int lhs, const int rhs) {
+                return logits[lhs] > logits[rhs];
+            });
+
+    float max_logit = -std::numeric_limits<float>::infinity();
+    for (int token_id = 0; token_id < vocab_size; ++token_id) {
+        max_logit = std::max(max_logit, logits[token_id]);
+    }
+
+    double sum_exp = 0.0;
+    for (int token_id = 0; token_id < vocab_size; ++token_id) {
+        sum_exp += std::exp(static_cast<double>(logits[token_id] - max_logit));
+    }
+    const double log_denom = std::log(sum_exp) + static_cast<double>(max_logit);
+
+    candidates.reserve(keep);
+    for (int i = 0; i < keep; ++i) {
+        const llama_token token_id = token_indices[i];
+        const float log_probability = logits[token_id] - static_cast<float>(log_denom);
+        const float probability = std::exp(log_probability);
+        candidates.push_back({
+                                     token_id,
+                                     common_token_to_piece(g_context, token_id),
+                                     probability,
+                                     log_probability,
+                             });
+    }
+
+    return candidates;
+}
+
+static std::string top_candidates_to_json(const std::vector<draft_tree_candidate> &candidates) {
+    std::ostringstream out;
+    out << "[";
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        if (i > 0) {
+            out << ",";
+        }
+        const auto &candidate = candidates[i];
+        out << "{"
+            << "\"tokenId\":" << static_cast<int>(candidate.token_id) << ","
+            << "\"tokenText\":\"" << json_escape(candidate.token_text) << "\","
+            << "\"probability\":" << candidate.probability << ","
+            << "\"logProbability\":" << candidate.log_probability
+            << "}";
+    }
+    out << "]";
+    return out.str();
+}
+
+static bool candidate_vectors_equivalent(
+        const std::vector<draft_tree_candidate> &lhs,
+        const std::vector<draft_tree_candidate> &rhs,
+        const float tolerance = 1e-5f) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        if (lhs[i].token_text != rhs[i].token_text) {
+            return false;
+        }
+        if (std::fabs(lhs[i].probability - rhs[i].probability) > tolerance) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static std::pair<llama_token, std::string> sample_one_token_for_probe() {
+    if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+        shift_context();
+    }
+
+    if (current_position >= stop_generation_position) {
+        return {LLAMA_TOKEN_NULL, ""};
+    }
+
+    const auto new_token_id = common_sampler_sample(g_sampler, g_context, -1);
+    common_sampler_accept(g_sampler, new_token_id, true);
+
+    common_batch_clear(g_batch);
+    common_batch_add(g_batch, new_token_id, current_position, {0}, true);
+    if (llama_decode(g_context, g_batch) != 0) {
+        LOGe("%s: llama_decode() failed for probe token", __func__);
+        return {LLAMA_TOKEN_NULL, ""};
+    }
+
+    current_position++;
+    runtime_token_history.push_back(new_token_id);
+    auto token_text = common_token_to_piece(g_context, new_token_id);
+    cached_token_chars += token_text;
+    if (is_valid_utf8(cached_token_chars.c_str())) {
+        assistant_ss << cached_token_chars;
+        cached_token_chars.clear();
+    }
+    return {new_token_id, token_text};
+}
+
+static bool rebuild_logits_cursor_from_snapshot(const host_runtime_probe_snapshot &snapshot) {
+    if (snapshot.runtime_token_history.empty() || snapshot.current_position <= 0) {
+        return true;
+    }
+
+    const llama_pos last_token_position = snapshot.current_position - 1;
+    const llama_token last_token = snapshot.runtime_token_history.back();
+    if (!llama_memory_seq_rm(
+            llama_get_memory(g_context),
+            0,
+            last_token_position,
+            snapshot.current_position)) {
+        LOGw("%s: failed to remove last token position before replay", __func__);
+    }
+
+    common_batch_clear(g_batch);
+    common_batch_add(g_batch, last_token, last_token_position, {0}, true);
+    if (llama_decode(g_context, g_batch) != 0) {
+        LOGe("%s: failed to replay last token after restore", __func__);
+        return false;
+    }
+
+    return true;
+}
+
+static runtime_branch_snapshot capture_runtime_branch_snapshot() {
+    const size_t state_size = llama_state_get_size(g_context);
+    runtime_branch_snapshot snapshot {
+            std::vector<uint8_t>(state_size),
+            capture_host_runtime_snapshot()
+    };
+    const size_t saved_size = llama_state_get_data(g_context, snapshot.state_data.data(), snapshot.state_data.size());
+    snapshot.state_data.resize(saved_size);
+    return snapshot;
+}
+
+static bool restore_runtime_branch_snapshot(const runtime_branch_snapshot &snapshot) {
+    if (llama_state_set_data(g_context, snapshot.state_data.data(), snapshot.state_data.size()) != snapshot.state_data.size()) {
+        LOGe("%s: failed to restore runtime branch state", __func__);
+        return false;
+    }
+
+    system_prompt_position = snapshot.host_snapshot.system_prompt_position;
+    current_position = snapshot.host_snapshot.current_position;
+    stop_generation_position = snapshot.host_snapshot.stop_generation_position;
+    cached_token_chars = snapshot.host_snapshot.cached_token_chars;
+    assistant_ss.str("");
+    assistant_ss.clear();
+    assistant_ss << snapshot.host_snapshot.assistant_text;
+    runtime_token_history = snapshot.host_snapshot.runtime_token_history;
+    return rebuild_logits_cursor_from_snapshot(snapshot.host_snapshot);
+}
+
+static bool advance_runtime_with_token(const llama_token token_id, const std::string &token_text) {
+    if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+        shift_context();
+    }
+
+    if (current_position >= stop_generation_position) {
+        return false;
+    }
+
+    common_batch_clear(g_batch);
+    common_batch_add(g_batch, token_id, current_position, {0}, true);
+    if (llama_decode(g_context, g_batch) != 0) {
+        LOGe("%s: llama_decode() failed for explicit token", __func__);
+        return false;
+    }
+
+    current_position++;
+    runtime_token_history.push_back(token_id);
+    cached_token_chars += token_text;
+    if (is_valid_utf8(cached_token_chars.c_str())) {
+        assistant_ss << cached_token_chars;
+        cached_token_chars.clear();
+    }
+
+    return true;
+}
+
 static int process_prompt_text(
         const std::string &text,
         const std::string &role,
@@ -465,10 +819,46 @@ static int process_prompt_text(
         return 2;
     }
 
+    append_runtime_tokens(tokens);
     current_position += token_count;
     if (update_system_position) {
         system_prompt_position = current_position;
     }
+    return 0;
+}
+
+static int process_assistant_prefill_text(const std::string &text) {
+    if (text.empty()) {
+        return 0;
+    }
+
+    auto tokens = common_tokenize(
+            g_context,
+            text,
+            false,
+            true);
+
+    const int token_count = (int) tokens.size();
+    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;
+    if (token_count > max_batch_size) {
+        LOGe("%s: assistant prefill too long for context! %d tokens, max: %d",
+             __func__,
+             token_count,
+             max_batch_size);
+        return 1;
+    }
+
+    if (decode_tokens_in_batches(g_context, g_batch, tokens, current_position, true)) {
+        LOGe("%s: llama_decode() failed for assistant prefill", __func__);
+        return 2;
+    }
+
+    append_runtime_tokens(tokens);
+    current_position += token_count;
+    cached_token_chars.clear();
+    assistant_ss.str("");
+    assistant_ss.clear();
+    assistant_ss << text;
     return 0;
 }
 
@@ -724,7 +1114,7 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_resetDraftCont
         return 20 + user_result;
     }
 
-    const int assistant_result = process_prompt_text(assistant, ROLE_ASSISTANT, false);
+    const int assistant_result = process_assistant_prefill_text(assistant);
     if (assistant_result != 0) {
         return 30 + assistant_result;
     }
@@ -773,33 +1163,7 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftT
         if (is_valid_utf8(cached_token_chars.c_str())) {
             const std::string emitted = cached_token_chars;
             assistant_ss << emitted;
-            for (size_t i = 0; i < emitted.size();) {
-                uint32_t codepoint = 0;
-                const unsigned char lead = static_cast<unsigned char>(emitted[i]);
-                int length = 1;
-                if ((lead & 0x80u) == 0) {
-                    codepoint = lead;
-                } else if ((lead & 0xE0u) == 0xC0u && i + 1 < emitted.size()) {
-                    codepoint = ((lead & 0x1Fu) << 6) |
-                                (static_cast<unsigned char>(emitted[i + 1]) & 0x3Fu);
-                    length = 2;
-                } else if ((lead & 0xF0u) == 0xE0u && i + 2 < emitted.size()) {
-                    codepoint = ((lead & 0x0Fu) << 12) |
-                                ((static_cast<unsigned char>(emitted[i + 1]) & 0x3Fu) << 6) |
-                                (static_cast<unsigned char>(emitted[i + 2]) & 0x3Fu);
-                    length = 3;
-                } else if ((lead & 0xF8u) == 0xF0u && i + 3 < emitted.size()) {
-                    codepoint = ((lead & 0x07u) << 18) |
-                                ((static_cast<unsigned char>(emitted[i + 1]) & 0x3Fu) << 12) |
-                                ((static_cast<unsigned char>(emitted[i + 2]) & 0x3Fu) << 6) |
-                                (static_cast<unsigned char>(emitted[i + 3]) & 0x3Fu);
-                    length = 4;
-                } else {
-                    codepoint = lead;
-                }
-                draft_ids.push_back((jint) codepoint);
-                i += length;
-            }
+            append_utf8_codepoints(emitted, draft_ids);
             cached_token_chars.clear();
         }
     }
@@ -810,6 +1174,511 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftT
     }
     env->SetIntArrayRegion(result, 0, (jsize) draft_ids.size(), draft_ids.data());
     return result;
+}
+
+extern "C"
+JNIEXPORT jintArray JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftRealTokenIds(
+        JNIEnv *env,
+        jobject /* unused */,
+        jint max_tokens) {
+    std::vector<jint> draft_ids;
+    draft_ids.reserve(std::max(0, (int) max_tokens));
+
+    for (int step = 0; step < max_tokens; ++step) {
+        if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+            shift_context();
+        }
+
+        if (current_position >= stop_generation_position) {
+            break;
+        }
+
+        const auto new_token_id = common_sampler_sample(g_sampler, g_context, -1);
+        common_sampler_accept(g_sampler, new_token_id, true);
+
+        common_batch_clear(g_batch);
+        common_batch_add(g_batch, new_token_id, current_position, {0}, true);
+        if (llama_decode(g_context, g_batch) != 0) {
+            LOGe("%s: llama_decode() failed for real draft token", __func__);
+            break;
+        }
+
+        current_position++;
+
+        if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
+            chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
+            break;
+        }
+
+        auto new_token_chars = common_token_to_piece(g_context, new_token_id);
+        cached_token_chars += new_token_chars;
+        if (is_valid_utf8(cached_token_chars.c_str())) {
+            assistant_ss << cached_token_chars;
+            cached_token_chars.clear();
+        }
+
+        draft_ids.push_back(static_cast<jint>(new_token_id));
+    }
+
+    jintArray result = env->NewIntArray((jsize) draft_ids.size());
+    if (result == nullptr || draft_ids.empty()) {
+        return result;
+    }
+    env->SetIntArrayRegion(result, 0, (jsize) draft_ids.size(), draft_ids.data());
+    return result;
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_renderTokenIds(
+        JNIEnv *env,
+        jobject /* unused */,
+        jintArray jtoken_ids) {
+    if (g_context == nullptr || g_model == nullptr) {
+        return env->NewStringUTF("");
+    }
+
+    if (jtoken_ids == nullptr) {
+        return env->NewStringUTF("");
+    }
+
+    const jsize count = env->GetArrayLength(jtoken_ids);
+    if (count <= 0) {
+        return env->NewStringUTF("");
+    }
+
+    std::vector<jint> raw_ids((size_t) count);
+    env->GetIntArrayRegion(jtoken_ids, 0, count, raw_ids.data());
+
+    std::vector<int> token_ids;
+    token_ids.reserve(raw_ids.size());
+    for (const jint token_id : raw_ids) {
+        if (token_id >= 0) {
+            token_ids.push_back((int) token_id);
+        }
+    }
+
+    const std::string text = detokenize_token_ids(token_ids);
+    return env->NewStringUTF(text.c_str());
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_debug_DraftRuntimeProbeDemo_nativeCaptureTopKJson(
+        JNIEnv *env,
+        jobject /* unused */,
+        jint top_k) {
+    if (g_context == nullptr || g_model == nullptr) {
+        return env->NewStringUTF("{\"error\":\"draft runtime is not prepared\"}");
+    }
+
+    const int safe_top_k = std::max(1, static_cast<int>(top_k));
+    const auto candidates = top_candidates_from_current_logits(safe_top_k);
+    std::ostringstream out;
+    out << "{"
+        << "\"currentPosition\":" << current_position << ","
+        << "\"stopGenerationPosition\":" << stop_generation_position << ","
+        << "\"topK\":" << safe_top_k << ","
+        << "\"candidates\":" << top_candidates_to_json(candidates)
+        << "}";
+    return env->NewStringUTF(out.str().c_str());
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_debug_DraftRuntimeProbeDemo_nativeRunStateRoundTripJson(
+        JNIEnv *env,
+        jobject /* unused */,
+        jint top_k) {
+    if (g_context == nullptr || g_model == nullptr) {
+        return env->NewStringUTF("{\"error\":\"draft runtime is not prepared\"}");
+    }
+
+    const int safe_top_k = std::max(1, static_cast<int>(top_k));
+    const auto before = top_candidates_from_current_logits(safe_top_k);
+
+    const size_t state_size = llama_state_get_size(g_context);
+    std::vector<uint8_t> state_data(state_size);
+    const size_t saved_size = llama_state_get_data(g_context, state_data.data(), state_data.size());
+
+    const host_runtime_probe_snapshot snapshot = capture_host_runtime_snapshot();
+
+    const auto sampled = sample_one_token_for_probe();
+    const auto after_sample = top_candidates_from_current_logits(safe_top_k);
+
+    const size_t restored_size = llama_state_set_data(g_context, state_data.data(), saved_size);
+    system_prompt_position = snapshot.system_prompt_position;
+    current_position = snapshot.current_position;
+    stop_generation_position = snapshot.stop_generation_position;
+    cached_token_chars = snapshot.cached_token_chars;
+    assistant_ss.str("");
+    assistant_ss.clear();
+    assistant_ss << snapshot.assistant_text;
+    runtime_token_history = snapshot.runtime_token_history;
+
+    const bool replay_succeeded = rebuild_logits_cursor_from_snapshot(snapshot);
+
+    const auto after_restore = top_candidates_from_current_logits(safe_top_k);
+    const bool restored_matches_before = candidate_vectors_equivalent(before, after_restore);
+
+    std::ostringstream out;
+    out << "{"
+        << "\"savedStateBytes\":" << saved_size << ","
+        << "\"restoredStateBytes\":" << restored_size << ","
+        << "\"sampledTokenId\":" << static_cast<int>(sampled.first) << ","
+        << "\"sampledTokenText\":\"" << json_escape(sampled.second) << "\","
+        << "\"replaySucceeded\":" << (replay_succeeded ? "true" : "false") << ","
+        << "\"restoredMatchesBefore\":" << (restored_matches_before ? "true" : "false") << ","
+        << "\"before\":" << top_candidates_to_json(before) << ","
+        << "\"afterSample\":" << top_candidates_to_json(after_sample) << ","
+        << "\"afterRestore\":" << top_candidates_to_json(after_restore)
+        << "}";
+
+    return env->NewStringUTF(out.str().c_str());
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_debug_DraftRuntimeProbeDemo_nativeRunSequenceStateRoundTripJson(
+        JNIEnv *env,
+        jobject /* unused */,
+        jint top_k) {
+    if (g_context == nullptr || g_model == nullptr) {
+        return env->NewStringUTF("{\"error\":\"draft runtime is not prepared\"}");
+    }
+
+    const int safe_top_k = std::max(1, static_cast<int>(top_k));
+    const llama_seq_id seq_id = 0;
+    const auto before = top_candidates_from_current_logits(safe_top_k);
+
+    const size_t seq_state_size = llama_state_seq_get_size(g_context, seq_id);
+    std::vector<uint8_t> seq_state_data(seq_state_size);
+    const size_t saved_size = llama_state_seq_get_data(g_context, seq_state_data.data(), seq_state_data.size(), seq_id);
+
+    const host_runtime_probe_snapshot snapshot = capture_host_runtime_snapshot();
+
+    const auto sampled = sample_one_token_for_probe();
+    const auto after_sample = top_candidates_from_current_logits(safe_top_k);
+
+    llama_memory_seq_rm(llama_get_memory(g_context), seq_id, -1, -1);
+    const size_t restored_size = llama_state_seq_set_data(g_context, seq_state_data.data(), saved_size, seq_id);
+    system_prompt_position = snapshot.system_prompt_position;
+    current_position = snapshot.current_position;
+    stop_generation_position = snapshot.stop_generation_position;
+    cached_token_chars = snapshot.cached_token_chars;
+    assistant_ss.str("");
+    assistant_ss.clear();
+    assistant_ss << snapshot.assistant_text;
+    runtime_token_history = snapshot.runtime_token_history;
+
+    const bool replay_succeeded = rebuild_logits_cursor_from_snapshot(snapshot);
+
+    const auto after_restore = top_candidates_from_current_logits(safe_top_k);
+    const bool restored_matches_before = candidate_vectors_equivalent(before, after_restore);
+
+    std::ostringstream out;
+    out << "{"
+        << "\"savedSequenceStateBytes\":" << saved_size << ","
+        << "\"restoredSequenceStateBytes\":" << restored_size << ","
+        << "\"sequenceId\":" << seq_id << ","
+        << "\"sampledTokenId\":" << static_cast<int>(sampled.first) << ","
+        << "\"sampledTokenText\":\"" << json_escape(sampled.second) << "\","
+        << "\"replaySucceeded\":" << (replay_succeeded ? "true" : "false") << ","
+        << "\"restoredMatchesBefore\":" << (restored_matches_before ? "true" : "false") << ","
+        << "\"before\":" << top_candidates_to_json(before) << ","
+        << "\"afterSample\":" << top_candidates_to_json(after_sample) << ","
+        << "\"afterRestore\":" << top_candidates_to_json(after_restore)
+        << "}";
+
+    return env->NewStringUTF(out.str().c_str());
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftTreeJson(
+        JNIEnv *env,
+        jobject /* unused */,
+        jint max_depth,
+        jint branch_factor) {
+    const int safe_depth = std::max(1, static_cast<int>(max_depth));
+    const int safe_branch_factor = std::max(1, static_cast<int>(branch_factor));
+    std::ostringstream nodes_json;
+    bool is_first_node = true;
+    int global_node_index = 0;
+    int depth_evaluated = 0;
+    bool best_path_initialized = false;
+    int best_path_depth = 0;
+    float best_path_score = -std::numeric_limits<float>::infinity();
+    std::string best_path_text;
+    std::vector<int> best_path_ids;
+    std::vector<int> best_path_node_indices;
+
+    std::vector<draft_tree_branch> active_branches;
+    active_branches.push_back({
+            capture_runtime_branch_snapshot(),
+            -1,
+            0,
+            0.0f,
+            "",
+            {},
+            {}
+    });
+    const runtime_branch_snapshot root_snapshot = active_branches.front().snapshot;
+
+    for (int depth = 0; depth < safe_depth && !active_branches.empty(); ++depth) {
+        std::vector<draft_tree_branch> next_branches;
+        bool saw_candidates_at_depth = false;
+
+        for (const auto &branch : active_branches) {
+            if (!restore_runtime_branch_snapshot(branch.snapshot)) {
+                continue;
+            }
+            if (current_position >= stop_generation_position) {
+                continue;
+            }
+
+            const auto candidates = top_candidates_from_current_logits(safe_branch_factor);
+            if (candidates.empty()) {
+                continue;
+            }
+
+            saw_candidates_at_depth = true;
+            for (const auto &candidate : candidates) {
+                const int node_index = global_node_index++;
+                const jint wire_token_id = first_codepoint_id_from_text(candidate.token_text);
+                if (!is_first_node) {
+                    nodes_json << ",";
+                }
+                is_first_node = false;
+                nodes_json
+                        << "{"
+                        << "\"nodeIndex\":" << node_index << ","
+                        << "\"tokenId\":" << wire_token_id << ","
+                        << "\"tokenText\":\"" << json_escape(candidate.token_text) << "\","
+                        << "\"depth\":" << depth << ","
+                        << "\"parentNodeIndex\":" << branch.parent_node_index << ","
+                        << "\"probability\":" << candidate.probability << ","
+                        << "\"logProbability\":" << candidate.log_probability << ","
+                        << "\"cumulativeLogProbability\":" << (branch.cumulative_log_probability + candidate.log_probability)
+                        << "}";
+
+                if (!restore_runtime_branch_snapshot(branch.snapshot)) {
+                    continue;
+                }
+                if (!advance_runtime_with_token(candidate.token_id, candidate.token_text)) {
+                    continue;
+                }
+
+                draft_tree_branch child_branch {
+                        capture_runtime_branch_snapshot(),
+                        node_index,
+                        depth + 1,
+                        branch.cumulative_log_probability + candidate.log_probability,
+                        branch.path_text + candidate.token_text,
+                        branch.path_ids
+                };
+                append_utf8_codepoints(candidate.token_text, child_branch.path_ids);
+                child_branch.path_node_indices = branch.path_node_indices;
+                child_branch.path_node_indices.push_back(node_index);
+
+                if (!best_path_initialized ||
+                    child_branch.depth > best_path_depth ||
+                    (child_branch.depth == best_path_depth &&
+                     child_branch.cumulative_log_probability > best_path_score)) {
+                    best_path_initialized = true;
+                    best_path_depth = child_branch.depth;
+                    best_path_score = child_branch.cumulative_log_probability;
+                    best_path_text = child_branch.path_text;
+                    best_path_ids = child_branch.path_ids;
+                    best_path_node_indices = child_branch.path_node_indices;
+                }
+
+                if (!llama_vocab_is_eog(llama_model_get_vocab(g_model), candidate.token_id) &&
+                    child_branch.depth < safe_depth &&
+                    current_position < stop_generation_position) {
+                    next_branches.push_back(std::move(child_branch));
+                }
+            }
+        }
+
+        if (!saw_candidates_at_depth) {
+            break;
+        }
+
+        depth_evaluated = depth + 1;
+        active_branches = std::move(next_branches);
+    }
+
+    restore_runtime_branch_snapshot(root_snapshot);
+
+    std::ostringstream result;
+    result << "{"
+           << "\"tokenMode\":\"codepoint_legacy\","
+           << "\"branchFactor\":" << safe_branch_factor << ","
+           << "\"depthEvaluated\":" << depth_evaluated << ","
+           << "\"bestPathText\":\"" << json_escape(best_path_text) << "\","
+           << "\"bestPathTokenIds\":[";
+    for (size_t i = 0; i < best_path_ids.size(); ++i) {
+        if (i > 0) {
+            result << ",";
+        }
+        result << best_path_ids[i];
+    }
+    result << "],\"bestPathNodeIndices\":[";
+    for (size_t i = 0; i < best_path_node_indices.size(); ++i) {
+        if (i > 0) {
+            result << ",";
+        }
+        result << best_path_node_indices[i];
+    }
+    result << "],\"nodeCount\":" << global_node_index
+           << ",\"nodes\":[" << nodes_json.str() << "]}";
+
+    return env->NewStringUTF(result.str().c_str());
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftRealTokenTreeJson(
+        JNIEnv *env,
+        jobject /* unused */,
+        jint max_depth,
+        jint branch_factor) {
+    const int safe_depth = std::max(1, static_cast<int>(max_depth));
+    const int safe_branch_factor = std::max(1, static_cast<int>(branch_factor));
+    std::ostringstream nodes_json;
+    bool is_first_node = true;
+    int global_node_index = 0;
+    int depth_evaluated = 0;
+    bool best_path_initialized = false;
+    int best_path_depth = 0;
+    float best_path_score = -std::numeric_limits<float>::infinity();
+    std::string best_path_text;
+    std::vector<int> best_path_ids;
+    std::vector<int> best_path_node_indices;
+
+    std::vector<draft_tree_branch> active_branches;
+    active_branches.push_back({
+            capture_runtime_branch_snapshot(),
+            -1,
+            0,
+            0.0f,
+            "",
+            {},
+            {}
+    });
+    const runtime_branch_snapshot root_snapshot = active_branches.front().snapshot;
+
+    for (int depth = 0; depth < safe_depth && !active_branches.empty(); ++depth) {
+        std::vector<draft_tree_branch> next_branches;
+        bool saw_candidates_at_depth = false;
+
+        for (const auto &branch : active_branches) {
+            if (!restore_runtime_branch_snapshot(branch.snapshot)) {
+                continue;
+            }
+            if (current_position >= stop_generation_position) {
+                continue;
+            }
+
+            const auto candidates = top_candidates_from_current_logits(safe_branch_factor);
+            if (candidates.empty()) {
+                continue;
+            }
+
+            saw_candidates_at_depth = true;
+            for (const auto &candidate : candidates) {
+                const int node_index = global_node_index++;
+                if (!is_first_node) {
+                    nodes_json << ",";
+                }
+                is_first_node = false;
+                nodes_json
+                        << "{"
+                        << "\"nodeIndex\":" << node_index << ","
+                        << "\"tokenId\":" << static_cast<int>(candidate.token_id) << ","
+                        << "\"tokenText\":\"" << json_escape(candidate.token_text) << "\","
+                        << "\"depth\":" << depth << ","
+                        << "\"parentNodeIndex\":" << branch.parent_node_index << ","
+                        << "\"probability\":" << candidate.probability << ","
+                        << "\"logProbability\":" << candidate.log_probability << ","
+                        << "\"cumulativeLogProbability\":" << (branch.cumulative_log_probability + candidate.log_probability)
+                        << "}";
+
+                if (!restore_runtime_branch_snapshot(branch.snapshot)) {
+                    continue;
+                }
+                if (!advance_runtime_with_token(candidate.token_id, candidate.token_text)) {
+                    continue;
+                }
+
+                draft_tree_branch child_branch {
+                        capture_runtime_branch_snapshot(),
+                        node_index,
+                        depth + 1,
+                        branch.cumulative_log_probability + candidate.log_probability,
+                        branch.path_text + candidate.token_text,
+                        branch.path_ids
+                };
+                child_branch.path_ids.push_back(static_cast<int>(candidate.token_id));
+                child_branch.path_node_indices = branch.path_node_indices;
+                child_branch.path_node_indices.push_back(node_index);
+
+                if (!best_path_initialized ||
+                    child_branch.depth > best_path_depth ||
+                    (child_branch.depth == best_path_depth &&
+                     child_branch.cumulative_log_probability > best_path_score)) {
+                    best_path_initialized = true;
+                    best_path_depth = child_branch.depth;
+                    best_path_score = child_branch.cumulative_log_probability;
+                    best_path_text = child_branch.path_text;
+                    best_path_ids = child_branch.path_ids;
+                    best_path_node_indices = child_branch.path_node_indices;
+                }
+
+                if (!llama_vocab_is_eog(llama_model_get_vocab(g_model), candidate.token_id) &&
+                    child_branch.depth < safe_depth &&
+                    current_position < stop_generation_position) {
+                    next_branches.push_back(std::move(child_branch));
+                }
+            }
+        }
+
+        if (!saw_candidates_at_depth) {
+            break;
+        }
+
+        depth_evaluated = depth + 1;
+        active_branches = std::move(next_branches);
+    }
+
+    restore_runtime_branch_snapshot(root_snapshot);
+
+    std::ostringstream result;
+    result << "{"
+           << "\"tokenMode\":\"real_token\","
+           << "\"branchFactor\":" << safe_branch_factor << ","
+           << "\"depthEvaluated\":" << depth_evaluated << ","
+           << "\"bestPathText\":\"" << json_escape(best_path_text) << "\","
+           << "\"bestPathTokenIds\":[";
+    for (size_t i = 0; i < best_path_ids.size(); ++i) {
+        if (i > 0) {
+            result << ",";
+        }
+        result << best_path_ids[i];
+    }
+    result << "],\"bestPathNodeIndices\":[";
+    for (size_t i = 0; i < best_path_node_indices.size(); ++i) {
+        if (i > 0) {
+            result << ",";
+        }
+        result << best_path_node_indices[i];
+    }
+    result << "],\"nodeCount\":" << global_node_index
+           << ",\"nodes\":[" << nodes_json.str() << "]}";
+
+    return env->NewStringUTF(result.str().c_str());
 }
 
 extern "C"

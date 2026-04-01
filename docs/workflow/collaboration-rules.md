@@ -10,6 +10,18 @@
 - Do not treat behavioral summaries as enough for core features. The documentation close-out should explicitly show the key code path and explain why it is the core implementation.
 - Keep `docs/project/project-core-code-history.md` as the historical ledger for already completed feature nodes reviewed from git history.
 
+## Git Command Fallback
+
+- Do not assume `git` is always available on the current shell `PATH`.
+- On this machine, if `git status` fails in PowerShell, use:
+  - `C:\Program Files\Git\cmd\git.exe`
+- Preferred fallback commands:
+  - `& 'C:\Program Files\Git\cmd\git.exe' status --short`
+  - `& 'C:\Program Files\Git\cmd\git.exe' diff --stat`
+  - `& 'C:\Program Files\Git\cmd\git.exe' add ...`
+  - `& 'C:\Program Files\Git\cmd\git.exe' commit -m "..."`
+- Treat this absolute-path fallback as the default recovery path before concluding that git is unavailable.
+
 ## Build And Verification Boundary
 
 - Android Studio sync, build, install, and runtime verification are performed by the user.
@@ -36,3 +48,4 @@ When closing a completed node:
 - provide a short human-readable explanation of the sync
 - update the relevant markdown archive/checkpoint documents with a brief summary of the completed work
 - if the node contains a core feature, update the code-explanation document with the key code snippets and short explanations
+- if `git` is missing from `PATH`, retry with `C:\Program Files\Git\cmd\git.exe` before treating git-sync as blocked

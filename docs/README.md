@@ -57,10 +57,23 @@ Instead:
   Use this when you want the current speculative implementation's core code snippets together with short explanations.
 - `project/project-core-code-history.md`
   Use this when you want the git-reviewed historical ledger of completed feature work and its core code snippets.
+- `project/android-draft-eagle-runtime-gap.md`
+  Use this when you want the current gap analysis between the Android draft runtime and an EAGLE-style branch-aware draft runtime.
+- `project/android-draft-runtime-probe-demo.md`
+  Use this when you want the standalone probe demo for testing Android-side draft logits extraction and runtime state round-tripping.
+- `archive/2026-04-01-android-branch-expanded-draft-tree.md`
+  Use this when you want the short node record for the first branch-expanded Android draft tree built from native runtime snapshots.
+- `archive/2026-04-01-unified-real-token-space-plan.md`
+  Use this when you want the short planning note that records why mixed token-space `p/q` acceptance regressed and why the next mainline is unified real `llama_token` ids.
+- `archive/2026-04-01-real-token-draft-api-skeleton.md`
+  Use this when you want the short node record for the first parallel Android draft APIs that expose real token ids without removing the legacy speculative baseline.
+- `archive/2026-04-01-real-token-verifier-mode-wiring.md`
+  Use this when you want the short node record for the first end-to-end experimental verifier mode that switches the Android speculative loop onto the new real-token draft APIs.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
 - `workflow/collaboration-rules.md`
   Use this when checking build, git-sync, and bundle responsibilities.
+  It now also records the current Windows fallback for git commands when `git` is not on the shell `PATH`.
 
 ## Document Guide
 
@@ -86,7 +99,19 @@ Instead:
   The code-focused explanation document that records the current core speculative implementation snippets and how they work.
 - `docs/project/project-core-code-history.md`
   The historical core-code ledger that records completed feature nodes from git history and the key code for each one.
+- `docs/project/android-draft-eagle-runtime-gap.md`
+  The working assessment of what the Android draft runtime already has, what EAGLE-style draft runtime still needs, and which low-level `llama.cpp` capabilities are available for the next step.
+- `docs/project/android-draft-runtime-probe-demo.md`
+  The standalone probe-demo document for testing Android draft top-k probability extraction and context state save/restore outside the main speculative interface.
+- `docs/archive/2026-04-01-android-branch-expanded-draft-tree.md`
+  The archive note for the first Android draft-tree node that explores multiple shallow branches through native runtime snapshot/restore.
+- `docs/archive/2026-04-01-unified-real-token-space-plan.md`
+  The archive note that captures the new token-space conclusion: standard paper-style `p/q` acceptance now depends on unifying Android draft ids, speculative payloads, and desktop target lookup around real token ids.
+- `docs/archive/2026-04-01-real-token-draft-api-skeleton.md`
+  The archive note for the first experimental Android real-token draft API skeleton that now exists beside the legacy codepoint-compatible path.
+- `docs/archive/2026-04-01-real-token-verifier-mode-wiring.md`
+  The archive note for the first experimental verifier mode, `llama_true_tree_pq_tokens`, that now routes the Android speculative loop through the parallel real-token draft APIs.
 - `docs/workflow/collaboration-rules.md`
-  The collaboration contract for git sync, Android Studio verification, and the "user does bundle" boundary.
+  The collaboration contract for git sync, Android Studio verification, the Windows git-command fallback, and the "user does bundle" boundary.
 - `docs/archive/root-document-map.md`
   The bridge between the new library and the older root-level markdown records.
