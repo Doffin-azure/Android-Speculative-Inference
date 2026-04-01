@@ -95,6 +95,10 @@ Current real stage:
   - `llama_true_tree_pq_tokens` remains an approximation baseline only
   - a new `llama_eagle_aligned` lane is required for any output-preserving claim
   - that exact lane must fail closed until a native desktop target runtime helper exists
+- the first exact-lane skeleton is now in place:
+  - Android real-token draft-tree payloads now include `draftPathSteps`
+  - desktop now recognizes `llama_eagle_aligned`
+  - desktop exact-lane requests are now wired to a dedicated native helper boundary instead of silently reusing the old top-k approximation path
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
