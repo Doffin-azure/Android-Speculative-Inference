@@ -1088,6 +1088,41 @@ def aggregate_first_token_probabilities(candidates: list[dict[str, Any]]) -> dic
     return aggregated
 
 
+def select_contextual_draft_nodes(
+    draft_nodes_by_depth: dict[int, list[DraftTreePayloadNode]],
+    *,
+    depth: int,
+    active_parent_node_index: int,
+) -> list[DraftTreePayloadNode]:
+    nodes_at_depth = draft_nodes_by_depth.get(depth, [])
+    if active_parent_node_index < 0:
+        root_nodes = [node for node in nodes_at_depth if node.parent_node_index < 0]
+        return root_nodes or nodes_at_depth
+    contextual_nodes = [
+        node for node in nodes_at_depth
+        if node.parent_node_index == active_parent_node_index
+    ]
+    return contextual_nodes or nodes_at_depth
+
+
+def choose_contextual_draft_node(
+    draft_nodes: list[DraftTreePayloadNode],
+    *,
+    token_id: int,
+) -> DraftTreePayloadNode | None:
+    matching_nodes = [node for node in draft_nodes if node.token_id == token_id]
+    if not matching_nodes:
+        return None
+    return max(
+        matching_nodes,
+        key=lambda node: (
+            float(node.probability),
+            float(node.cumulative_log_probability),
+            -int(node.node_index),
+        ),
+    )
+
+
 def choose_residual_token_id(
     target_prob_by_token: dict[int, float],
     draft_prob_by_token: dict[int, float],
@@ -1597,6 +1632,7 @@ def compute_true_tree_pq_token_verifier_result(
     rejected_from_index = -1
     total_candidate_count = 0
     draft_nodes_by_depth: dict[int, list[DraftTreePayloadNode]] = {}
+    active_draft_parent_node_index = -1
     if draft_tree is not None:
         debug_lines.append(
             f"draftTree:mode={draft_tree.token_mode} nodes={draft_tree.node_count} depth={draft_tree.depth_evaluated} bestNodes={','.join(str(index) for index in draft_tree.best_path_node_indices)}"
@@ -1634,7 +1670,11 @@ def compute_true_tree_pq_token_verifier_result(
         if target_best_token_id >= 0:
             best_path_token_ids.append(target_best_token_id)
 
-        draft_nodes_at_depth = draft_nodes_by_depth.get(depth, [])
+        draft_nodes_at_depth = select_contextual_draft_nodes(
+            draft_nodes_by_depth,
+            depth=depth,
+            active_parent_node_index=active_draft_parent_node_index,
+        )
         draft_prob_by_token = {node.token_id: node.probability for node in draft_nodes_at_depth}
         draft_best_token = (
             draft_tree.best_path_token_ids[depth]
@@ -1675,13 +1715,19 @@ def compute_true_tree_pq_token_verifier_result(
         debug_lines.append(
             f"d{depth}:topK={effective_branch_factor} best={target_best_token_id} proposal={proposed_token_id} "
             f"inTopK={proposal_in_topk} draftBest={draft_best_token if draft_best_token is not None else '-'} "
-            f"overlap={overlap_count} p={selected_target_prob:.4f} q={selected_draft_prob:.4f} "
+            f"draftParent={active_draft_parent_node_index} overlap={overlap_count} p={selected_target_prob:.4f} q={selected_draft_prob:.4f} "
             f"accP={pq_acceptance_prob:.4f} draw={pq_draw:.4f} pqAccepted={pq_accepted} "
             f"residualBest={residual_token_id} residualTotal={residual_total:.4f} residualDraw={residual_draw:.4f}"
         )
 
         if pq_accepted:
             accepted_step_token_ids.append(proposed_token_id)
+            matched_draft_node = choose_contextual_draft_node(
+                draft_nodes_at_depth,
+                token_id=proposed_token_id,
+            )
+            if matched_draft_node is not None:
+                active_draft_parent_node_index = matched_draft_node.node_index
             working_prefix += render_token_ids_for_verifier(config, target_session, [proposed_token_id])
             continue
 
