@@ -99,6 +99,13 @@ Current real stage:
   - Android real-token draft-tree payloads now include `draftPathSteps`
   - desktop now recognizes `llama_eagle_aligned`
   - desktop exact-lane requests are now wired to a dedicated native helper boundary instead of silently reusing the old top-k approximation path
+- the current `llama_cpp_spec_native` optimization mainline is now explicitly focused on runtime continuity:
+  - Android real-token draft sessions now have a first native committed-snapshot path
+  - the desktop native helper now has a first persistent fast path that trims only the temporary verifier tail instead of rebuilding the anchor every step
+  - helper sampler reuse is now session-oriented unless sampling config changes
+- Android draft hotspot analysis has now confirmed two concrete draft-side performance problems on the real-token lane:
+  - the draft path was still doing full-vocabulary candidate extraction per token instead of using the sampler's existing candidate buffer
+  - the first persistent draft-session implementation still used a whole-state round-trip instead of a lighter sequence-state round-trip
 - the next active stage is replacing replay-based proxy verification with real target-model token verification
 
 ## Active Technical Findings
@@ -166,6 +173,15 @@ Current strongest conclusion:
 - the remaining gap on that experimental path is that the internal tree-computation logic still largely reuses the old mixed-space structure and has not yet become a fully token-native verifier end-to-end
 - that remaining gap is now narrower than before: the main unresolved work has shifted from token/text conversion seams to the acceptance algorithm and tree-state logic itself
 - the main remaining gap is that this experimental token-native acceptance path still uses a shallow top-k lookup approximation for `p(x)` and still depends on the current Python-side replay/tree driver instead of a fuller persistent target runtime
+- the strongest current performance bottleneck on `llama_cpp_spec_native` is now clearly runtime continuity rather than acceptance semantics:
+  - Android real-token draft fetch used to pay full prefix replay costs on every step
+  - desktop helper verify used to rebuild anchor text/tokens and rebuild sampler state on every step
+  - the new continuity work is meant to remove those repeated costs before any new speedup claims are made
+- the newest Android-side finding is that draft degradation was not explained primarily by the 1B model size:
+  - the draft path itself was heavier than ordinary local generation because it performed extra logits processing and state persistence work per step
+  - model size still matters, but the current dominant issue is the implementation cost model of the draft path
+- the Android speculative client now also skips per-step real-token `proposedText` rendering on the hot path for `llama_cpp_spec_native`, because the verifier decision is driven by token ids rather than that debug text field
+- the Android real-token local apply path now also skips per-step accepted-text detokenize work and keeps the draft session token-first during speculative commits
 - the latest successful `real_token + token_pq` run also clarifies the next concrete correction-side gap:
   - observed-top-k residual correction is now wired in
   - but follow-up / correction still uses only the currently observed top-k slice instead of a fuller target residual over the whole vocabulary
@@ -231,6 +247,7 @@ Primary blocker:
 - the next blocker is no longer the absence of any true verifier mode
 - the next blocker is strengthening the new `llama-server`-backed true verifier path beyond prompt-cache reuse and shallow target-side tree scoring toward a fuller persistent target runtime session implementation
 - the next blocker after that is upgrading the new Android local draft runtime from codepoint-compatible draft ids to true token/runtime semantics with less replay and stronger state continuity
+- the active implementation blocker on the new `llama_cpp_spec_native` lane is no longer "can the helper behave like llama.cpp at all"; it is validating that the new continuity fast paths actually reduce wall-clock under real long-prompt runs
 - the newest concrete blocker is that the current mixed token space (`codepoint-compatible` Android draft ids versus desktop token-piece candidates) prevents a stable implementation of standard paper-style per-token `p/q` acceptance
 - that means the verifier can currently use probability gates only as an experimental aid; the real implementation seam has shifted to token-space unification across Android native, speculative payloads, and desktop target lookup
 - the Android side now has the first experimental real-token draft APIs, but the next blocker remains wiring that real-token path through the speculative payload and desktop verifier without regressing the current tree-aware baseline
@@ -248,6 +265,7 @@ The next step should focus on one of these:
 2. replace replay-based proxy verification with real target-model token verification
 3. keep ordinary remote fallback active while the real verifier is introduced
 4. migrate the mixed codepoint/piece speculative path toward unified real `llama_token` ids before re-attempting standard per-token `p/q` acceptance
+5. validate the new Android committed-snapshot draft path and desktop persistent-helper fast path with the standard LOCAL / REMOTE / SPECULATIVE benchmark template
 
 ## Immediate Execution Order
 

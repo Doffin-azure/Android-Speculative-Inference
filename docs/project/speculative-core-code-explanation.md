@@ -42,6 +42,8 @@ The current code below covers the present speculative scheme:
 14. experimental unified-token `token_pq` acceptance
 15. observed-top-k residual correction on the experimental lane
 16. explicit EAGLE gap and the exact-lane boundary
+17. Android committed-snapshot draft-session fast path
+18. desktop persistent verifier fast path and sampler reuse
 
 ## 1. Desktop Target-Session State
 
@@ -1298,3 +1300,201 @@ It is still not final because:
 - it replays prompt state through `llama-cli`
 - it does not yet hold a persistent in-memory target runtime session
 - Android still sends stub draft tokens instead of real local-model draft tokens
+
+## 20. Llama.cpp-Style Native Speculative Verifier Lane
+
+Files:
+
+- `tools/desktop_target_runtime.cpp`
+- `tools/desktop_inference_service.py`
+- `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
+- `docs/project/llama-cpp-speculative-migration-plan.md`
+
+Core code:
+
+```python
+elif session.verifier_mode == "llama_cpp_spec_native":
+    debug_token_mode = "real_token"
+    debug_acceptance_mode = "llama_cpp_accept_n"
+    computation = compute_llama_cpp_spec_native_verifier_result(
+        server,
+        target_session,
+        proposed_token_ids=proposed_token_ids,
+    )
+```
+
+```cpp
+const std::vector<llama_token> sampled_tokens = common_sampler_sample_and_accept_n(
+    session.sampler,
+    session.ctx,
+    idxs,
+    draft_tokens
+);
+```
+
+Explanation:
+
+- This lane keeps Android as the real-token draft producer.
+- The desktop side now delegates verification to a native helper instead of Python tree logic.
+- The helper reproduces llama.cpp's current speculative control flow:
+  - replay the anchor token
+  - batch the draft slice
+  - accept the longest matching draft prefix
+  - append one target mismatch or follow-up token
+- The Python service is only the orchestration shell on this lane.
+- The lane has now been validated end to end on device:
+  - Android local draft session started successfully
+  - desktop helper verified the drafted slice through `llama_cpp_accept_n`
+  - multi-step accepted text advanced monotonically across the speculative loop
+  - a representative validated output was:
+    - `I'm just a computer program, so I don't have feelings or emotions`
+- The protocol field `correctionTokenIds` is still reused on this lane for compatibility, but when `rejectedFromIndex = -1` it is semantically the single target follow-up token after a fully accepted draft slice.
+
+Why this is core:
+
+- This is the first project lane explicitly designed to mirror llama.cpp's **current** speculative decoding behavior rather than the earlier tree overlap path or the future EAGLE exact lane.
+- It records a new mainline that is token-native, helper-backed, and aligned to upstream llama.cpp control flow.
+
+## 21. Android Committed-Snapshot Draft Fast Path
+
+Files:
+
+- `lib/src/main/java/com/example/myapplication/llama/internal/InferenceEngineImpl.kt`
+- `lib/src/main/cpp/ai_chat.cpp`
+
+Core code:
+
+```kotlin
+val startResult = startPersistentDraftSession(
+    sessionId = sessionId,
+    systemPrompt = systemPrompt,
+    userPrompt = userPrompt,
+    assistantText = runtime.acceptedText,
+    predictLength = runtime.predictLength
+)
+```
+
+```kotlin
+restorePersistentRuntime(runtime)
+generateDraftRealTokenIds(maxTokens).toList()
+```
+
+```kotlin
+val commitResult = commitPersistentDraftTokens(
+    sessionId = sessionId,
+    tokenIds = safeTokenIds.toIntArray(),
+    predictLength = runtime.predictLength
+)
+```
+
+Explanation:
+
+- This is the first continuity-oriented Android draft implementation for the real-token lane.
+- Instead of rebuilding native state from `system + user + acceptedText` for every real-token draft fetch, the runtime now stores one committed native snapshot per draft session.
+- Draft fetch restores that committed snapshot before speculative expansion.
+- Apply commits only the verifier-approved tokens back into the committed snapshot.
+- Legacy codepoint draft APIs are intentionally left alone as the regression path.
+
+Why this is core:
+
+- This is the first direct move away from replay-heavy real-token drafting.
+- It narrows one of the biggest wall-clock gaps between the project and upstream llama.cpp's persistent draft-state model.
+
+Current limitation after that node:
+
+- the first continuity implementation still used a heavy whole-state round-trip and still left the real-token candidate-selection path more expensive than ordinary local sampling.
+
+## 22. Desktop Persistent Helper Fast Path
+
+File:
+
+- `tools/desktop_target_runtime.cpp`
+
+Core code:
+
+```cpp
+if (requested_sampling_key != session.sampling_config_key) {
+    common_sampler_free(session.sampler);
+    session.sampler = common_sampler_init(...);
+    if (!rebuild_and_restore_session(session, error)) {
+        return error_json(error);
+    }
+} else if (!session.fast_path_ready) {
+    if (!initialize_fast_path(session, error)) {
+        return error_json(error);
+    }
+}
+```
+
+```cpp
+session.anchor_prefix_tokens.push_back(session.anchor_last_token);
+session.anchor_prefix_tokens.insert(
+    session.anchor_prefix_tokens.end(),
+    accepted_tokens.begin(),
+    accepted_tokens.end()
+);
+session.anchor_last_token = followup_token;
+llama_memory_seq_rm(llama_get_memory(session.ctx), 0, session.anchor_prefix_count, -1);
+```
+
+Explanation:
+
+- The desktop helper no longer treats `rebuild_session_anchor(...)` as the normal path for every verifier step.
+- A session now keeps a fast path:
+  - one persistent sampler
+  - one committed anchor state
+  - one live verifier context
+- A normal step now decodes the current anchor token plus the draft slice, samples/accepts, then trims only the temporary tail.
+- Full anchor rebuild is still present, but only as the recovery path when accepted-token state or sampling configuration diverges.
+
+Why this is core:
+
+- This is the helper-side parity step that gets the project closer to upstream llama.cpp's "keep the committed verifier state alive and only drop the uncommitted tail" behavior.
+- It directly targets one of the biggest non-algorithmic causes of speculative speedup collapse in the cross-device runtime.
+
+## 23. Android Lightweight Draft Sampling
+
+File:
+
+- `lib/src/main/cpp/ai_chat.cpp`
+
+Core code:
+
+```cpp
+out_token_id = common_sampler_sample(g_sampler, g_context, -1, true);
+auto * candidates = common_sampler_get_candidates(g_sampler, true);
+```
+
+Explanation:
+
+- The earlier real-token draft path recomputed top-k candidates from raw logits for every token.
+- That was much heavier than the ordinary local generation path.
+- The draft path now reuses the sampler's own candidate buffer, which is much closer to upstream `llama.cpp` speculative drafting.
+
+Why this is core:
+
+- This is the first direct optimization aimed at the draft token-selection hot path itself, not just at session continuity around it.
+
+## 24. Android Sequence-State Draft Persistence
+
+File:
+
+- `lib/src/main/cpp/ai_chat.cpp`
+
+Core code:
+
+```cpp
+const size_t seq_state_size = llama_state_seq_get_size(g_context, seq_id);
+const size_t saved_size = llama_state_seq_get_data(..., seq_id);
+llama_state_seq_set_data(..., seq_id);
+```
+
+Explanation:
+
+- The first persistent draft-session implementation removed text replay, but it still persisted the whole runtime state.
+- The draft session now stores only sequence state plus the host-side cursor metadata needed to rebuild logits.
+- This keeps committed-state semantics while reducing the persistence cost on each speculative step.
+
+Why this is core:
+
+- It directly targets the second major Android draft hotspot found after the first continuity pass.

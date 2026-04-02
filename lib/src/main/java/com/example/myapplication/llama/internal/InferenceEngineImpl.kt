@@ -40,7 +40,8 @@ internal class InferenceEngineImpl private constructor(
         val userPrompt: String,
         val predictLength: Int,
         val acceptedText: String = "",
-        val acceptedTokenIds: List<Int> = emptyList()
+        val acceptedTokenIds: List<Int> = emptyList(),
+        val acceptedTextDirty: Boolean = false
     )
 
     companion object {
@@ -96,6 +97,28 @@ internal class InferenceEngineImpl private constructor(
         assistantText: String,
         predictLength: Int
     ): Int
+
+    @FastNative
+    private external fun startPersistentDraftSession(
+        sessionId: String,
+        systemPrompt: String,
+        userPrompt: String,
+        assistantText: String,
+        predictLength: Int
+    ): Int
+
+    @FastNative
+    private external fun restorePersistentDraftSession(sessionId: String): Int
+
+    @FastNative
+    private external fun commitPersistentDraftTokens(
+        sessionId: String,
+        tokenIds: IntArray,
+        predictLength: Int
+    ): Int
+
+    @FastNative
+    private external fun closePersistentDraftSession(sessionId: String)
 
     @FastNative
     private external fun generateDraftTokenIds(maxTokens: Int): IntArray
@@ -328,7 +351,17 @@ internal class InferenceEngineImpl private constructor(
             userPrompt = userPrompt,
             predictLength = predictLength
         )
-        resetDraftRuntime(runtime)
+        val startResult = startPersistentDraftSession(
+            sessionId = sessionId,
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
+            assistantText = runtime.acceptedText,
+            predictLength = runtime.predictLength
+        )
+        if (startResult != 0) {
+            currentError = "Failed to start persistent draft session: $startResult"
+            throw IOException(currentError)
+        }
         draftSessions[sessionId] = runtime
         DraftSessionHandle(
             sessionId = sessionId,
@@ -374,7 +407,7 @@ internal class InferenceEngineImpl private constructor(
         val runtime = draftSessions[sessionId]
             ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
         require(maxTokens > 0) { "maxTokens must be > 0." }
-        resetDraftRuntime(runtime)
+        restorePersistentRuntime(runtime)
         generateDraftRealTokenIds(maxTokens).toList()
     }
 
@@ -387,7 +420,7 @@ internal class InferenceEngineImpl private constructor(
             ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
         require(maxDepth > 0) { "maxDepth must be > 0." }
         require(branchFactor > 0) { "branchFactor must be > 0." }
-        resetDraftRuntime(runtime)
+        restorePersistentRuntime(runtime)
         parseDraftTreeProposalJson(
             sessionId = sessionId,
             rootAcceptedText = runtime.acceptedText,
@@ -400,22 +433,26 @@ internal class InferenceEngineImpl private constructor(
             ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
 
         val safeTokenIds = tokenIds.filter { it >= 0 }
-        val updatedTokenIds = runtime.acceptedTokenIds + safeTokenIds
-        val updatedText = if (updatedTokenIds.isEmpty()) {
-            ""
-        } else {
-            renderTokenIds(updatedTokenIds.toIntArray())
+        if (safeTokenIds.isNotEmpty()) {
+            val commitResult = commitPersistentDraftTokens(
+                sessionId = sessionId,
+                tokenIds = safeTokenIds.toIntArray(),
+                predictLength = runtime.predictLength
+            )
+            if (commitResult != 0) {
+                currentError = "Failed to commit persistent draft tokens: $commitResult"
+                throw IOException(currentError)
+            }
         }
         val updatedRuntime = runtime.copy(
-            acceptedText = updatedText,
-            acceptedTokenIds = updatedTokenIds
+            acceptedTokenIds = runtime.acceptedTokenIds + safeTokenIds,
+            acceptedTextDirty = runtime.acceptedTextDirty || safeTokenIds.isNotEmpty()
         )
-        resetDraftRuntime(updatedRuntime)
         draftSessions[sessionId] = updatedRuntime
         DraftSessionHandle(
             sessionId = updatedRuntime.sessionId,
             runtimeLabel = "ai-chat draft session",
-            acceptedText = updatedRuntime.acceptedText,
+            acceptedText = runtime.acceptedText,
             acceptedTokenCount = updatedRuntime.acceptedTokenIds.size
         )
     }
@@ -439,6 +476,7 @@ internal class InferenceEngineImpl private constructor(
     override suspend fun closeDraftSession(sessionId: String) {
         withContext(llamaDispatcher) {
             draftSessions.remove(sessionId)
+            closePersistentDraftSession(sessionId)
         }
     }
 
@@ -462,6 +500,14 @@ internal class InferenceEngineImpl private constructor(
         )
         if (result != 0) {
             currentError = "Failed to reset draft runtime: $result"
+            throw IOException(currentError)
+        }
+    }
+
+    private fun restorePersistentRuntime(runtime: DraftSessionRuntime) {
+        val result = restorePersistentDraftSession(runtime.sessionId)
+        if (result != 0) {
+            currentError = "Failed to restore persistent draft session: $result"
             throw IOException(currentError)
         }
     }

@@ -4,6 +4,10 @@ import com.example.myapplication.llama.DraftSessionHandle
 import com.example.myapplication.llama.DraftTreeProposal
 
 interface LocalLlm {
+    companion object {
+        const val TEST_MAX_TOKENS = 1024
+    }
+
     fun backendLabel(): String
     fun isModelLoaded(): Boolean
     fun loadedModelPath(): String
@@ -12,8 +16,8 @@ interface LocalLlm {
     fun supportsDraftTree(): Boolean = false
     suspend fun loadModel(modelPath: String): Boolean
     suspend fun setSystemPrompt(systemPrompt: String): Boolean
-    suspend fun generate(prompt: String, maxTokens: Int = 32): String
-    suspend fun startDraftSession(systemPrompt: String, userPrompt: String, predictLength: Int = 128): DraftSessionHandle {
+    suspend fun generate(prompt: String, maxTokens: Int = TEST_MAX_TOKENS): String
+    suspend fun startDraftSession(systemPrompt: String, userPrompt: String, predictLength: Int = TEST_MAX_TOKENS): DraftSessionHandle {
         throw UnsupportedOperationException("Draft session is not implemented by this LocalLlm.")
     }
     suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> {

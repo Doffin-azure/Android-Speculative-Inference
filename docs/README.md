@@ -55,6 +55,12 @@ Instead:
   Use this when you want the Chinese implementation guide for phone-side draft and computer-side verification.
 - `project/speculative-core-code-explanation.md`
   Use this when you want the current speculative implementation's core code snippets together with short explanations.
+- `project/speculative-implementation-comparison.md`
+  Use this when you want a side-by-side code comparison between the older `Android-Speculative-Inference` demo, the new `spec-split-demo-project`, upstream `llama.cpp`, and the current project's `llama_cpp_spec_native` implementation.
+- `project/llama-cpp-speculative-migration-plan.md`
+  Use this when you want the project-specific migration record for reproducing llama.cpp's current speculative decoding control flow with Android local draft and a native desktop verifier helper.
+- `project/llama-cpp-spec-native-gap-checklist.md`
+  Use this when you want the current implementation-gap checklist between the project's `llama_cpp_spec_native` lane and upstream `llama.cpp` runtime continuity.
 - `project/project-core-code-history.md`
   Use this when you want the git-reviewed historical ledger of completed feature work and its core code snippets.
 - `project/android-draft-eagle-runtime-gap.md`
@@ -75,6 +81,10 @@ Instead:
   Use this when you want the first successful device-side validation record where `llama_true_tree_pq_tokens` ran with `tokenMode=real_token` and `acceptanceMode=token_pq`.
 - `archive/2026-04-01-eagle-alignment-gap-and-exact-lane-plan.md`
   Use this when you want the first explicit record of the remaining gap versus EAGLE and the decision to create `llama_eagle_aligned` as a separate exact correctness lane.
+- `archive/2026-04-01-llama-cpp-spec-native-continuity-implementation.md`
+  Use this when you want the node record for the first continuity-focused implementation pass on `llama_cpp_spec_native`, covering Android committed snapshots and the desktop helper fast path.
+- `archive/2026-04-02-android-draft-hotspots-and-lightweight-sampling.md`
+  Use this when you want the follow-up node that records why Android draft still regressed badly and how the project reduced two confirmed hotspots: full-vocabulary candidate extraction and whole-state persistence.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
 - `workflow/collaboration-rules.md`
@@ -103,6 +113,18 @@ Instead:
   The Chinese implementation guide that explains how speculative decoding should be built in this project.
 - `docs/project/speculative-core-code-explanation.md`
   The code-focused explanation document that records the current core speculative implementation snippets and how they work.
+- `docs/project/speculative-implementation-comparison.md`
+  The comparison document that aligns the three relevant speculative implementation styles against the same questions: draft state, verifier state, continuity, and hot-path behavior.
+- `docs/project/llama-cpp-speculative-migration-plan.md`
+  The migration record for the new `llama_cpp_spec_native` lane that mirrors llama.cpp's current draft-batch verification flow.
+- `docs/project/llama-cpp-spec-native-gap-checklist.md`
+  The gap checklist for the current `llama_cpp_spec_native` parity work, especially Android draft continuity, desktop helper continuity, sampler reuse, and benchmark economics.
+- `docs/archive/2026-04-01-llama-cpp-spec-native-validation.md`
+  The first successful on-device validation note for the `llama_cpp_spec_native` lane.
+- `docs/archive/2026-04-01-llama-cpp-spec-native-continuity-implementation.md`
+  The archive note for the first continuity-focused implementation pass on `llama_cpp_spec_native`.
+- `docs/archive/2026-04-02-android-draft-hotspots-and-lightweight-sampling.md`
+  The archive note for the follow-up Android draft hotspot analysis and the lightweight sampling / sequence-state persistence optimization.
 - `docs/project/project-core-code-history.md`
   The historical core-code ledger that records completed feature nodes from git history and the key code for each one.
 - `docs/project/android-draft-eagle-runtime-gap.md`

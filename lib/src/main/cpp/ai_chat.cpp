@@ -11,6 +11,7 @@
 #include <sampling.h>
 #include <sys/stat.h>
 #include <string>
+#include <unordered_map>
 #include <unistd.h>
 
 #include "chat.h"
@@ -38,6 +39,8 @@ constexpr int DEFAULT_CONTEXT_SIZE = 8192;
 constexpr int OVERFLOW_HEADROOM = 4;
 constexpr int BATCH_SIZE = 512;
 constexpr float DEFAULT_SAMPLER_TEMP = 0.3f;
+constexpr int DEFAULT_SPECULATIVE_DRAFT_TOP_K = 10;
+constexpr float DEFAULT_SPECULATIVE_DRAFT_P_MIN = 0.75f;
 
 static llama_model *g_model;
 static llama_context *g_context;
@@ -456,6 +459,13 @@ struct runtime_branch_snapshot {
     host_runtime_probe_snapshot host_snapshot;
 };
 
+struct persistent_draft_session_snapshot {
+    std::vector<uint8_t> seq_state_data;
+    host_runtime_probe_snapshot host_snapshot;
+};
+
+static std::unordered_map<std::string, persistent_draft_session_snapshot> g_persistent_draft_sessions;
+
 struct draft_tree_branch {
     runtime_branch_snapshot snapshot;
     int parent_node_index;
@@ -697,6 +707,29 @@ static std::vector<draft_tree_candidate> top_candidates_from_current_logits(int 
     return candidates;
 }
 
+static bool next_real_draft_candidate(llama_token &out_token_id, std::string &out_token_text, float &out_probability) {
+    out_token_id = common_sampler_sample(g_sampler, g_context, -1, true);
+    if (out_token_id == LLAMA_TOKEN_NULL) {
+        return false;
+    }
+
+    out_token_text = common_token_to_piece(g_context, out_token_id);
+    out_probability = 1.0f;
+
+    auto * candidates = common_sampler_get_candidates(g_sampler, true);
+    if (candidates != nullptr && candidates->size > 0) {
+        for (size_t index = 0; index < candidates->size; ++index) {
+            const auto &candidate = candidates->data[index];
+            if (candidate.id == out_token_id) {
+                out_probability = candidate.p;
+                break;
+            }
+        }
+    }
+
+    return true;
+}
+
 static std::string top_candidates_to_json(const std::vector<draft_tree_candidate> &candidates) {
     std::ostringstream out;
     out << "[";
@@ -818,6 +851,45 @@ static bool restore_runtime_branch_snapshot(const runtime_branch_snapshot &snaps
     return rebuild_logits_cursor_from_snapshot(snapshot.host_snapshot);
 }
 
+static persistent_draft_session_snapshot capture_persistent_draft_session_snapshot() {
+    constexpr llama_seq_id seq_id = 0;
+    const size_t seq_state_size = llama_state_seq_get_size(g_context, seq_id);
+    persistent_draft_session_snapshot snapshot {
+            std::vector<uint8_t>(seq_state_size),
+            capture_host_runtime_snapshot()
+    };
+    const size_t saved_size = llama_state_seq_get_data(
+            g_context,
+            snapshot.seq_state_data.data(),
+            snapshot.seq_state_data.size(),
+            seq_id);
+    snapshot.seq_state_data.resize(saved_size);
+    return snapshot;
+}
+
+static bool restore_persistent_draft_session_snapshot(const persistent_draft_session_snapshot &snapshot) {
+    constexpr llama_seq_id seq_id = 0;
+    llama_memory_seq_rm(llama_get_memory(g_context), seq_id, -1, -1);
+    if (llama_state_seq_set_data(
+            g_context,
+            snapshot.seq_state_data.data(),
+            snapshot.seq_state_data.size(),
+            seq_id) != snapshot.seq_state_data.size()) {
+        LOGe("%s: failed to restore draft session sequence state", __func__);
+        return false;
+    }
+
+    system_prompt_position = snapshot.host_snapshot.system_prompt_position;
+    current_position = snapshot.host_snapshot.current_position;
+    stop_generation_position = snapshot.host_snapshot.stop_generation_position;
+    cached_token_chars = snapshot.host_snapshot.cached_token_chars;
+    assistant_ss.str("");
+    assistant_ss.clear();
+    assistant_ss << snapshot.host_snapshot.assistant_text;
+    runtime_token_history = snapshot.host_snapshot.runtime_token_history;
+    return rebuild_logits_cursor_from_snapshot(snapshot.host_snapshot);
+}
+
 static bool advance_runtime_with_token(const llama_token token_id, const std::string &token_text) {
     if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
         shift_context();
@@ -922,6 +994,36 @@ static int process_assistant_prefill_text(const std::string &text) {
     assistant_ss.str("");
     assistant_ss.clear();
     assistant_ss << text;
+    return 0;
+}
+
+static int reset_draft_context_internal(
+        const std::string &system,
+        const std::string &user,
+        const std::string &assistant,
+        const int predict_length) {
+    reset_long_term_states();
+    reset_short_term_states();
+    if (g_sampler != nullptr) {
+        common_sampler_reset(g_sampler);
+    }
+
+    const int system_result = process_prompt_text(system, ROLE_SYSTEM, true);
+    if (system_result != 0) {
+        return 10 + system_result;
+    }
+
+    const int user_result = process_prompt_text(user, ROLE_USER, false, true);
+    if (user_result != 0) {
+        return 20 + user_result;
+    }
+
+    const int assistant_result = process_assistant_prefill_text(assistant);
+    if (assistant_result != 0) {
+        return 30 + assistant_result;
+    }
+
+    stop_generation_position = current_position + std::max(1, predict_length);
     return 0;
 }
 
@@ -1167,23 +1269,137 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_resetDraftCont
         env->ReleaseStringUTFChars(jassistant_text, assistant_text);
     }
 
-    const int system_result = process_prompt_text(system, ROLE_SYSTEM, true);
-    if (system_result != 0) {
-        return 10 + system_result;
+    return reset_draft_context_internal(system, user, assistant, predict_length);
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_startPersistentDraftSession(
+        JNIEnv *env,
+        jobject /* unused */,
+        jstring jsession_id,
+        jstring jsystem_prompt,
+        jstring juser_prompt,
+        jstring jassistant_text,
+        jint predict_length) {
+    const auto *session_id_chars = env->GetStringUTFChars(jsession_id, nullptr);
+    const auto *system_prompt = env->GetStringUTFChars(jsystem_prompt, nullptr);
+    const auto *user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
+    const auto *assistant_text = env->GetStringUTFChars(jassistant_text, nullptr);
+
+    const std::string session_id(session_id_chars ? session_id_chars : "");
+    const std::string system(system_prompt ? system_prompt : "");
+    const std::string user(user_prompt ? user_prompt : "");
+    const std::string assistant(assistant_text ? assistant_text : "");
+
+    if (session_id_chars != nullptr) {
+        env->ReleaseStringUTFChars(jsession_id, session_id_chars);
+    }
+    if (system_prompt != nullptr) {
+        env->ReleaseStringUTFChars(jsystem_prompt, system_prompt);
+    }
+    if (user_prompt != nullptr) {
+        env->ReleaseStringUTFChars(juser_prompt, user_prompt);
+    }
+    if (assistant_text != nullptr) {
+        env->ReleaseStringUTFChars(jassistant_text, assistant_text);
     }
 
-    const int user_result = process_prompt_text(user, ROLE_USER, false, true);
-    if (user_result != 0) {
-        return 20 + user_result;
+    if (session_id.empty()) {
+        return 1;
     }
 
-    const int assistant_result = process_assistant_prefill_text(assistant);
-    if (assistant_result != 0) {
-        return 30 + assistant_result;
+    const int reset_result = reset_draft_context_internal(system, user, assistant, predict_length);
+    if (reset_result != 0) {
+        return 100 + reset_result;
     }
 
-    stop_generation_position = current_position + std::max(1, (int) predict_length);
+    g_persistent_draft_sessions[session_id] = capture_persistent_draft_session_snapshot();
     return 0;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_restorePersistentDraftSession(
+        JNIEnv *env,
+        jobject /* unused */,
+        jstring jsession_id) {
+    const auto *session_id_chars = env->GetStringUTFChars(jsession_id, nullptr);
+    const std::string session_id(session_id_chars ? session_id_chars : "");
+    if (session_id_chars != nullptr) {
+        env->ReleaseStringUTFChars(jsession_id, session_id_chars);
+    }
+
+    const auto it = g_persistent_draft_sessions.find(session_id);
+    if (it == g_persistent_draft_sessions.end()) {
+        return 1;
+    }
+    if (g_sampler != nullptr) {
+        common_sampler_reset(g_sampler);
+    }
+    return restore_persistent_draft_session_snapshot(it->second) ? 0 : 2;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_commitPersistentDraftTokens(
+        JNIEnv *env,
+        jobject /* unused */,
+        jstring jsession_id,
+        jintArray jtoken_ids,
+        jint predict_length) {
+    const auto *session_id_chars = env->GetStringUTFChars(jsession_id, nullptr);
+    const std::string session_id(session_id_chars ? session_id_chars : "");
+    if (session_id_chars != nullptr) {
+        env->ReleaseStringUTFChars(jsession_id, session_id_chars);
+    }
+
+    const auto it = g_persistent_draft_sessions.find(session_id);
+    if (it == g_persistent_draft_sessions.end()) {
+        return 1;
+    }
+
+    if (g_sampler != nullptr) {
+        common_sampler_reset(g_sampler);
+    }
+    if (!restore_persistent_draft_session_snapshot(it->second)) {
+        return 2;
+    }
+
+    const jsize token_count = jtoken_ids == nullptr ? 0 : env->GetArrayLength(jtoken_ids);
+    std::vector<jint> token_ids(static_cast<size_t>(std::max<jsize>(0, token_count)));
+    if (token_count > 0) {
+        env->GetIntArrayRegion(jtoken_ids, 0, token_count, token_ids.data());
+    }
+
+    for (const jint raw_token_id : token_ids) {
+        if (raw_token_id < 0) {
+            continue;
+        }
+        const llama_token token_id = static_cast<llama_token>(raw_token_id);
+        const std::string token_text = common_token_to_piece(g_context, token_id);
+        if (!advance_runtime_with_token(token_id, token_text)) {
+            return 3;
+        }
+    }
+
+    stop_generation_position = current_position + std::max(1, static_cast<int>(predict_length));
+    it->second = capture_persistent_draft_session_snapshot();
+    return 0;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_closePersistentDraftSession(
+        JNIEnv *env,
+        jobject /* unused */,
+        jstring jsession_id) {
+    const auto *session_id_chars = env->GetStringUTFChars(jsession_id, nullptr);
+    const std::string session_id(session_id_chars ? session_id_chars : "");
+    if (session_id_chars != nullptr) {
+        env->ReleaseStringUTFChars(jsession_id, session_id_chars);
+    }
+    g_persistent_draft_sessions.erase(session_id);
 }
 
 extern "C"
@@ -1257,7 +1473,12 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftR
             break;
         }
 
-        const auto new_token_id = common_sampler_sample(g_sampler, g_context, -1);
+        llama_token new_token_id = LLAMA_TOKEN_NULL;
+        std::string new_token_chars;
+        float new_token_probability = 0.0f;
+        if (!next_real_draft_candidate(new_token_id, new_token_chars, new_token_probability)) {
+            break;
+        }
         common_sampler_accept(g_sampler, new_token_id, true);
 
         common_batch_clear(g_batch);
@@ -1274,7 +1495,6 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftR
             break;
         }
 
-        auto new_token_chars = common_token_to_piece(g_context, new_token_id);
         cached_token_chars += new_token_chars;
         if (is_valid_utf8(cached_token_chars.c_str())) {
             assistant_ss << cached_token_chars;
@@ -1282,6 +1502,10 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftR
         }
 
         draft_ids.push_back(static_cast<jint>(new_token_id));
+
+        if (new_token_probability < DEFAULT_SPECULATIVE_DRAFT_P_MIN) {
+            break;
+        }
     }
 
     jintArray result = env->NewIntArray((jsize) draft_ids.size());
@@ -1810,12 +2034,17 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_unload(
         jobject /* unused */) {
     reset_long_term_states();
     reset_short_term_states();
+    g_persistent_draft_sessions.clear();
 
     common_sampler_free(g_sampler);
     g_chat_templates.reset();
     llama_batch_free(g_batch);
     llama_free(g_context);
     llama_model_free(g_model);
+    g_sampler = nullptr;
+    g_context = nullptr;
+    g_model = nullptr;
+    g_batch = {};
 }
 
 extern "C"
