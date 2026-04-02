@@ -31,6 +31,9 @@ class MainViewModel(
         val draftStep: Int,
         val proposedTokenIds: List<Int>,
         val proposedText: String,
+        val draftFetchMs: Long,
+        val remoteProposeMs: Long,
+        val localApplyMs: Long,
         val tokenMode: String,
         val acceptanceMode: String,
         val acceptedCount: Int,
@@ -72,8 +75,9 @@ class MainViewModel(
     )
 
     companion object {
-        private const val SPECULATIVE_STUB_MAX_STEPS = 3
-        private const val SPECULATIVE_STUB_MAX_DRAFT_TOKENS = 4
+        private const val SPECULATIVE_TEST_MAX_STEPS = 128
+        private const val SPECULATIVE_TEST_MAX_DRAFT_TOKENS = 16
+        private const val SPECULATIVE_TEST_MIN_DRAFT_TOKENS = 4
     }
 
     private val localLlm: LocalLlm = LocalLlmImpl(application.applicationContext)
@@ -86,7 +90,7 @@ class MainViewModel(
     private val _inferenceMode = MutableStateFlow(InferenceMode.LOCAL)
     val inferenceMode: StateFlow<InferenceMode> = _inferenceMode.asStateFlow()
 
-    private val _remoteServerUrl = MutableStateFlow("http://10.0.2.2:8080")
+    private val _remoteServerUrl = MutableStateFlow("http://10.27.36.14:8080")
     val remoteServerUrl: StateFlow<String> = _remoteServerUrl.asStateFlow()
 
     private val _output = MutableStateFlow("Ready")
@@ -295,10 +299,12 @@ class MainViewModel(
             _lastError.value = ""
             try {
                 appendLog("Generation requested. Prompt length: ${prompt.length}")
+                val localRunStartedAt = System.currentTimeMillis()
                 _output.value = localLlm.generate(prompt)
+                val localRunMs = System.currentTimeMillis() - localRunStartedAt
                 refreshNativeState()
                 _statusMessage.value = "Inference complete."
-                appendLog("Generation completed. Output length: ${_output.value.length}")
+                appendLog("Generation completed in ${formatDurationMs(localRunMs)}. Output length: ${_output.value.length}")
             } catch (e: Exception) {
                 _lastError.value = e.message ?: "unknown error"
                 _statusMessage.value = "Run error: ${e.message}"
@@ -430,11 +436,14 @@ class MainViewModel(
             _statusMessage.value = "Checking remote service..."
             _lastError.value = ""
             _remoteResultSummary.value = ""
+            val remoteRunStartedAt = System.currentTimeMillis()
 
             try {
                 appendLog("Remote health check requested for $baseUrl")
+                val healthStartedAt = System.currentTimeMillis()
                 val health = remoteClient.health(baseUrl)
-                appendLog("Remote health check result: $health")
+                val healthMs = System.currentTimeMillis() - healthStartedAt
+                appendLog("Remote health check result: $health (${formatDurationMs(healthMs)})")
 
                 val request = RemoteGenerateRequest(
                     model = _modelPath.value,
@@ -443,7 +452,10 @@ class MainViewModel(
                 _statusMessage.value = "Running remote inference..."
                 appendLog("Remote generation requested. Prompt length: ${prompt.length}")
 
+                val generateStartedAt = System.currentTimeMillis()
                 val response = remoteClient.generate(baseUrl, request)
+                val generateMs = System.currentTimeMillis() - generateStartedAt
+                val remoteRunMs = System.currentTimeMillis() - remoteRunStartedAt
                 _output.value = response.outputText.ifBlank { response.error }
                 _remoteBackendLabel.value = response.backendLabel
                 _remoteResultSummary.value = buildString {
@@ -453,12 +465,15 @@ class MainViewModel(
                     if (response.generationMs >= 0) {
                         appendLine("Generation ms: ${response.generationMs}")
                     }
+                    appendLine("Client health check ms: $healthMs")
+                    appendLine("Client generation roundtrip ms: $generateMs")
+                    appendLine("Client total run ms: $remoteRunMs")
                     appendLine("Output length: ${response.outputText.length}")
                 }.trim()
                 _statusMessage.value = "Remote inference complete."
                 _lastError.value = response.error
                 appendLog(
-                    "Remote generation completed. RequestId=${response.requestId}, finishReason=${response.finishReason}, outputLength=${response.outputText.length}"
+                    "Remote generation completed in ${formatDurationMs(generateMs)}. RequestId=${response.requestId}, finishReason=${response.finishReason}, outputLength=${response.outputText.length}, total=${formatDurationMs(remoteRunMs)}"
                 )
             } catch (e: Exception) {
                 _lastError.value = e.message ?: "unknown error"
@@ -496,13 +511,16 @@ class MainViewModel(
             _lastError.value = ""
             _remoteResultSummary.value = ""
             _speculativeSessionSummary.value = ""
+            val speculativeRunStartedAt = System.currentTimeMillis()
 
             var activeSessionId: String? = null
             var activeLocalDraftSessionId: String? = null
             try {
                 appendLog("Speculative health check requested for $baseUrl")
+                val healthStartedAt = System.currentTimeMillis()
                 val health = remoteClient.health(baseUrl)
-                appendLog("Speculative health check result: $health")
+                val healthMs = System.currentTimeMillis() - healthStartedAt
+                appendLog("Speculative health check result: $health (${formatDurationMs(healthMs)})")
 
                 val startRequest = SpeculativeStartRequest(
                     sessionId = UUID.randomUUID().toString(),
@@ -513,28 +531,34 @@ class MainViewModel(
                 _statusMessage.value = "Opening speculative session..."
                 appendLog("Speculative start requested. Prompt length: ${prompt.length}")
 
+                val startStartedAt = System.currentTimeMillis()
                 val startResponse = remoteClient.startSpeculativeSession(baseUrl, startRequest)
+                val startMs = System.currentTimeMillis() - startStartedAt
                 activeSessionId = startResponse.sessionId
                 _speculativeVerifierMode.value = startResponse.verifierMode
                 appendLog(
-                    "Speculative session started. sessionId=${startResponse.sessionId}, requestId=${startResponse.requestId}, status=${startResponse.status}, verifierMode=${startResponse.verifierMode}"
+                    "Speculative session started in ${formatDurationMs(startMs)}. sessionId=${startResponse.sessionId}, requestId=${startResponse.requestId}, status=${startResponse.status}, verifierMode=${startResponse.verifierMode}"
                 )
 
                 val localDraftSupported = runCatching { localLlm.supportsDraftSession() }.getOrDefault(false)
                 val localDraftTreeSupported = runCatching { localLlm.supportsDraftTree() }.getOrDefault(false)
                 val localDraftReady = runCatching { localLlm.isModelLoaded() }.getOrDefault(false)
+                var localDraftOpenMs = -1L
                 if (localDraftSupported && localDraftReady) {
                     runCatching {
                         appendLog("Opening local draft session for speculative run.")
+                        val openStartedAt = System.currentTimeMillis()
                         localLlm.startDraftSession(
                             systemPrompt = "",
                             userPrompt = prompt,
-                            predictLength = SPECULATIVE_STUB_MAX_STEPS * SPECULATIVE_STUB_MAX_DRAFT_TOKENS
-                        )
+                            predictLength = LocalLlm.TEST_MAX_TOKENS
+                        ).also {
+                            localDraftOpenMs = System.currentTimeMillis() - openStartedAt
+                        }
                     }.onSuccess { localDraftSession ->
                         activeLocalDraftSessionId = localDraftSession.sessionId
                         appendLog(
-                            "Local draft session started. sessionId=${localDraftSession.sessionId}, acceptedTokenCount=${localDraftSession.acceptedTokenCount}"
+                            "Local draft session started in ${formatDurationMs(localDraftOpenMs)}. sessionId=${localDraftSession.sessionId}, acceptedTokenCount=${localDraftSession.acceptedTokenCount}"
                         )
                     }.onFailure { draftError ->
                         appendLog(
@@ -552,17 +576,19 @@ class MainViewModel(
                     verifierMode = startResponse.verifierMode,
                     targetPreviewText = startResponse.targetPreviewText
                 )
-                val useRealTokenDraftPath = (
-                    (startResponse.verifierMode == "llama_true_tree_pq_tokens" ||
-                        startResponse.verifierMode == "llama_eagle_aligned") &&
-                        activeLocalDraftSessionId != null
+                val verifierNeedsRealTokenDraft = (
+                    startResponse.verifierMode == "llama_true_tree_pq_tokens" ||
+                        startResponse.verifierMode == "llama_eagle_aligned" ||
+                        startResponse.verifierMode == "llama_cpp_spec_native"
                 )
-                if (
-                    (startResponse.verifierMode == "llama_true_tree_pq_tokens" ||
-                        startResponse.verifierMode == "llama_eagle_aligned") &&
-                    !useRealTokenDraftPath
-                ) {
-                    appendLog("Experimental real-token verifier requested, but no local real-token draft session is active; falling back to legacy/stub draft path.")
+                val verifierNeedsDraftTree = (
+                    startResponse.verifierMode == "llama_true_tree" ||
+                        startResponse.verifierMode == "llama_true_tree_pq_tokens" ||
+                        startResponse.verifierMode == "llama_eagle_aligned"
+                )
+                val useRealTokenDraftPath = verifierNeedsRealTokenDraft && activeLocalDraftSessionId != null
+                if (verifierNeedsRealTokenDraft && !useRealTokenDraftPath) {
+                    throw IllegalStateException("Verifier mode ${startResponse.verifierMode} requires an active local real-token draft session.")
                 }
                 val draftSeedTokens = buildStubDraftTokensFromText(draftSeedText)
                 val stepTraces = mutableListOf<SpeculativeStepTrace>()
@@ -570,27 +596,26 @@ class MainViewModel(
                 var lastWarning = ""
                 var lastRequestId = startResponse.requestId
                 var lastFinishReason = ""
+                var totalDraftFetchMs = 0L
+                var totalRemoteProposeMs = 0L
+                var totalLocalApplyMs = 0L
 
-                for (draftStep in 1..SPECULATIVE_STUB_MAX_STEPS) {
+                for (draftStep in 1..SPECULATIVE_TEST_MAX_STEPS) {
                     var localDraftTreeProposal: DraftTreeProposal? = null
+                    val draftFetchStartedAt = System.currentTimeMillis()
                     val baseTokens = if (activeLocalDraftSessionId != null) {
                         runCatching {
-                            if (
-                                (
-                                    startResponse.verifierMode == "llama_true_tree" ||
-                                        useRealTokenDraftPath
-                                    ) && localDraftTreeSupported
-                            ) {
+                            if (verifierNeedsDraftTree && localDraftTreeSupported) {
                                 val selectedTreeProposal = if (useRealTokenDraftPath) {
                                     localLlm.draftRealTokenTreeProposal(
                                         sessionId = activeLocalDraftSessionId,
-                                        maxDepth = SPECULATIVE_STUB_MAX_DRAFT_TOKENS,
+                                        maxDepth = SPECULATIVE_TEST_MAX_DRAFT_TOKENS,
                                         branchFactor = 3
                                     )
                                 } else {
                                     localLlm.draftTreeProposal(
                                         sessionId = activeLocalDraftSessionId,
-                                        maxDepth = SPECULATIVE_STUB_MAX_DRAFT_TOKENS,
+                                        maxDepth = SPECULATIVE_TEST_MAX_DRAFT_TOKENS,
                                         branchFactor = 3
                                     )
                                 }
@@ -598,17 +623,17 @@ class MainViewModel(
                                 appendLog(
                                     "Local draft tree proposal ready. tokenMode=${selectedTreeProposal.tokenMode}, depth=${selectedTreeProposal.depthEvaluated}, branchFactor=${selectedTreeProposal.branchFactor}, nodeCount=${selectedTreeProposal.nodeCount}, bestPath=${selectedTreeProposal.bestPathTokenIds.joinToString()}, bestPathNodes=${selectedTreeProposal.bestPathNodeIndices.joinToString()}, draftPathSteps=${selectedTreeProposal.draftPathSteps.size}"
                                 )
-                                selectedTreeProposal.bestPathTokenIds.take(SPECULATIVE_STUB_MAX_DRAFT_TOKENS)
+                                selectedTreeProposal.bestPathTokenIds.take(SPECULATIVE_TEST_MAX_DRAFT_TOKENS)
                             } else {
                                 if (useRealTokenDraftPath) {
                                     localLlm.draftNextRealTokenIds(
                                         sessionId = activeLocalDraftSessionId,
-                                        maxTokens = SPECULATIVE_STUB_MAX_DRAFT_TOKENS
+                                        maxTokens = SPECULATIVE_TEST_MAX_DRAFT_TOKENS
                                     )
                                 } else {
                                     localLlm.draftNextTokenIds(
                                         sessionId = activeLocalDraftSessionId,
-                                        maxTokens = SPECULATIVE_STUB_MAX_DRAFT_TOKENS
+                                        maxTokens = SPECULATIVE_TEST_MAX_DRAFT_TOKENS
                                     )
                                 }
                             }
@@ -621,21 +646,39 @@ class MainViewModel(
                             committedCount = committedTokenIds.size
                         )
                     }
+                    val draftFetchMs = System.currentTimeMillis() - draftFetchStartedAt
+                    totalDraftFetchMs += draftFetchMs
                     if (baseTokens.isEmpty()) {
                         appendLog("Speculative loop stopped: no more draft tokens available for step $draftStep.")
                         break
                     }
+                    if (baseTokens.size < SPECULATIVE_TEST_MIN_DRAFT_TOKENS) {
+                        appendLog(
+                            "Speculative loop stopped: draft slice size ${baseTokens.size} is below the benchmark minimum $SPECULATIVE_TEST_MIN_DRAFT_TOKENS for step $draftStep."
+                        )
+                        break
+                    }
 
-                    val proposedTokens = maybeMutateStubDraftTokens(
-                        tokenIds = baseTokens,
-                        draftStep = draftStep
-                    )
-                    val draftText = if (useRealTokenDraftPath && activeLocalDraftSessionId != null) {
-                        runCatching { localLlm.renderTokenIds(proposedTokens) }.getOrElse { tokenIdsToReadableText(proposedTokens) }
+                    val proposedTokens = if (activeLocalDraftSessionId == null) {
+                        maybeMutateStubDraftTokens(
+                            tokenIds = baseTokens,
+                            draftStep = draftStep
+                        )
+                    } else {
+                        baseTokens
+                    }
+                    val draftText = if (useRealTokenDraftPath) {
+                        ""
                     } else {
                         tokenIdsToReadableText(proposedTokens)
                     }
+                    val traceDraftText = if (useRealTokenDraftPath) {
+                        "[render skipped for real-token speculative fast path]"
+                    } else {
+                        draftText
+                    }
                     _statusMessage.value = "Sending speculative draft step $draftStep..."
+                    val proposeStartedAt = System.currentTimeMillis()
                     val proposeResponse = remoteClient.proposeDraft(
                         baseUrl = baseUrl,
                         request = SpeculativeProposeRequest(
@@ -647,15 +690,19 @@ class MainViewModel(
                             draftTree = localDraftTreeProposal
                         )
                     )
+                    val remoteProposeMs = System.currentTimeMillis() - proposeStartedAt
+                    totalRemoteProposeMs += remoteProposeMs
                     appendLog(
-                        "Speculative propose completed. sessionId=${proposeResponse.sessionId}, draftStep=$draftStep, acceptedCount=${proposeResponse.acceptedCount}, correctionCount=${proposeResponse.correctionTokenIds.size}, status=${proposeResponse.status}"
+                        "Speculative propose completed in ${formatDurationMs(remoteProposeMs)}. sessionId=${proposeResponse.sessionId}, draftStep=$draftStep, acceptedCount=${proposeResponse.acceptedCount}, correctionCount=${proposeResponse.correctionTokenIds.size}, status=${proposeResponse.status}, draftFetch=${formatDurationMs(draftFetchMs)}"
                     )
 
                     committedTokenIds += proposeResponse.acceptedTokenIds
                     committedTokenIds += proposeResponse.correctionTokenIds
+                    var localApplyMs = 0L
                     if (activeLocalDraftSessionId != null) {
                         val verifiedTokens = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
                         runCatching {
+                            val applyStartedAt = System.currentTimeMillis()
                             if (useRealTokenDraftPath) {
                                 localLlm.applyVerifiedRealTokens(
                                     sessionId = activeLocalDraftSessionId,
@@ -666,10 +713,13 @@ class MainViewModel(
                                     sessionId = activeLocalDraftSessionId,
                                     tokenIds = verifiedTokens
                                 )
+                            }.also {
+                                localApplyMs = System.currentTimeMillis() - applyStartedAt
                             }
                         }.onSuccess { handle ->
+                            totalLocalApplyMs += localApplyMs
                             appendLog(
-                                "Local draft session advanced. sessionId=${handle.sessionId}, acceptedTokenCount=${handle.acceptedTokenCount}"
+                                "Local draft session advanced in ${formatDurationMs(localApplyMs)}. sessionId=${handle.sessionId}, acceptedTokenCount=${handle.acceptedTokenCount}"
                             )
                         }.onFailure { applyError ->
                             appendLog("Local draft apply failed: ${applyError.message ?: "unknown error"}")
@@ -681,7 +731,10 @@ class MainViewModel(
                     stepTraces += SpeculativeStepTrace(
                         draftStep = draftStep,
                         proposedTokenIds = proposedTokens,
-                        proposedText = draftText,
+                        proposedText = traceDraftText,
+                        draftFetchMs = draftFetchMs,
+                        remoteProposeMs = remoteProposeMs,
+                        localApplyMs = localApplyMs,
                         tokenMode = proposeResponse.tokenMode,
                         acceptanceMode = proposeResponse.acceptanceMode,
                         acceptedCount = proposeResponse.acceptedCount,
@@ -717,6 +770,7 @@ class MainViewModel(
                 }
 
                 _statusMessage.value = "Closing speculative session..."
+                val closeStartedAt = System.currentTimeMillis()
                 val closeResponse = remoteClient.closeSpeculativeSession(
                     baseUrl = baseUrl,
                     request = SpeculativeCloseRequest(
@@ -724,8 +778,10 @@ class MainViewModel(
                         reason = "multi_step_stub_completed"
                     )
                 )
+                val closeMs = System.currentTimeMillis() - closeStartedAt
+                val speculativeRunMs = System.currentTimeMillis() - speculativeRunStartedAt
                 appendLog(
-                    "Speculative session closed. sessionId=${closeResponse.sessionId}, acceptedTokenCount=${closeResponse.acceptedTokenCount}, mismatchCount=${closeResponse.mismatchCount}"
+                    "Speculative session closed in ${formatDurationMs(closeMs)}. sessionId=${closeResponse.sessionId}, acceptedTokenCount=${closeResponse.acceptedTokenCount}, mismatchCount=${closeResponse.mismatchCount}, total=${formatDurationMs(speculativeRunMs)}"
                 )
                 activeSessionId = null
 
@@ -752,6 +808,14 @@ class MainViewModel(
                     appendLine("Draft token mode: ${if (useRealTokenDraftPath) "real_token" else "codepoint_legacy"}")
                     appendLine("Local draft session supported: $localDraftSupported")
                     appendLine("Local draft session active: ${activeLocalDraftSessionId ?: ""}")
+                    appendLine("Timing total ms: $speculativeRunMs")
+                    appendLine("Timing health check ms: $healthMs")
+                    appendLine("Timing start session ms: $startMs")
+                    appendLine("Timing local draft open ms: ${if (localDraftOpenMs >= 0) localDraftOpenMs else -1}")
+                    appendLine("Timing total draft fetch ms: $totalDraftFetchMs")
+                    appendLine("Timing total remote propose ms: $totalRemoteProposeMs")
+                    appendLine("Timing total local apply ms: $totalLocalApplyMs")
+                    appendLine("Timing close session ms: $closeMs")
                     appendLine("Draft steps completed: ${stepTraces.size}")
                     appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
                     appendLine(
@@ -850,56 +914,37 @@ class MainViewModel(
                     appendLine("Draft tree node count: ${finalStep?.draftTreeNodeCount ?: 0}")
                     appendLine("Committed token count: ${committedTokenIds.size}")
                     appendLine("Local draft session supported: $localDraftSupported")
+                    appendLine("Timing total ms: $speculativeRunMs")
+                    appendLine("Timing health check ms: $healthMs")
+                    appendLine("Timing start session ms: $startMs")
+                    appendLine("Timing local draft open ms: ${if (localDraftOpenMs >= 0) localDraftOpenMs else -1}")
+                    appendLine("Timing total draft fetch ms: $totalDraftFetchMs")
+                    appendLine("Timing total remote propose ms: $totalRemoteProposeMs")
+                    appendLine("Timing total local apply ms: $totalLocalApplyMs")
+                    appendLine("Timing close session ms: $closeMs")
                     appendLine("Close accepted text: ${closeResponse.acceptedText}")
                     appendLine("Finish reason: ${lastFinishReason.ifBlank { "stub" }}")
                     appendLine("Close reason: ${closeResponse.reason}")
                 }.trim()
-                _output.value = buildString {
-                    appendLine("Speculative multi-step stub completed.")
-                    appendLine("Verifier mode: ${startResponse.verifierMode}")
-                    appendLine("Verifier stage: ${startResponse.verifierStage}")
-                    if (stepTraces.lastOrNull()?.tokenMode?.isNotBlank() == true) {
-                        appendLine("Token mode: ${stepTraces.last().tokenMode}")
+                val finalCommittedText = when {
+                    closeResponse.acceptedText.isNotBlank() -> closeResponse.acceptedText
+                    committedTokenIds.isEmpty() -> ""
+                    useRealTokenDraftPath -> runCatching {
+                        localLlm.renderTokenIds(committedTokenIds)
+                    }.getOrElse {
+                        tokenIdsToReadableText(committedTokenIds)
                     }
-                    if (stepTraces.lastOrNull()?.acceptanceMode?.isNotBlank() == true) {
-                        appendLine("Acceptance mode: ${stepTraces.last().acceptanceMode}")
-                    }
-                    if (startResponse.trueRuntimeBackend.isNotBlank()) {
-                        appendLine("True runtime backend: ${startResponse.trueRuntimeBackend}")
-                    }
-                    if (startResponse.llamaServerSlotId >= 0) {
-                        appendLine("Llama server slot id: ${startResponse.llamaServerSlotId}")
-                    }
-                    appendLine("Target preview text: ${startResponse.targetPreviewText}")
-                    appendLine("Start accepted text: ${startResponse.acceptedText}")
-                    appendLine("Draft seed text: $draftSeedText")
-                    appendLine("Local draft session supported: $localDraftSupported")
-                    appendLine("Local draft session id: ${activeLocalDraftSessionId ?: ""}")
-                    appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
-                    appendLine(
-                        "Committed text: ${
-                            if (useRealTokenDraftPath) runCatching { localLlm.renderTokenIds(committedTokenIds) }.getOrElse { tokenIdsToReadableText(committedTokenIds) }
-                            else tokenIdsToReadableText(committedTokenIds)
-                        }"
-                    )
-                    if (stepTraces.isNotEmpty()) {
-                        appendLine("Step details:")
-                        stepTraces.forEach { trace ->
-                            appendLine(
-                                "Step ${trace.draftStep}: draft='${trace.proposedText}' ids=${trace.proposedTokenIds.joinToString()} tokenMode=${trace.tokenMode} acceptanceMode=${trace.acceptanceMode} accepted=${trace.acceptedTokenIds.joinToString()} correction=${trace.correctionTokenIds.joinToString()} rejectedFrom=${trace.rejectedFromIndex} delta=${trace.targetTextDelta} acceptedText=${trace.acceptedText} verifierStage=${trace.verifierStage} runtime=${trace.trueRuntimeBackend} slot=${trace.llamaServerSlotId} chunkStart=${trace.lastTrueChunkStart} chunkConsumed=${trace.lastTrueChunkConsumed} treeCandidates=${trace.treeCandidateCount} treeBestPath=${trace.treeBestPathTokenIds.joinToString()} draftTreeNodes=${trace.draftTreeNodeCount} draftBestNodes=${trace.draftTreeBestPathNodeIndices.joinToString()}"
-                            )
-                            if (trace.treeDebugSummary.isNotBlank()) {
-                                appendLine("  treeDebug=${trace.treeDebugSummary}")
-                            }
-                        }
-                    }
-                    appendLine("Close accepted text: ${closeResponse.acceptedText}")
-                    appendLine("Close last target text delta: ${closeResponse.lastTargetTextDelta}")
-                    if (lastWarning.isNotBlank()) {
+                    else -> tokenIdsToReadableText(committedTokenIds)
+                }
+                _output.value = if (lastWarning.isNotBlank()) {
+                    buildString {
+                        appendLine(finalCommittedText)
                         appendLine()
                         appendLine(lastWarning)
-                    }
-                }.trim()
+                    }.trim()
+                } else {
+                    finalCommittedText
+                }
                 _statusMessage.value = "Speculative multi-step stub complete."
                 _lastError.value = listOf(
                     startResponse.error,
@@ -951,6 +996,10 @@ class MainViewModel(
         _loadedModelPath.value = runCatching { localLlm.loadedModelPath() }.getOrDefault("")
         _lastError.value = runCatching { localLlm.lastError() }.getOrDefault("")
         persistDiagnosticSnapshot()
+    }
+
+    private fun formatDurationMs(durationMs: Long): String {
+        return "${durationMs} ms"
     }
 
     private fun appendLog(message: String) {
@@ -1043,7 +1092,7 @@ class MainViewModel(
         if (committedCount >= seedTokens.size) {
             return emptyList()
         }
-        return seedTokens.drop(committedCount).take(SPECULATIVE_STUB_MAX_DRAFT_TOKENS)
+        return seedTokens.drop(committedCount).take(SPECULATIVE_TEST_MAX_DRAFT_TOKENS)
     }
 
     private fun selectSpeculativeStubSeedText(

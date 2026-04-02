@@ -17,7 +17,7 @@ data class RemoteGenerateRequest(
     val model: String = "",
     val systemPrompt: String = "",
     val userPrompt: String,
-    val maxTokens: Int = 64,
+    val maxTokens: Int = LocalLlm.TEST_MAX_TOKENS,
     val temperature: Double = 0.7,
     val topP: Double = 0.9
 )

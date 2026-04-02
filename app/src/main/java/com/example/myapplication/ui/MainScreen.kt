@@ -54,7 +54,34 @@ fun MainScreen(
     onRunDraftRuntimeProbeDemo: (String) -> Unit,
     onRun: (String) -> Unit
 ) {
-    var prompt by remember { mutableStateOf("") }
+    var prompt by remember {
+        mutableStateOf(
+            """
+            You are a precise technical assistant. Please answer in clear English with short paragraphs and compact bullet points when helpful.
+
+            Task:
+            Explain speculative decoding for large language models in a practical engineering way.
+
+            Please cover all of the following:
+            1. What speculative decoding is.
+            2. Why it can improve latency.
+            3. The difference between draft model and target model.
+            4. What “accept the longest matching prefix” means.
+            5. Why a verifier may append one extra target token after a fully accepted draft.
+            6. What kinds of implementation overhead can reduce the speedup in real systems.
+            7. The difference between theoretical speedup and end-to-end wall-clock speedup.
+            8. Why cross-device speculative decoding can be harder than single-process speculative decoding.
+            9. A short list of the main bottlenecks in a mobile-draft plus desktop-verifier architecture.
+            10. A brief concluding summary.
+
+            Requirements:
+            - Write at least 10 paragraphs.
+            - Include one short bullet list near the end.
+            - Keep the explanation concrete and engineering-oriented rather than academic.
+            - Do not ask follow-up questions.
+            """.trimIndent()
+        )
+    }
     val busy = isLoadingModel || isGenerating
     val clipboardManager = LocalClipboardManager.current
 
