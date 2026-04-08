@@ -199,6 +199,7 @@ try {
 
     $draftModelHostPath = Join-Path $repoRoot "models\$DraftModelName"
     Require-Path $draftModelHostPath
+    $draftModelSize = (Get-Item -LiteralPath $draftModelHostPath).Length
 
     $tmpModelPath = "/data/local/tmp/$DraftModelName"
     $modelPushLogPath = Join-Path $logsDir "android_spec_split_model_push_${runStamp}.log"
@@ -219,7 +220,7 @@ try {
     Write-Host "[android-spec] draft model copied to app storage"
 
     $shellCheck = Invoke-RunAsExecCapture -CommandArgs @("stat", "files/imported-models/$DraftModelName")
-    if ($shellCheck.ExitCode -ne 0 -or $shellCheck.Output -notmatch "Size:\s+807694464") {
+    if ($shellCheck.ExitCode -ne 0 -or $shellCheck.Output -notmatch "Size:\s+$draftModelSize\b") {
         $resultStatus = "blocked_device_state"
         $failureReason = "draft_model_missing_on_device"
         throw "Required draft model $DraftModelName is not present in app-private imported-models on device."
@@ -232,7 +233,11 @@ try {
         "am start-foreground-service -n $serviceComponent --es baseUrl " +
         (New-ShellSingleQuoted $BaseUrl) +
         " --es prompt " +
-        (New-ShellSingleQuoted $Prompt)
+        (New-ShellSingleQuoted $Prompt) +
+        " --es draftModelName " +
+        (New-ShellSingleQuoted $DraftModelName) +
+        " --es targetModelName " +
+        (New-ShellSingleQuoted ([System.IO.Path]::GetFileName($TargetModelPath)))
     $startResult = Invoke-AdbCapture -CommandArgs @("shell", $serviceShellCommand)
     if ($startResult.ExitCode -ne 0) {
         $resultStatus = "blocked_runtime"

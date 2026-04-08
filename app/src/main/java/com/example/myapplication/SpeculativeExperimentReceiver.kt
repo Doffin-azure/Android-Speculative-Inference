@@ -20,10 +20,22 @@ class SpeculativeExperimentReceiver : BroadcastReceiver() {
         val appContext = context.applicationContext
         val baseUrl = intent.getStringExtra("baseUrl").orEmpty().ifBlank { SpeculativeExperimentRunner.DEFAULT_BASE_URL }
         val prompt = intent.getStringExtra("prompt").orEmpty().ifBlank { SpeculativeExperimentRunner.DEFAULT_PROMPT }
+        val draftModelName = intent.getStringExtra("draftModelName").orEmpty().ifBlank {
+            SpeculativeExperimentRunner.DRAFT_MODEL_NAME
+        }
+        val targetModelName = intent.getStringExtra("targetModelName").orEmpty().ifBlank {
+            SpeculativeExperimentRunner.TARGET_MODEL_NAME
+        }
 
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                val summary = SpeculativeExperimentRunner.run(appContext, baseUrl, prompt)
+                val summary = SpeculativeExperimentRunner.run(
+                    appContext,
+                    baseUrl,
+                    prompt,
+                    draftModelName,
+                    targetModelName
+                )
                 val outputFile = File(appContext.filesDir, "logs/${SpeculativeExperimentRunner.OUTPUT_NAME}")
                 outputFile.parentFile?.mkdirs()
                 outputFile.writeText(summary)
