@@ -428,6 +428,7 @@ The latest positive change set was:
 
 - remove first-round helper sampler rebuild by passing final split sampling config during native helper `start_session`
 - trim per-round split/native verifier response payloads so the service only returns essential timing/runtime fields
+- remove native split service hot-path redundancy that was still doing cache/debug work and an extra target-session sync not needed for split semantics
 
 Interpretation:
 
@@ -435,6 +436,7 @@ Interpretation:
 - transport-only loss is already small; the remaining gap is still verifier-side cooperative work
 - the middle-collaboration loss target of `<10%` is not met yet, so optimization must continue from this state
 - use [collaboration-acceleration-history.md](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/docs/project/collaboration-acceleration-history.md) as the running ledger of all kept and reverted acceleration attempts
+- that same ledger now also marks which experiments crossed the reference boundary and how rollback must be recorded
 
 ## Definition Of Done For The Next Node
 

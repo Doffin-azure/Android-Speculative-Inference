@@ -2998,6 +2998,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         )
     computation.timing_service_total_ms = (time.perf_counter() - t_service_begin) * 1000.0
     accepted_count = len(computation.accepted_token_ids)
+    native_split_mode = session.verifier_mode in {"llama_cpp_spec_native", "llama_cpp_spec_split"}
     apply_verify_computation_to_sessions(
         server.config,
         session,
@@ -3006,17 +3007,19 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         computation=computation,
         max_correction_tokens=max_correction_tokens,
     )
-    with server.sessions_lock:
-        target_session = server.target_sessions.get(session.target_session_id)
-        if target_session is not None:
-            sync_target_session_state(target_session, session)
-    latest_cached_prefix, latest_cached_next = latest_true_cache_entry(target_session) if target_session is not None else ("", "")
+    if not native_split_mode:
+        with server.sessions_lock:
+            target_session = server.target_sessions.get(session.target_session_id)
+            if target_session is not None:
+                sync_target_session_state(target_session, session)
+        latest_cached_prefix, latest_cached_next = latest_true_cache_entry(target_session) if target_session is not None else ("", "")
+    else:
+        latest_cached_prefix, latest_cached_next = "", ""
 
     if session.verifier_mode in {"llama_true_tree_pq_tokens", "llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"} and computation.rejected_from_index == -1:
         base_status = "accepted"
     else:
         base_status = "accepted" if not computation.correction_token_ids and computation.rejected_from_index == -1 else "corrected"
-    native_split_mode = session.verifier_mode in {"llama_cpp_spec_native", "llama_cpp_spec_split"}
 
     if session.verifier_mode == "llama_replay_proxy":
         status = f"{base_status}_by_llama_replay"
@@ -3038,50 +3041,40 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         status = f"{base_status}_by_prompt_stub"
     session.status = status
 
-    warning = (
-        "Desktop speculative verification is currently replaying the accepted assistant prefix into llama-cli and using the resulting continuation as a target proxy. "
-        "This is closer to true target verification than fixed preview text, but it still does not verify target-model tokens directly inside a persistent model session yet."
-        if session.verifier_mode == "llama_replay_proxy"
-        else
-        "Desktop speculative verification is now using the real target model for next-token checks through llama-cli on each speculative comparison step. "
-        "This is the first true-target verifier stage. When llama-server is configured it now runs through a persistent server slot with prompt-cache reuse, "
-        "but it still does not directly hold libllama state inside this Python process."
-        if session.verifier_mode == "llama_true_step"
-        else
-        "Desktop speculative verification is now building a shallow target-side tree from llama-server top-k candidates and can also consume optional Android draft-tree metadata. "
-        "This first tree verifier node still keeps the wire protocol largely unchanged and uses draft/target tree overlap to score a best path, "
-        "but it is still not a full EAGLE-style posterior/KV-copy implementation."
-        if session.verifier_mode == "llama_true_tree"
-        else
-        "Desktop speculative verification is now using the experimental unified-token tree verifier path. "
-        "Android may send real-token draft ids and real-token draft-tree metadata on this path, but the desktop verifier is still only at the first integration stage "
-        "and does not yet implement the full final paper-style posterior/correction algorithm."
-        if session.verifier_mode == "llama_true_tree_pq_tokens"
-        else
-        "Desktop speculative verification is now using the exact EAGLE-aligned verifier lane. "
-        "This lane is intended to preserve target-model output semantics by delegating acceptance and correction to the native desktop target runtime helper. "
-        "It will fail closed if the helper is unavailable or if the Android draft payload is missing exact branch-conditioned draftPathSteps."
-        if session.verifier_mode == "llama_eagle_aligned"
-        else
-        "Desktop speculative verification is now using a native llama.cpp-style speculative verifier lane. "
-        "Android sends a real-token draft sequence, and the desktop helper reproduces llama.cpp's current speculative control flow: "
-        "batch verify the draft, accept the longest matching prefix, then append one target token."
-        if session.verifier_mode == "llama_cpp_spec_native"
-        else
-        "Desktop speculative verification is now using the experimental split-contract llama.cpp speculative lane. "
-        "Android owns the draft runtime state in ai_chat.cpp, the desktop helper owns the verifier state in desktop_target_runtime.cpp, "
-        "and the Python service only routes token batches between the two sides."
-        if session.verifier_mode == "llama_cpp_spec_split"
-        else
-        "Desktop speculative verification is currently using llama preview text as a target proxy. "
-        "It now computes accepted prefixes and correction tokens from the preview text, but it still does not run true target-model token verification yet."
-        if session.verifier_mode in {"llama_preview", "llama_step_proxy"}
-        else
-        "Desktop speculative verification is currently a deterministic prompt-derived stub. "
-        "It now computes accepted prefixes and correction tokens, but it still does not run target-model token verification yet."
-    )
-    if native_split_mode:
-        warning = ""
+    warning = ""
+    if not native_split_mode:
+        warning = (
+            "Desktop speculative verification is currently replaying the accepted assistant prefix into llama-cli and using the resulting continuation as a target proxy. "
+            "This is closer to true target verification than fixed preview text, but it still does not verify target-model tokens directly inside a persistent model session yet."
+            if session.verifier_mode == "llama_replay_proxy"
+            else
+            "Desktop speculative verification is now using the real target model for next-token checks through llama-cli on each speculative comparison step. "
+            "This is the first true-target verifier stage. When llama-server is configured it now runs through a persistent server slot with prompt-cache reuse, "
+            "but it still does not directly hold libllama state inside this Python process."
+            if session.verifier_mode == "llama_true_step"
+            else
+            "Desktop speculative verification is now building a shallow target-side tree from llama-server top-k candidates and can also consume optional Android draft-tree metadata. "
+            "This first tree verifier node still keeps the wire protocol largely unchanged and uses draft/target tree overlap to score a best path, "
+            "but it is still not a full EAGLE-style posterior/KV-copy implementation."
+            if session.verifier_mode == "llama_true_tree"
+            else
+            "Desktop speculative verification is now using the experimental unified-token tree verifier path. "
+            "Android may send real-token draft ids and real-token draft-tree metadata on this path, but the desktop verifier is still only at the first integration stage "
+            "and does not yet implement the full final paper-style posterior/correction algorithm."
+            if session.verifier_mode == "llama_true_tree_pq_tokens"
+            else
+            "Desktop speculative verification is now using the exact EAGLE-aligned verifier lane. "
+            "This lane is intended to preserve target-model output semantics by delegating acceptance and correction to the native desktop target runtime helper. "
+            "It will fail closed if the helper is unavailable or if the Android draft payload is missing exact branch-conditioned draftPathSteps."
+            if session.verifier_mode == "llama_eagle_aligned"
+            else
+            "Desktop speculative verification is currently using llama preview text as a target proxy. "
+            "It now computes accepted prefixes and correction tokens from the preview text, but it still does not run true target-model token verification yet."
+            if session.verifier_mode in {"llama_preview", "llama_step_proxy"}
+            else
+            "Desktop speculative verification is currently a deterministic prompt-derived stub. "
+            "It now computes accepted prefixes and correction tokens, but it still does not run target-model token verification yet."
+        )
     if session.verifier_mode == "llama_true_tree_pq_tokens" and debug_acceptance_mode == "fallback_piece_prefix":
         warning += (
             " This run fell back to piece-prefix acceptance because the desktop verifier did not receive a usable real-token draft-tree payload."

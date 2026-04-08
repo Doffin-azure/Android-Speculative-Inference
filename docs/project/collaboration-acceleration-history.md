@@ -188,6 +188,64 @@ Interpretation:
 - conclusion:
   - oversubscription is catastrophic for this helper/model/device combination
 
+## Reference-Boundary Deviations
+
+These items are important because they either already crossed the reference split logic boundary, or they are still present as experiment-shell behavior that is not fully source-aligned with the reference worker contract.
+
+### 1. Adaptive `draftMaxTokens` in the Android experiment runner
+
+- status: active in the experiment harness
+- main file:
+  - [SpeculativeExperimentRunner.kt](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/app/src/main/java/com/example/myapplication/SpeculativeExperimentRunner.kt)
+- why it deviates:
+  - the current Android harness dynamically halves or increases `currentDraftMaxTokens` based on recent accept history
+  - the reference draft worker is closer to a stable `n_max` proposal contract
+- scope:
+  - this does not change the core verifier acceptance semantics
+  - but it does change proposal policy, so it should be treated as an experiment-shell deviation rather than reference-equal core logic
+- rollback method:
+  - force `requestedDraftMaxTokens` to a fixed value on every round
+  - remove `consecutiveZeroAcceptSteps` / `consecutivePositiveAcceptSteps` driven resizing
+  - record the rollback with:
+    - timestamp
+    - reverted file path
+    - exact constants before and after
+    - one fresh Android split run proving the fixed-`n_max` path still works
+
+### 2. Android deterministic forcing (`temp=0`, `top_k=1`)
+
+- status: already reverted
+- why it deviated:
+  - it altered the Android draft sampler policy rather than only reducing execution overhead
+- rollback method used:
+  - restore prior sampler configuration in the Android draft path
+  - rerun the same prompt/model experiment
+  - record both the bad run and the reversion run in the timing log
+
+### 3. `DEFAULT_SPECULATIVE_DRAFT_P_MIN = 0.0`
+
+- status: already reverted
+- why it deviated:
+  - it pushed the Android draft side toward a different proposal truncation policy than the prior aligned setup
+- rollback method used:
+  - restore [ai_chat.cpp](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/lib/src/main/cpp/ai_chat.cpp) `DEFAULT_SPECULATIVE_DRAFT_P_MIN` from `0.0f` back to `0.90f`
+  - rerun the Android split experiment and compare against the last known-good aligned run
+
+## Rollback Recording Rule
+
+Whenever a change is judged to violate the reference split logic, record the rollback the same way every time:
+
+1. identify the exact semantic deviation
+2. name the affected file and symbol or code block
+3. restore the previous aligned value or control flow
+4. run one timestamped Android split verification experiment after the rollback
+5. log:
+   - the violating run timestamp
+   - the rollback timestamp
+   - the restored setting
+   - whether output semantics and performance returned to the prior range
+6. if committed, record the reverting commit id alongside the experimental commit id
+
 ## What The Data Says Now
 
 - Android draft compute is no longer the primary problem.

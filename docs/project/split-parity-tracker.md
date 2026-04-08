@@ -301,6 +301,42 @@ Interpretation:
 - Android draft speed remains aligned with the local baseline
 - the remaining bottleneck is still not just transport; it is the persistent verifier round cost
 
+## Safe Service-Hot-Path Compression
+
+Another verifier-boundary change was tested without changing split semantics:
+
+- remove the extra `sync_target_session_state(...)` pass in the native split propose path after `apply_verify_computation_to_sessions(...)`
+- skip `latest_true_cache_entry(...)` lookup for native split responses because those fields are not returned on this path
+- skip constructing non-native warning text for native split modes
+
+Why this stays inside the reference boundary:
+
+- it does not change who owns draft state or verifier state
+- it does not change accepted-prefix semantics
+- it does not change correction-token generation
+- it does not change rollback anchor semantics
+
+Latest measured result:
+
+- run: `2026-04-08T15:13:26+08:00`
+- output: [android_spec_split_app_output_2026-04-08T15-13-26+08-00.txt](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/reference/spec-split-demo-project/experiments/2026-04-08/android_spec_split_app_output_2026-04-08T15-13-26+08-00.txt)
+- comparison: [android_local_vs_split_comparison_2026-04-08T15-14-59+08-00.json](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/reference/spec-split-demo-project/experiments/2026-04-08/android_local_vs_split_comparison_2026-04-08T15-14-59+08-00.json)
+- `totalMs=5653`
+- `totalRemoteProposeMs=1837`
+- `overallTokensPerSecond=11.321`
+- split remote share: `32.50%`
+
+Direct comparison against the prior best run `2026-04-08T14:56:01+08:00`:
+
+- `totalRemoteProposeMs`: `1840 -> 1837`
+- `totalMs`: `5669 -> 5653`
+- `overallTokensPerSecond`: `11.289 -> 11.321`
+
+Interpretation:
+
+- the gain is small, but it is real and came from removing split-path routing redundancy
+- this is still safely inside the reference logic boundary because only unused service work was deleted
+
 ## Recording Rule
 
 Every new split optimization experiment must record:
