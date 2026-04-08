@@ -36,6 +36,11 @@
             android:enabled="true"
             android:exported="true"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".AndroidLocalExperimentService"
+            android:enabled="true"
+            android:exported="true"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

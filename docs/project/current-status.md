@@ -198,6 +198,12 @@ Current strongest conclusion:
   - the strongest tested policy so far is a conservative adaptive draft budget that shrinks quickly after zero-accept steps and regrows slowly
   - that policy reached `committedTokens=64`, `totalProposedTokens=58`, accepted/proposed `34.48%`, and `overallTokensPerSecond=8.925` on run `2026-04-08T12-00-26+08-00`
   - this improves the phone path mainly by bounding wasted speculation, not by eliminating the underlying later-step draft/target mismatch
+- the project now also has an Android local single-device timing baseline on the same phone, same 1B model, same prompt, and same `64` token budget
+- that local baseline reached `draftLoopProducedTokens=64` in `3623 ms` (`17.665 tok/s`) on run `2026-04-08T12-35-09+08-00`
+- direct local-vs-split comparison now shows:
+  - Android split draft-side throughput (`20.619 tok/s`) is already in the same range as the local-only draft loop
+  - Android split end-to-end throughput (`8.925 tok/s`) is much lower because `remotePropose` consumed about `59.07%` of total wall clock in the comparison run
+  - the newest optimization priority is therefore reducing cooperative boundary cost and extending high-accept regions, not just increasing phone-local raw draft speed
 - the Android speculative client now also skips per-step real-token `proposedText` rendering on the hot path for `llama_cpp_spec_native`, because the verifier decision is driven by token ids rather than that debug text field
 - the Android real-token local apply path now also skips per-step accepted-text detokenize work and keeps the draft session token-first during speculative commits
 - the `llama_cpp_spec_native` split contract is now narrower on the hot path:

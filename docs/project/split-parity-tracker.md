@@ -125,6 +125,40 @@ The important interpretation is narrower than "Android is now solved":
 - once the draft/target distributions diverge later in the answer, Android still collapses toward very small proposals
 - that means the dominant remaining issue is draft/target alignment quality after the early easy prefix, not just raw phone-side decode speed
 
+## Android Local Baseline
+
+The project now also keeps a second Android-side comparison lane:
+
+- Android local single-device baseline
+  - same phone
+  - same 1B draft model
+  - same prompt
+  - same `64` token budget
+  - no remote verifier
+- Android + desktop split lane
+  - same Android draft model and prompt
+  - remote 3B verifier on desktop
+
+This baseline is recorded through:
+
+- `tools/run_android_local_experiment.ps1`
+- `tools/compare_android_local_vs_split.ps1`
+
+Latest same-condition comparison on `2026-04-08` showed:
+
+- Android local draft-loop throughput: `17.665 tok/s`
+- Android split draft-side throughput: `20.619 tok/s`
+- Android split end-to-end throughput: `8.925 tok/s`
+- Android split remote-propose share: `59.07%`
+
+That changes the bottleneck reading in an important way:
+
+- the phone-local draft runtime is not currently the primary limiter
+- the primary limiter is the cooperative split boundary after the phone has already drafted:
+  - remote verify latency
+  - too many correction-driven short rounds
+  - late-stage draft/target divergence that collapses the system toward 1-token proposals
+
 ## Recording Rule
 
 Every new split optimization experiment must record:
