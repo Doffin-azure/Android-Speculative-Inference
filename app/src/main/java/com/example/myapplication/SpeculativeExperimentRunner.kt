@@ -81,9 +81,8 @@ object SpeculativeExperimentRunner {
 
                 val requestedDraftMaxTokens = currentDraftMaxTokens
                 val draftFetchStartedAt = System.currentTimeMillis()
-                val proposedTokenIds = localLlm.syncAndDraftNextRealTokenIds(
+                val proposedTokenIds = localLlm.draftNextRealTokenIds(
                     sessionId = localDraftSession.sessionId,
-                    authoritativeTokenIds = committedTokenIds,
                     maxTokens = requestedDraftMaxTokens
                 )
                 val draftFetchMs = System.currentTimeMillis() - draftFetchStartedAt
@@ -136,6 +135,10 @@ object SpeculativeExperimentRunner {
                 }
 
                 val localApplyStartedAt = System.currentTimeMillis()
+                localLlm.applyVerifiedRealTokens(
+                    sessionId = localDraftSession.sessionId,
+                    tokenIds = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
+                )
                 val localApplyMs = System.currentTimeMillis() - localApplyStartedAt
                 totalLocalApplyMs += localApplyMs
 

@@ -175,6 +175,47 @@ This matters because it removes one interface-level mismatch before further perf
 - remaining slowdowns after this point are more credibly attributable to the split boundary and proposal economics
 - they are less likely to be artifacts from verifier-side text replay drift or sampler-history mismatch
 
+## Latest Incremental-Commit Alignment
+
+The next source-level parity step landed on `2026-04-08`:
+
+- reference-style split drafting on Android no longer uses full authoritative `syncAndDraft` on every round
+- instead, the draft runtime now follows the same higher-level loop as the local reference split worker:
+  - generate draft slice from the live draft runtime
+  - receive verifier accepted prefix plus one follow-up token
+  - roll back speculative tail to the committed snapshot
+  - append the newly verified tokens
+  - continue drafting from that updated runtime
+- this change was wired in both:
+  - `app/src/main/java/com/example/myapplication/SpeculativeExperimentRunner.kt`
+  - `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
+
+Latest measured result from that change:
+
+- run: `2026-04-08T13-34-05+08-00`
+- `committedTokens=64`
+- `totalProposedTokens=67`
+- accepted/proposed `= 40 / 67 = 59.70%`
+- `totalMs=6653`
+- `totalRemoteProposeMs=2759`
+- `overallTokensPerSecond=9.620`
+
+Refreshed Android local comparison:
+
+- local run: `2026-04-08T13-37-34+08-00`
+- comparison: `2026-04-08T13-38-40+08-00`
+- Android local draft-loop throughput: `17.279 tok/s`
+- Android split draft-side throughput: `41.409 tok/s`
+- Android split overall throughput: `9.620 tok/s`
+- Android split remote-propose share: `41.47%`
+
+Interpretation:
+
+- this pass materially improved parity with the reference split ownership model
+- it also improved performance without reducing phone-local model speed
+- the remaining main bottleneck is still the remote verifier boundary, but proposal economics are much better than the earlier micro-round dominated runs
+- a follow-up experiment that raised only the experimental runner's `draftMaxTokens` from `6` to `8` did not improve throughput and was reverted
+
 ## Recording Rule
 
 Every new split optimization experiment must record:
