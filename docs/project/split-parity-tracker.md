@@ -97,6 +97,34 @@ Confirmed system-level gap versus local reference:
 
 - cross-device split adds ADB/device orchestration, phone thermal limits, and network/HTTP boundaries that do not exist in the local dual-process reference run
 
+## Latest Five-Cycle Result
+
+Latest completed optimization loop on `2026-04-08` ran five consecutive Android split experiments after the first stable paired parity baseline.
+
+Strongest findings:
+
+- the most effective immediate improvement was reducing draft slice size:
+  - fixed `16 -> 8` cut total run time from about `12.1s` to `4.6s` on the tested prompt
+  - accepted/proposed improved from `5.20%` to `10.96%`
+- the best overall result came from a conservative adaptive policy:
+  - `initialDraftTokens=4`
+  - `draftMaxTokens=6`
+  - `adaptiveDraftMinTokens=1`
+  - zero-accept steps halve the next proposal size
+  - growth happens only after repeated positive accept steps
+- that conservative policy produced:
+  - run `2026-04-08T12-00-26+08-00`
+  - `committedTokens=64`
+  - `totalProposedTokens=58`
+  - accepted/proposed `= 34.48%`
+  - `overallTokensPerSecond=8.925`
+
+The important interpretation is narrower than "Android is now solved":
+
+- the phone path improved most by limiting wasted speculation
+- once the draft/target distributions diverge later in the answer, Android still collapses toward very small proposals
+- that means the dominant remaining issue is draft/target alignment quality after the early easy prefix, not just raw phone-side decode speed
+
 ## Recording Rule
 
 Every new split optimization experiment must record:
