@@ -2741,7 +2741,11 @@ def compute_llama_cpp_native_verifier_result(
         samplingConfig={
             "temperature": session.temperature,
             "topP": session.top_p,
-            "topK": 40,
+            "topK": 1,
+            "minP": 0.0,
+            "penaltyRepeat": 1.0,
+            "penaltyFreq": 0.0,
+            "penaltyPresent": 0.0,
             "seed": target_session.verifier_sampling_seed,
         },
     )

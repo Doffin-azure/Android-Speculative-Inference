@@ -885,6 +885,10 @@ static persistent_draft_session_snapshot capture_persistent_draft_session_snapsh
     return snapshot;
 }
 
+static std::vector<llama_token> capture_prompt_prefix_tokens_from_runtime() {
+    return runtime_token_history;
+}
+
 static bool restore_persistent_draft_session_snapshot(const persistent_draft_session_snapshot &snapshot) {
     if (!snapshot.seq_state_valid) {
         return false;
@@ -1610,7 +1614,8 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_startPersisten
         return 100 + reset_result;
     }
 
-    g_persistent_draft_sessions[session_id] = capture_persistent_draft_session_snapshot(runtime_token_history);
+    g_persistent_draft_sessions[session_id] = capture_persistent_draft_session_snapshot(
+            capture_prompt_prefix_tokens_from_runtime());
     mark_active_persistent_draft_runtime(session_id, true);
     return 0;
 }

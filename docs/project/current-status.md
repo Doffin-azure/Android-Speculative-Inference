@@ -204,6 +204,11 @@ Current strongest conclusion:
   - Android split draft-side throughput (`20.619 tok/s`) is already in the same range as the local-only draft loop
   - Android split end-to-end throughput (`8.925 tok/s`) is much lower because `remotePropose` consumed about `59.07%` of total wall clock in the comparison run
   - the newest optimization priority is therefore reducing cooperative boundary cost and extending high-accept regions, not just increasing phone-local raw draft speed
+- the split lane has also completed one interface-alignment pass against the local reference implementation:
+  - desktop verify session rebuild is now token-native instead of depending on `acceptedText` replay
+  - desktop verify sampler history is now rebuilt from the full known sequence
+  - helper sampling config is now aligned to the Android greedy draft defaults
+  - the post-alignment verification run still completed successfully on `2026-04-08T12-53-27+08-00`
 - the Android speculative client now also skips per-step real-token `proposedText` rendering on the hot path for `llama_cpp_spec_native`, because the verifier decision is driven by token ids rather than that debug text field
 - the Android real-token local apply path now also skips per-step accepted-text detokenize work and keeps the draft session token-first during speculative commits
 - the `llama_cpp_spec_native` split contract is now narrower on the hot path:
