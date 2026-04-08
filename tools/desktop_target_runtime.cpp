@@ -45,6 +45,7 @@ struct RuntimeState {
     const llama_vocab * vocab = nullptr;
     common_chat_templates_ptr chat_templates;
     std::string model_path;
+    int32_t thread_count = 4;
     std::unordered_map<std::string, SessionState> sessions;
 };
 
@@ -318,6 +319,7 @@ bool ensure_model_loaded(std::string & error) {
 
 json handle_load_model(const json & request) {
     const std::string model_path = normalize_model_path(request.value("modelPath", ""));
+    const int32_t thread_count = std::max(1, request.value("threadCount", g_runtime.thread_count));
     if (model_path.empty()) {
         return error_json("modelPath is required.");
     }
@@ -351,10 +353,12 @@ json handle_load_model(const json & request) {
     g_runtime.vocab = llama_model_get_vocab(g_runtime.model);
     g_runtime.chat_templates = common_chat_templates_init(g_runtime.model, "");
     g_runtime.model_path = model_path;
+    g_runtime.thread_count = thread_count;
 
     auto response = ok_json();
     response["status"] = "loaded";
     response["modelPath"] = g_runtime.model_path;
+    response["threadCount"] = g_runtime.thread_count;
     response["nCtxTrain"] = llama_model_n_ctx_train(g_runtime.model);
     response["vocabSize"] = llama_vocab_n_tokens(g_runtime.vocab);
     return response;
@@ -390,6 +394,8 @@ json handle_start_session(const json & request) {
         static_cast<int32_t>(llama_model_n_ctx_train(g_runtime.model))
     );
     ctx_params.n_batch = DEFAULT_SESSION_N_BATCH;
+    ctx_params.n_threads = g_runtime.thread_count;
+    ctx_params.n_threads_batch = g_runtime.thread_count;
     ctx_params.no_perf = false;
 
     SessionState session;

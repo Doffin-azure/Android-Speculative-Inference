@@ -148,6 +148,14 @@ internal class InferenceEngineImpl private constructor(
     private external fun generateDraftRealTokenIds(maxTokens: Int): IntArray
 
     @FastNative
+    private external fun commitAndGenerateDraftRealTokenIds(
+        sessionId: String,
+        tokenIds: IntArray,
+        predictLength: Int,
+        maxTokens: Int
+    ): IntArray
+
+    @FastNative
     private external fun generateDraftRealTokenTreeJson(maxDepth: Int, branchFactor: Int): String
 
     @FastNative
@@ -529,6 +537,31 @@ internal class InferenceEngineImpl private constructor(
             acceptedText = runtime.acceptedText,
             acceptedTokenCount = updatedRuntime.acceptedTokenIds.size
         )
+    }
+
+    override suspend fun applyVerifiedRealTokensAndDraftNextRealTokenIds(
+        sessionId: String,
+        tokenIds: List<Int>,
+        maxTokens: Int
+    ): List<Int> = withContext(llamaDispatcher) {
+        val runtime = draftSessions[sessionId]
+            ?: throw IllegalArgumentException("Unknown draft session: $sessionId")
+        require(maxTokens > 0) { "maxTokens must be > 0." }
+
+        val safeTokenIds = tokenIds.filter { it >= 0 }
+        val draftedTokens = commitAndGenerateDraftRealTokenIds(
+            sessionId = sessionId,
+            tokenIds = safeTokenIds.toIntArray(),
+            predictLength = runtime.predictLength,
+            maxTokens = maxTokens
+        ).toList()
+
+        draftSessions[sessionId] = runtime.copy(
+            acceptedTokenIds = runtime.acceptedTokenIds + safeTokenIds,
+            acceptedTextDirty = runtime.acceptedTextDirty || safeTokenIds.isNotEmpty()
+        )
+
+        draftedTokens
     }
 
     override suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle = withContext(llamaDispatcher) {

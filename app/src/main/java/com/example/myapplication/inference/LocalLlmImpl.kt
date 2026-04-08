@@ -111,6 +111,14 @@ class LocalLlmImpl(context: Context) : LocalLlm {
         return engine.applyVerifiedRealTokens(sessionId, tokenIds)
     }
 
+    override suspend fun applyVerifiedRealTokensAndDraftNextRealTokenIds(
+        sessionId: String,
+        tokenIds: List<Int>,
+        maxTokens: Int
+    ): List<Int> {
+        return engine.applyVerifiedRealTokensAndDraftNextRealTokenIds(sessionId, tokenIds, maxTokens)
+    }
+
     override suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {
         return engine.applyVerifiedTokens(sessionId, tokenIds)
     }

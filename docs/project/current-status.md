@@ -233,6 +233,32 @@ Current strongest conclusion:
   - Android draft-side runtime maintenance is no longer the dominant problem on the current split lane
   - the remaining limiter is still `remotePropose`, but it is now materially smaller per committed token because acceptance stayed high much longer
   - a follow-up experiment raising experimental `draftMaxTokens` from `6` to `8` did not improve the result and was reverted
+- the next verified compression pass on `2026-04-08` wired desktop service thread configuration all the way into the native verifier helper:
+  - previously the Python service exposed `--threads`, but the exact verifier helper still used its own default context thread count
+  - the desktop helper now receives the configured thread count during model load and applies it to session contexts
+  - the desktop service default thread budget is now `max(4, cpu_count / 2)` instead of the older fixed `2`
+- with that verifier-thread fix in place, the Android split run at `2026-04-08T14-27-55+08-00` produced:
+  - `committedTokens=64`
+  - `totalProposedTokens=67`
+  - accepted/proposed `= 40 / 67 = 59.70%`
+  - `totalMs=5772`
+  - `totalRemoteProposeMs=1934`
+  - `overallTokensPerSecond=11.088`
+- compared with the earlier incremental-commit run at `2026-04-08T13-34-05+08-00`:
+  - `totalRemoteProposeMs` fell from `2759` to `1934`
+  - `overallTokensPerSecond` rose from `9.620` to `11.088`
+  - this is about a `1.43x` improvement on the remote verifier portion and about a `1.15x` improvement end to end
+- refreshed Android-local comparison at `2026-04-08T14-30-34+08-00` now shows:
+  - Android local draft-loop throughput: `17.616 tok/s`
+  - Android split draft-side throughput: `18.074 tok/s`
+  - Android split overall throughput: `11.088 tok/s`
+  - Android split remote-propose share: `33.51%`
+- this means the current split lane now satisfies both preconditions more clearly:
+  - source-level split ownership is closer to the reference path
+  - Android-side draft compute is not slower than the local-only baseline under the same conditions
+- the next pressure point has moved again:
+  - `remotePropose` is no longer overwhelmingly dominant
+  - the system is now much closer to being limited by draft-side state maintenance plus remaining verifier decode cost
 - the Android speculative client now also skips per-step real-token `proposedText` rendering on the hot path for `llama_cpp_spec_native`, because the verifier decision is driven by token ids rather than that debug text field
 - the Android real-token local apply path now also skips per-step accepted-text detokenize work and keeps the draft session token-first during speculative commits
 - the `llama_cpp_spec_native` split contract is now narrower on the hot path:

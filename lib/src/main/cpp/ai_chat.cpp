@@ -1950,6 +1950,75 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_renderTokenIds
 }
 
 extern "C"
+JNIEXPORT jintArray JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_commitAndGenerateDraftRealTokenIds(
+        JNIEnv *env,
+        jobject /* unused */,
+        jstring jsession_id,
+        jintArray jtoken_ids,
+        jint predict_length,
+        jint max_tokens) {
+    const auto *session_id_chars = env->GetStringUTFChars(jsession_id, nullptr);
+    const std::string session_id(session_id_chars ? session_id_chars : "");
+    if (session_id_chars != nullptr) {
+        env->ReleaseStringUTFChars(jsession_id, session_id_chars);
+    }
+
+    jintArray result = env->NewIntArray(0);
+    if (session_id.empty()) {
+        return result;
+    }
+
+    auto it = g_persistent_draft_sessions.find(session_id);
+    if (it == g_persistent_draft_sessions.end()) {
+        return result;
+    }
+
+    if (g_sampler != nullptr) {
+        common_sampler_reset(g_sampler);
+    }
+    const bool restored = (
+            session_id == g_active_persistent_draft_session_id &&
+            rollback_active_runtime_to_committed_snapshot(it->second))
+        || restore_persistent_draft_session_snapshot(it->second);
+    if (!restored) {
+        clear_active_persistent_draft_runtime();
+        return result;
+    }
+
+    const jsize token_count = jtoken_ids == nullptr ? 0 : env->GetArrayLength(jtoken_ids);
+    std::vector<jint> token_ids(static_cast<size_t>(std::max<jsize>(0, token_count)));
+    if (token_count > 0) {
+        env->GetIntArrayRegion(jtoken_ids, 0, token_count, token_ids.data());
+    }
+
+    for (const jint raw_token_id : token_ids) {
+        if (raw_token_id < 0) {
+            continue;
+        }
+        const llama_token token_id = static_cast<llama_token>(raw_token_id);
+        const std::string token_text = common_token_to_piece(g_context, token_id);
+        if (!advance_runtime_with_token(token_id, token_text)) {
+            clear_active_persistent_draft_runtime();
+            return result;
+        }
+    }
+
+    stop_generation_position = current_position + std::max(1, static_cast<int>(predict_length));
+    it->second.host_snapshot = capture_host_runtime_snapshot();
+    it->second.seq_state_valid = false;
+    mark_active_persistent_draft_runtime(session_id, true);
+
+    const std::vector<jint> draft_ids = generate_real_draft_token_ids(max_tokens);
+    result = env->NewIntArray((jsize) draft_ids.size());
+    if (result == nullptr || draft_ids.empty()) {
+        return result;
+    }
+    env->SetIntArrayRegion(result, 0, (jsize) draft_ids.size(), draft_ids.data());
+    return result;
+}
+
+extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_example_myapplication_llama_debug_DraftRuntimeProbeDemo_nativeCaptureTopKJson(
         JNIEnv *env,

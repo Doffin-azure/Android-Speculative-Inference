@@ -129,6 +129,14 @@ interface InferenceEngine {
         throw UnsupportedOperationException("Applying verified real tokens is not implemented by this engine.")
     }
 
+    suspend fun applyVerifiedRealTokensAndDraftNextRealTokenIds(
+        sessionId: String,
+        tokenIds: List<Int>,
+        maxTokens: Int
+    ): List<Int> {
+        throw UnsupportedOperationException("Combined real-token apply/draft is not implemented by this engine.")
+    }
+
     suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {
         throw UnsupportedOperationException("Applying verified tokens is not implemented by this engine.")
     }
