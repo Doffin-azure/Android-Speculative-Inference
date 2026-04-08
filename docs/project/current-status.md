@@ -192,6 +192,12 @@ Current strongest conclusion:
   - Android delivered `37` committed tokens from `362` proposed tokens in the latest stable paired run
   - accepted/proposed ratio was only about `10.22%`
   - draft-side wall clock is still large, but low acceptance is now the more damaging efficiency loss
+- a five-cycle follow-up optimization loop on `2026-04-08` now sharpens that conclusion:
+  - simply raising draft confidence thresholds helped only marginally
+  - cutting speculative slice length helped immediately
+  - the strongest tested policy so far is a conservative adaptive draft budget that shrinks quickly after zero-accept steps and regrows slowly
+  - that policy reached `committedTokens=64`, `totalProposedTokens=58`, accepted/proposed `34.48%`, and `overallTokensPerSecond=8.925` on run `2026-04-08T12-00-26+08-00`
+  - this improves the phone path mainly by bounding wasted speculation, not by eliminating the underlying later-step draft/target mismatch
 - the Android speculative client now also skips per-step real-token `proposedText` rendering on the hot path for `llama_cpp_spec_native`, because the verifier decision is driven by token ids rather than that debug text field
 - the Android real-token local apply path now also skips per-step accepted-text detokenize work and keeps the draft session token-first during speculative commits
 - the `llama_cpp_spec_native` split contract is now narrower on the hot path:

@@ -13,7 +13,9 @@ import kotlin.math.max
 object SpeculativeExperimentRunner {
     const val DEFAULT_BASE_URL = "http://127.0.0.1:8080"
     const val DEFAULT_PROMPT = "Explain speculative decoding briefly."
-    const val DRAFT_MAX_TOKENS = 16
+    const val DRAFT_MAX_TOKENS = 6
+    const val INITIAL_DRAFT_TOKENS = 4
+    const val ADAPTIVE_DRAFT_MIN_TOKENS = 1
     const val MIN_DRAFT_TOKENS = 1
     const val MAX_ACCEPTED_TOKENS = 64
     const val DRAFT_MODEL_NAME = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
@@ -67,17 +69,22 @@ object SpeculativeExperimentRunner {
         var closeReason = ""
         var closeAcceptedText = ""
 
+        var currentDraftMaxTokens = INITIAL_DRAFT_TOKENS
+        var consecutiveZeroAcceptSteps = 0
+        var consecutivePositiveAcceptSteps = 0
+
         try {
             for (draftStep in 1..128) {
                 if (committedTokenIds.size >= MAX_ACCEPTED_TOKENS) {
                     break
                 }
 
+                val requestedDraftMaxTokens = currentDraftMaxTokens
                 val draftFetchStartedAt = System.currentTimeMillis()
                 val proposedTokenIds = localLlm.syncAndDraftNextRealTokenIds(
                     sessionId = localDraftSession.sessionId,
                     authoritativeTokenIds = committedTokenIds,
-                    maxTokens = DRAFT_MAX_TOKENS
+                    maxTokens = requestedDraftMaxTokens
                 )
                 val draftFetchMs = System.currentTimeMillis() - draftFetchStartedAt
                 totalDraftFetchMs += draftFetchMs
@@ -108,6 +115,26 @@ object SpeculativeExperimentRunner {
                 committedTokenIds += proposeResponse.correctionTokenIds
                 totalAcceptedTokens += proposeResponse.acceptedTokenIds.size + proposeResponse.correctionTokenIds.size
 
+                val acceptedDraftTokens = proposeResponse.acceptedCount
+                if (acceptedDraftTokens == 0) {
+                    consecutiveZeroAcceptSteps += 1
+                    consecutivePositiveAcceptSteps = 0
+                    currentDraftMaxTokens = max(
+                        ADAPTIVE_DRAFT_MIN_TOKENS,
+                        currentDraftMaxTokens / 2
+                    )
+                } else {
+                    consecutiveZeroAcceptSteps = 0
+                    consecutivePositiveAcceptSteps += 1
+                    if (
+                        consecutivePositiveAcceptSteps >= 2 &&
+                        acceptedDraftTokens >= max(1, proposedTokenIds.size / 2)
+                    ) {
+                        currentDraftMaxTokens = minOf(DRAFT_MAX_TOKENS, currentDraftMaxTokens + 1)
+                        consecutivePositiveAcceptSteps = 0
+                    }
+                }
+
                 val localApplyStartedAt = System.currentTimeMillis()
                 val localApplyMs = System.currentTimeMillis() - localApplyStartedAt
                 totalLocalApplyMs += localApplyMs
@@ -116,10 +143,14 @@ object SpeculativeExperimentRunner {
                     max(0.0, remoteProposeMs.toDouble() - proposeResponse.timingServiceTotalMs)
                 traces += buildString {
                     append("step=$draftStep")
+                    append(" draftMax=$requestedDraftMaxTokens")
+                    append(" nextDraftMax=$currentDraftMaxTokens")
                     append(" proposed=${proposedTokenIds.size}")
                     append(" accepted=${proposeResponse.acceptedCount}")
                     append(" corrections=${proposeResponse.correctionTokenIds.size}")
                     append(" committed=${committedTokenIds.size}")
+                    append(" zeroAcceptStreak=$consecutiveZeroAcceptSteps")
+                    append(" positiveAcceptStreak=$consecutivePositiveAcceptSteps")
                     append(" draftFetchMs=$draftFetchMs")
                     append(" remoteMs=$remoteProposeMs")
                     append(" localApplyMs=$localApplyMs")
@@ -168,6 +199,8 @@ object SpeculativeExperimentRunner {
             appendLine("draftModel=$DRAFT_MODEL_NAME")
             appendLine("targetModel=$TARGET_MODEL_NAME")
             appendLine("draftMaxTokens=$DRAFT_MAX_TOKENS")
+            appendLine("initialDraftTokens=$INITIAL_DRAFT_TOKENS")
+            appendLine("adaptiveDraftMinTokens=$ADAPTIVE_DRAFT_MIN_TOKENS")
             appendLine("maxAcceptedTokens=$MAX_ACCEPTED_TOKENS")
             appendLine("steps=${traces.size}")
             appendLine("committedTokens=${committedTokenIds.size}")
