@@ -435,8 +435,13 @@ static int decode_tokens_in_batches(
         const llama_tokens &tokens,
         const llama_pos start_pos,
         const bool compute_last_logit);
+static bool rebuild_runtime_to_token_sequence(
+        const struct persistent_draft_session_snapshot &session_snapshot,
+        const std::vector<llama_token> &target_sequence,
+        int predict_length);
 
 static bool is_valid_utf8(const char *string);
+static void rebuild_sampler_history_from_runtime_tokens();
 
 struct draft_tree_candidate {
     llama_token token_id;
@@ -461,10 +466,14 @@ struct runtime_branch_snapshot {
 
 struct persistent_draft_session_snapshot {
     std::vector<uint8_t> seq_state_data;
+    bool seq_state_valid;
     host_runtime_probe_snapshot host_snapshot;
+    std::vector<llama_token> prompt_prefix_tokens;
 };
 
 static std::unordered_map<std::string, persistent_draft_session_snapshot> g_persistent_draft_sessions;
+static std::string g_active_persistent_draft_session_id;
+static bool g_active_runtime_matches_committed_snapshot = false;
 
 struct draft_tree_branch {
     runtime_branch_snapshot snapshot;
@@ -851,12 +860,15 @@ static bool restore_runtime_branch_snapshot(const runtime_branch_snapshot &snaps
     return rebuild_logits_cursor_from_snapshot(snapshot.host_snapshot);
 }
 
-static persistent_draft_session_snapshot capture_persistent_draft_session_snapshot() {
+static persistent_draft_session_snapshot capture_persistent_draft_session_snapshot(
+        const std::vector<llama_token> &prompt_prefix_tokens = {}) {
     constexpr llama_seq_id seq_id = 0;
     const size_t seq_state_size = llama_state_seq_get_size(g_context, seq_id);
     persistent_draft_session_snapshot snapshot {
             std::vector<uint8_t>(seq_state_size),
-            capture_host_runtime_snapshot()
+            true,
+            capture_host_runtime_snapshot(),
+            prompt_prefix_tokens
     };
     const size_t saved_size = llama_state_seq_get_data(
             g_context,
@@ -868,6 +880,9 @@ static persistent_draft_session_snapshot capture_persistent_draft_session_snapsh
 }
 
 static bool restore_persistent_draft_session_snapshot(const persistent_draft_session_snapshot &snapshot) {
+    if (!snapshot.seq_state_valid) {
+        return false;
+    }
     constexpr llama_seq_id seq_id = 0;
     llama_memory_seq_rm(llama_get_memory(g_context), seq_id, -1, -1);
     if (llama_state_seq_set_data(
@@ -887,7 +902,281 @@ static bool restore_persistent_draft_session_snapshot(const persistent_draft_ses
     assistant_ss.clear();
     assistant_ss << snapshot.host_snapshot.assistant_text;
     runtime_token_history = snapshot.host_snapshot.runtime_token_history;
-    return rebuild_logits_cursor_from_snapshot(snapshot.host_snapshot);
+    if (!rebuild_logits_cursor_from_snapshot(snapshot.host_snapshot)) {
+        return false;
+    }
+    rebuild_sampler_history_from_runtime_tokens();
+    return true;
+}
+
+static bool rollback_active_runtime_to_committed_snapshot(const persistent_draft_session_snapshot &snapshot) {
+    const auto &host_snapshot = snapshot.host_snapshot;
+    if (current_position < host_snapshot.current_position) {
+        return false;
+    }
+    if (runtime_token_history.size() < host_snapshot.runtime_token_history.size()) {
+        return false;
+    }
+    if (!std::equal(
+                host_snapshot.runtime_token_history.begin(),
+                host_snapshot.runtime_token_history.end(),
+                runtime_token_history.begin())) {
+        return false;
+    }
+
+    if (current_position > host_snapshot.current_position) {
+        if (!llama_memory_seq_rm(
+                    llama_get_memory(g_context),
+                    0,
+                    host_snapshot.current_position,
+                    current_position)) {
+            return false;
+        }
+    }
+
+    system_prompt_position = host_snapshot.system_prompt_position;
+    current_position = host_snapshot.current_position;
+    stop_generation_position = host_snapshot.stop_generation_position;
+    cached_token_chars = host_snapshot.cached_token_chars;
+    assistant_ss.str("");
+    assistant_ss.clear();
+    assistant_ss << host_snapshot.assistant_text;
+    runtime_token_history = host_snapshot.runtime_token_history;
+    if (!rebuild_logits_cursor_from_snapshot(host_snapshot)) {
+        return false;
+    }
+    rebuild_sampler_history_from_runtime_tokens();
+    return true;
+}
+
+static size_t token_lcp_length(
+        const std::vector<llama_token> &lhs,
+        const std::vector<llama_token> &rhs) {
+    const size_t limit = std::min(lhs.size(), rhs.size());
+    size_t index = 0;
+    while (index < limit && lhs[index] == rhs[index]) {
+        ++index;
+    }
+    return index;
+}
+
+static void rebuild_sampler_history_from_runtime_tokens() {
+    if (g_sampler == nullptr) {
+        return;
+    }
+    common_sampler_reset(g_sampler);
+    for (const llama_token token_id : runtime_token_history) {
+        common_sampler_accept(g_sampler, token_id, false);
+    }
+}
+
+static bool refresh_runtime_tail_logits() {
+    if (runtime_token_history.empty() || current_position <= 0) {
+        return true;
+    }
+
+    const llama_pos tail_position = current_position - 1;
+    const llama_token tail_token = runtime_token_history.back();
+    if (!llama_memory_seq_rm(
+            llama_get_memory(g_context),
+            0,
+            tail_position,
+            current_position)) {
+        LOGw("%s: failed to remove tail token before refresh", __func__);
+    }
+
+    common_batch_clear(g_batch);
+    common_batch_add(g_batch, tail_token, tail_position, {0}, true);
+    if (llama_decode(g_context, g_batch) != 0) {
+        LOGe("%s: failed to refresh tail logits", __func__);
+        return false;
+    }
+    return true;
+}
+
+static bool rebuild_runtime_to_token_sequence(
+        const persistent_draft_session_snapshot &session_snapshot,
+        const std::vector<llama_token> &target_sequence,
+        const int predict_length) {
+    reset_long_term_states();
+    reset_short_term_states();
+    if (g_sampler != nullptr) {
+        common_sampler_reset(g_sampler);
+    }
+    if (!target_sequence.empty() &&
+        decode_tokens_in_batches(g_context, g_batch, target_sequence, 0, true) != 0) {
+        LOGe("%s: failed to rebuild runtime from token sequence", __func__);
+        return false;
+    }
+
+    append_runtime_tokens(target_sequence);
+    current_position = static_cast<llama_pos>(target_sequence.size());
+    system_prompt_position = session_snapshot.host_snapshot.system_prompt_position;
+    stop_generation_position = current_position + std::max(1, predict_length);
+    cached_token_chars.clear();
+    assistant_ss.str("");
+    assistant_ss.clear();
+    // Keep split draft sync token-first on the hot path.
+    // Reconstructing full assistant text here is O(prefix) and not needed for real-token draft proposal.
+    rebuild_sampler_history_from_runtime_tokens();
+    return true;
+}
+
+static bool sync_runtime_to_authoritative_tokens(
+        const persistent_draft_session_snapshot &session_snapshot,
+        const std::vector<llama_token> &authoritative_token_ids,
+        const int predict_length) {
+    std::vector<llama_token> target_sequence = session_snapshot.prompt_prefix_tokens;
+    target_sequence.insert(
+            target_sequence.end(),
+            authoritative_token_ids.begin(),
+            authoritative_token_ids.end());
+
+    const size_t common_prefix = token_lcp_length(runtime_token_history, target_sequence);
+    const bool mismatch_inside_prefix = common_prefix < std::min(runtime_token_history.size(), target_sequence.size());
+
+    if (mismatch_inside_prefix) {
+        return rebuild_runtime_to_token_sequence(session_snapshot, target_sequence, predict_length);
+    }
+
+    if (runtime_token_history.size() > target_sequence.size()) {
+        if (!llama_memory_seq_rm(
+                llama_get_memory(g_context),
+                0,
+                static_cast<llama_pos>(target_sequence.size()),
+                current_position)) {
+            return false;
+        }
+        runtime_token_history.resize(target_sequence.size());
+        current_position = static_cast<llama_pos>(target_sequence.size());
+    }
+
+    if (runtime_token_history.size() < target_sequence.size()) {
+        llama_tokens missing_tokens(
+                target_sequence.begin() + static_cast<long>(runtime_token_history.size()),
+                target_sequence.end());
+        if (decode_tokens_in_batches(g_context, g_batch, missing_tokens, current_position, true) != 0) {
+            LOGe("%s: failed to append authoritative tail", __func__);
+            return false;
+        }
+        append_runtime_tokens(missing_tokens);
+        current_position += static_cast<llama_pos>(missing_tokens.size());
+    } else if (!refresh_runtime_tail_logits()) {
+        return false;
+    }
+
+    system_prompt_position = session_snapshot.host_snapshot.system_prompt_position;
+    stop_generation_position = current_position + std::max(1, predict_length);
+    cached_token_chars.clear();
+    assistant_ss.str("");
+    assistant_ss.clear();
+    // Keep split draft sync token-first on the hot path.
+    // Reconstructing full assistant text here is O(prefix) and not needed for real-token draft proposal.
+    rebuild_sampler_history_from_runtime_tokens();
+    return true;
+}
+
+static void clear_active_persistent_draft_runtime();
+static void mark_active_persistent_draft_runtime(
+        const std::string &session_id,
+        const bool matches_committed_snapshot);
+
+static bool ensure_runtime_ready_for_authoritative_sync(
+        const std::string &session_id,
+        const persistent_draft_session_snapshot &snapshot) {
+    if (session_id == g_active_persistent_draft_session_id) {
+        return true;
+    }
+
+    if (!snapshot.seq_state_valid) {
+        const int predict_length = std::max(
+                1,
+                static_cast<int>(snapshot.host_snapshot.stop_generation_position - snapshot.host_snapshot.current_position));
+        if (rebuild_runtime_to_token_sequence(
+                snapshot,
+                snapshot.host_snapshot.runtime_token_history,
+                predict_length)) {
+            mark_active_persistent_draft_runtime(session_id, true);
+            return true;
+        }
+    }
+
+    if (restore_persistent_draft_session_snapshot(snapshot)) {
+        mark_active_persistent_draft_runtime(session_id, true);
+        return true;
+    }
+
+    clear_active_persistent_draft_runtime();
+    return false;
+}
+
+static std::vector<jint> generate_real_draft_token_ids(const jint max_tokens) {
+    std::vector<jint> draft_ids;
+    draft_ids.reserve(std::max(0, static_cast<int>(max_tokens)));
+    bool drafted_any = false;
+
+    for (int step = 0; step < max_tokens; ++step) {
+        if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+            shift_context();
+        }
+
+        if (current_position >= stop_generation_position) {
+            break;
+        }
+
+        llama_token new_token_id = LLAMA_TOKEN_NULL;
+        std::string new_token_chars;
+        float new_token_probability = 0.0f;
+        if (!next_real_draft_candidate(new_token_id, new_token_chars, new_token_probability)) {
+            break;
+        }
+        common_sampler_accept(g_sampler, new_token_id, true);
+
+        common_batch_clear(g_batch);
+        common_batch_add(g_batch, new_token_id, current_position, {0}, true);
+        if (llama_decode(g_context, g_batch) != 0) {
+            LOGe("%s: llama_decode() failed for real draft token", __func__);
+            break;
+        }
+
+        current_position++;
+
+        if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
+            chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
+            break;
+        }
+
+        cached_token_chars += new_token_chars;
+        if (is_valid_utf8(cached_token_chars.c_str())) {
+            assistant_ss << cached_token_chars;
+            cached_token_chars.clear();
+        }
+
+        draft_ids.push_back(static_cast<jint>(new_token_id));
+        drafted_any = true;
+
+        if (new_token_probability < DEFAULT_SPECULATIVE_DRAFT_P_MIN) {
+            break;
+        }
+    }
+
+    if (!g_active_persistent_draft_session_id.empty() && drafted_any) {
+        g_active_runtime_matches_committed_snapshot = false;
+    }
+
+    return draft_ids;
+}
+
+static void clear_active_persistent_draft_runtime() {
+    g_active_persistent_draft_session_id.clear();
+    g_active_runtime_matches_committed_snapshot = false;
+}
+
+static void mark_active_persistent_draft_runtime(
+        const std::string &session_id,
+        const bool matches_committed_snapshot) {
+    g_active_persistent_draft_session_id = session_id;
+    g_active_runtime_matches_committed_snapshot = matches_committed_snapshot;
 }
 
 static bool advance_runtime_with_token(const llama_token token_id, const std::string &token_text) {
@@ -1002,6 +1291,7 @@ static int reset_draft_context_internal(
         const std::string &user,
         const std::string &assistant,
         const int predict_length) {
+    clear_active_persistent_draft_runtime();
     reset_long_term_states();
     reset_short_term_states();
     if (g_sampler != nullptr) {
@@ -1314,7 +1604,8 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_startPersisten
         return 100 + reset_result;
     }
 
-    g_persistent_draft_sessions[session_id] = capture_persistent_draft_session_snapshot();
+    g_persistent_draft_sessions[session_id] = capture_persistent_draft_session_snapshot(runtime_token_history);
+    mark_active_persistent_draft_runtime(session_id, true);
     return 0;
 }
 
@@ -1330,14 +1621,39 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_restorePersist
         env->ReleaseStringUTFChars(jsession_id, session_id_chars);
     }
 
-    const auto it = g_persistent_draft_sessions.find(session_id);
+    auto it = g_persistent_draft_sessions.find(session_id);
     if (it == g_persistent_draft_sessions.end()) {
         return 1;
     }
     if (g_sampler != nullptr) {
         common_sampler_reset(g_sampler);
     }
-    return restore_persistent_draft_session_snapshot(it->second) ? 0 : 2;
+    if (session_id == g_active_persistent_draft_session_id && g_active_runtime_matches_committed_snapshot) {
+        return 0;
+    }
+    if (session_id == g_active_persistent_draft_session_id &&
+        rollback_active_runtime_to_committed_snapshot(it->second)) {
+        mark_active_persistent_draft_runtime(session_id, true);
+        return 0;
+    }
+    if (!it->second.seq_state_valid) {
+        const int predict_length = std::max(
+                1,
+                static_cast<int>(it->second.host_snapshot.stop_generation_position - it->second.host_snapshot.current_position));
+        if (rebuild_runtime_to_token_sequence(
+                it->second,
+                it->second.host_snapshot.runtime_token_history,
+                predict_length)) {
+            mark_active_persistent_draft_runtime(session_id, true);
+            return 0;
+        }
+    }
+    if (!restore_persistent_draft_session_snapshot(it->second)) {
+        clear_active_persistent_draft_runtime();
+        return 2;
+    }
+    mark_active_persistent_draft_runtime(session_id, true);
+    return 0;
 }
 
 extern "C"
@@ -1354,7 +1670,7 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_commitPersiste
         env->ReleaseStringUTFChars(jsession_id, session_id_chars);
     }
 
-    const auto it = g_persistent_draft_sessions.find(session_id);
+    auto it = g_persistent_draft_sessions.find(session_id);
     if (it == g_persistent_draft_sessions.end()) {
         return 1;
     }
@@ -1362,7 +1678,12 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_commitPersiste
     if (g_sampler != nullptr) {
         common_sampler_reset(g_sampler);
     }
-    if (!restore_persistent_draft_session_snapshot(it->second)) {
+    const bool restored = (
+            session_id == g_active_persistent_draft_session_id &&
+            rollback_active_runtime_to_committed_snapshot(it->second))
+        || restore_persistent_draft_session_snapshot(it->second);
+    if (!restored) {
+        clear_active_persistent_draft_runtime();
         return 2;
     }
 
@@ -1384,7 +1705,56 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_commitPersiste
     }
 
     stop_generation_position = current_position + std::max(1, static_cast<int>(predict_length));
-    it->second = capture_persistent_draft_session_snapshot();
+    it->second = capture_persistent_draft_session_snapshot(it->second.prompt_prefix_tokens);
+    mark_active_persistent_draft_runtime(session_id, true);
+    return 0;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_syncPersistentDraftSession(
+        JNIEnv *env,
+        jobject /* unused */,
+        jstring jsession_id,
+        jintArray jauthoritative_token_ids,
+        jint predict_length) {
+    const auto *session_id_chars = env->GetStringUTFChars(jsession_id, nullptr);
+    const std::string session_id(session_id_chars ? session_id_chars : "");
+    if (session_id_chars != nullptr) {
+        env->ReleaseStringUTFChars(jsession_id, session_id_chars);
+    }
+
+    const auto it = g_persistent_draft_sessions.find(session_id);
+    if (it == g_persistent_draft_sessions.end()) {
+        return 1;
+    }
+
+    const jsize token_count = jauthoritative_token_ids == nullptr ? 0 : env->GetArrayLength(jauthoritative_token_ids);
+    std::vector<jint> raw_token_ids(static_cast<size_t>(std::max<jsize>(0, token_count)));
+    if (token_count > 0) {
+        env->GetIntArrayRegion(jauthoritative_token_ids, 0, token_count, raw_token_ids.data());
+    }
+
+    std::vector<llama_token> authoritative_token_ids;
+    authoritative_token_ids.reserve(raw_token_ids.size());
+    for (const jint raw_token_id : raw_token_ids) {
+        if (raw_token_id >= 0) {
+            authoritative_token_ids.push_back(static_cast<llama_token>(raw_token_id));
+        }
+    }
+
+    if (!ensure_runtime_ready_for_authoritative_sync(session_id, it->second)) {
+        return 2;
+    }
+
+    if (!sync_runtime_to_authoritative_tokens(it->second, authoritative_token_ids, predict_length)) {
+        clear_active_persistent_draft_runtime();
+        return 3;
+    }
+
+    it->second.host_snapshot = capture_host_runtime_snapshot();
+    it->second.seq_state_valid = false;
+    mark_active_persistent_draft_runtime(session_id, true);
     return 0;
 }
 
@@ -1400,6 +1770,9 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_closePersisten
         env->ReleaseStringUTFChars(jsession_id, session_id_chars);
     }
     g_persistent_draft_sessions.erase(session_id);
+    if (session_id == g_active_persistent_draft_session_id) {
+        clear_active_persistent_draft_runtime();
+    }
 }
 
 extern "C"
@@ -1461,54 +1834,69 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_generateDraftR
         JNIEnv *env,
         jobject /* unused */,
         jint max_tokens) {
-    std::vector<jint> draft_ids;
-    draft_ids.reserve(std::max(0, (int) max_tokens));
+    const std::vector<jint> draft_ids = generate_real_draft_token_ids(max_tokens);
 
-    for (int step = 0; step < max_tokens; ++step) {
-        if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
-            shift_context();
-        }
+    jintArray result = env->NewIntArray((jsize) draft_ids.size());
+    if (result == nullptr || draft_ids.empty()) {
+        return result;
+    }
+    env->SetIntArrayRegion(result, 0, (jsize) draft_ids.size(), draft_ids.data());
+    return result;
+}
 
-        if (current_position >= stop_generation_position) {
-            break;
-        }
+extern "C"
+JNIEXPORT jintArray JNICALL
+Java_com_example_myapplication_llama_internal_InferenceEngineImpl_syncAndGenerateDraftRealTokenIds(
+        JNIEnv *env,
+        jobject /* unused */,
+        jstring jsession_id,
+        jintArray jauthoritative_token_ids,
+        jint predict_length,
+        jint max_tokens) {
+    const auto *session_id_chars = env->GetStringUTFChars(jsession_id, nullptr);
+    const std::string session_id(session_id_chars ? session_id_chars : "");
+    if (session_id_chars != nullptr) {
+        env->ReleaseStringUTFChars(jsession_id, session_id_chars);
+    }
 
-        llama_token new_token_id = LLAMA_TOKEN_NULL;
-        std::string new_token_chars;
-        float new_token_probability = 0.0f;
-        if (!next_real_draft_candidate(new_token_id, new_token_chars, new_token_probability)) {
-            break;
-        }
-        common_sampler_accept(g_sampler, new_token_id, true);
+    jintArray result = env->NewIntArray(0);
+    if (session_id.empty()) {
+        return result;
+    }
 
-        common_batch_clear(g_batch);
-        common_batch_add(g_batch, new_token_id, current_position, {0}, true);
-        if (llama_decode(g_context, g_batch) != 0) {
-            LOGe("%s: llama_decode() failed for real draft token", __func__);
-            break;
-        }
+    const auto it = g_persistent_draft_sessions.find(session_id);
+    if (it == g_persistent_draft_sessions.end()) {
+        return result;
+    }
 
-        current_position++;
+    const jsize token_count = jauthoritative_token_ids == nullptr ? 0 : env->GetArrayLength(jauthoritative_token_ids);
+    std::vector<jint> raw_token_ids(static_cast<size_t>(std::max<jsize>(0, token_count)));
+    if (token_count > 0) {
+        env->GetIntArrayRegion(jauthoritative_token_ids, 0, token_count, raw_token_ids.data());
+    }
 
-        if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
-            chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
-            break;
-        }
-
-        cached_token_chars += new_token_chars;
-        if (is_valid_utf8(cached_token_chars.c_str())) {
-            assistant_ss << cached_token_chars;
-            cached_token_chars.clear();
-        }
-
-        draft_ids.push_back(static_cast<jint>(new_token_id));
-
-        if (new_token_probability < DEFAULT_SPECULATIVE_DRAFT_P_MIN) {
-            break;
+    std::vector<llama_token> authoritative_token_ids;
+    authoritative_token_ids.reserve(raw_token_ids.size());
+    for (const jint raw_token_id : raw_token_ids) {
+        if (raw_token_id >= 0) {
+            authoritative_token_ids.push_back(static_cast<llama_token>(raw_token_id));
         }
     }
 
-    jintArray result = env->NewIntArray((jsize) draft_ids.size());
+    if (!ensure_runtime_ready_for_authoritative_sync(session_id, it->second)) {
+        return result;
+    }
+    if (!sync_runtime_to_authoritative_tokens(it->second, authoritative_token_ids, predict_length)) {
+        clear_active_persistent_draft_runtime();
+        return result;
+    }
+
+    it->second.host_snapshot = capture_host_runtime_snapshot();
+    it->second.seq_state_valid = false;
+    mark_active_persistent_draft_runtime(session_id, true);
+
+    const std::vector<jint> draft_ids = generate_real_draft_token_ids(max_tokens);
+    result = env->NewIntArray((jsize) draft_ids.size());
     if (result == nullptr || draft_ids.empty()) {
         return result;
     }
@@ -2035,6 +2423,7 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_unload(
     reset_long_term_states();
     reset_short_term_states();
     g_persistent_draft_sessions.clear();
+    clear_active_persistent_draft_runtime();
 
     common_sampler_free(g_sampler);
     g_chat_templates.reset();
