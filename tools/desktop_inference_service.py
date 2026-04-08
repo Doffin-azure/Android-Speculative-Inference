@@ -2664,6 +2664,16 @@ def start_llama_cpp_native_target_session(
         sessionId=target_session.target_session_id,
         systemPrompt=session.system_prompt,
         userPrompt=session.user_prompt,
+        samplingConfig={
+            "temperature": session.temperature,
+            "topP": session.top_p,
+            "topK": 1,
+            "minP": 0.0,
+            "penaltyRepeat": 1.0,
+            "penaltyFreq": 0.0,
+            "penaltyPresent": 0.0,
+            "seed": target_session.verifier_sampling_seed,
+        },
     )
     target_session.true_runtime_backend = (
         "desktop_target_runtime_llama_cpp_spec_split"
@@ -3006,6 +3016,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         base_status = "accepted"
     else:
         base_status = "accepted" if not computation.correction_token_ids and computation.rejected_from_index == -1 else "corrected"
+    native_split_mode = session.verifier_mode in {"llama_cpp_spec_native", "llama_cpp_spec_split"}
+
     if session.verifier_mode == "llama_replay_proxy":
         status = f"{base_status}_by_llama_replay"
     elif session.verifier_mode == "llama_true_step":
@@ -3068,10 +3080,73 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "Desktop speculative verification is currently a deterministic prompt-derived stub. "
         "It now computes accepted prefixes and correction tokens, but it still does not run target-model token verification yet."
     )
+    if native_split_mode:
+        warning = ""
     if session.verifier_mode == "llama_true_tree_pq_tokens" and debug_acceptance_mode == "fallback_piece_prefix":
         warning += (
             " This run fell back to piece-prefix acceptance because the desktop verifier did not receive a usable real-token draft-tree payload."
         )
+
+    debug_payload = {
+        "targetSessionId": session.target_session_id,
+        "verifierMode": session.verifier_mode,
+        "tokenMode": debug_token_mode,
+        "acceptanceMode": debug_acceptance_mode,
+        "targetIndexBeforeStep": computation.target_index_before_step,
+        "targetRemainingCount": computation.target_remaining_count,
+        "targetPreview": computation.target_preview_debug,
+        "llamaPreviewText": session.target_preview_text,
+        "acceptedText": session.accepted_text,
+        "lastReplayPrompt": session.last_replay_prompt,
+        "trueVerifierCallCount": target_session.true_verifier_call_count,
+        "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
+        "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
+        "truePrefixCacheSize": len(target_session.true_prefix_cache),
+        "cachedTruePrefixText": latest_cached_prefix,
+        "cachedTrueNextText": latest_cached_next,
+        "trueRuntimeBackend": target_session.true_runtime_backend,
+        "llamaServerSlotId": target_session.llama_server_slot_id,
+        "lastTrueChunkStart": target_session.last_true_chunk_start,
+        "lastTrueChunkConsumed": target_session.last_true_chunk_consumed,
+        "trueCacheHitStreak": target_session.true_cache_hit_streak,
+        "trueFetchStreak": target_session.true_fetch_streak,
+        "treeCandidateCount": computation.tree_candidate_count,
+        "treeBestPathTokenIds": computation.tree_best_path_token_ids or [],
+        "treeBranchFactor": computation.tree_branch_factor,
+        "treeDepthEvaluated": computation.tree_depth_evaluated,
+        "treeDebugSummary": computation.tree_debug_summary,
+        "draftTreeNodeCount": draft_tree.node_count if draft_tree is not None else 0,
+        "draftTreeDepthEvaluated": draft_tree.depth_evaluated if draft_tree is not None else 0,
+        "draftTreeBestPathNodeIndices": draft_tree.best_path_node_indices if draft_tree is not None else [],
+        "draftPathStepCount": len(draft_tree.draft_path_steps) if draft_tree is not None else 0,
+        "timingPrepareMs": computation.timing_prepare_ms,
+        "timingDecodeMs": computation.timing_decode_ms,
+        "timingSampleMs": computation.timing_sample_ms,
+        "timingRollbackMs": computation.timing_rollback_ms,
+        "timingHelperTotalMs": computation.timing_helper_total_ms,
+        "timingHelperRoundTripMs": computation.timing_helper_round_trip_ms,
+        "timingServiceTotalMs": computation.timing_service_total_ms,
+    }
+    if native_split_mode:
+        debug_payload = {
+            "targetSessionId": session.target_session_id,
+            "verifierMode": session.verifier_mode,
+            "tokenMode": debug_token_mode,
+            "acceptanceMode": debug_acceptance_mode,
+            "trueRuntimeBackend": target_session.true_runtime_backend,
+            "llamaServerSlotId": target_session.llama_server_slot_id,
+            "lastTrueChunkStart": target_session.last_true_chunk_start,
+            "lastTrueChunkConsumed": target_session.last_true_chunk_consumed,
+            "trueCacheHitStreak": target_session.true_cache_hit_streak,
+            "trueFetchStreak": target_session.true_fetch_streak,
+            "timingPrepareMs": computation.timing_prepare_ms,
+            "timingDecodeMs": computation.timing_decode_ms,
+            "timingSampleMs": computation.timing_sample_ms,
+            "timingRollbackMs": computation.timing_rollback_ms,
+            "timingHelperTotalMs": computation.timing_helper_total_ms,
+            "timingHelperRoundTripMs": computation.timing_helper_round_trip_ms,
+            "timingServiceTotalMs": computation.timing_service_total_ms,
+        }
 
     return {
         "protocolVersion": session.protocol_version,
@@ -3093,48 +3168,9 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "tokenMode": debug_token_mode,
         "acceptanceMode": debug_acceptance_mode,
         "warning": warning,
-        "acceptedText": session.accepted_text,
+        "acceptedText": "" if native_split_mode else session.accepted_text,
         "error": "",
-        "debug": {
-            "targetSessionId": session.target_session_id,
-            "verifierMode": session.verifier_mode,
-            "tokenMode": debug_token_mode,
-            "acceptanceMode": debug_acceptance_mode,
-            "targetIndexBeforeStep": computation.target_index_before_step,
-            "targetRemainingCount": computation.target_remaining_count,
-            "targetPreview": computation.target_preview_debug,
-            "llamaPreviewText": session.target_preview_text,
-            "acceptedText": session.accepted_text,
-            "lastReplayPrompt": session.last_replay_prompt,
-            "trueVerifierCallCount": target_session.true_verifier_call_count,
-            "lastTrueExpectedTokenId": target_session.last_true_expected_token_id,
-            "lastTrueExpectedTokenText": target_session.last_true_expected_token_text,
-            "truePrefixCacheSize": len(target_session.true_prefix_cache),
-            "cachedTruePrefixText": latest_cached_prefix,
-            "cachedTrueNextText": latest_cached_next,
-            "trueRuntimeBackend": target_session.true_runtime_backend,
-            "llamaServerSlotId": target_session.llama_server_slot_id,
-            "lastTrueChunkStart": target_session.last_true_chunk_start,
-            "lastTrueChunkConsumed": target_session.last_true_chunk_consumed,
-            "trueCacheHitStreak": target_session.true_cache_hit_streak,
-            "trueFetchStreak": target_session.true_fetch_streak,
-            "treeCandidateCount": computation.tree_candidate_count,
-            "treeBestPathTokenIds": computation.tree_best_path_token_ids or [],
-            "treeBranchFactor": computation.tree_branch_factor,
-            "treeDepthEvaluated": computation.tree_depth_evaluated,
-            "treeDebugSummary": computation.tree_debug_summary,
-            "draftTreeNodeCount": draft_tree.node_count if draft_tree is not None else 0,
-            "draftTreeDepthEvaluated": draft_tree.depth_evaluated if draft_tree is not None else 0,
-            "draftTreeBestPathNodeIndices": draft_tree.best_path_node_indices if draft_tree is not None else [],
-            "draftPathStepCount": len(draft_tree.draft_path_steps) if draft_tree is not None else 0,
-            "timingPrepareMs": computation.timing_prepare_ms,
-            "timingDecodeMs": computation.timing_decode_ms,
-            "timingSampleMs": computation.timing_sample_ms,
-            "timingRollbackMs": computation.timing_rollback_ms,
-            "timingHelperTotalMs": computation.timing_helper_total_ms,
-            "timingHelperRoundTripMs": computation.timing_helper_round_trip_ms,
-            "timingServiceTotalMs": computation.timing_service_total_ms,
-        },
+        "debug": debug_payload,
     }
 
 

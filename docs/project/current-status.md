@@ -407,6 +407,35 @@ Practical interpretation:
 - use the probe endpoint and desktop request log first when debugging "cannot connect" failures
 - treat the current local and ordinary remote paths as proven baselines, not open hypotheses
 
+## Latest Collaboration Compression Status
+
+The current best Android split result is now:
+
+- run: `2026-04-08T14:56:01+08-00`
+- output: [android_spec_split_app_output_2026-04-08T14-56-01+08-00.txt](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/reference/spec-split-demo-project/experiments/2026-04-08/android_spec_split_app_output_2026-04-08T14-56-01+08-00.txt)
+- paired comparison: [android_local_vs_split_comparison_2026-04-08T14-57-30+08-00.json](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/reference/spec-split-demo-project/experiments/2026-04-08/android_local_vs_split_comparison_2026-04-08T14-57-30+08-00.json)
+- `committedTokens=64`
+- `totalProposedTokens=67`
+- accepted/proposed `= 40 / 67 = 59.70%`
+- `totalMs=5669`
+- `totalDraftFetchMs=3691`
+- `totalRemoteProposeMs=1840`
+- `overallTokensPerSecond=11.289`
+- Android split remote-propose share: `32.46%`
+- Android split draft-side throughput vs refreshed local baseline: `18.152 tok/s` vs `17.616 tok/s`
+
+The latest positive change set was:
+
+- remove first-round helper sampler rebuild by passing final split sampling config during native helper `start_session`
+- trim per-round split/native verifier response payloads so the service only returns essential timing/runtime fields
+
+Interpretation:
+
+- Android-side model compute still does not regress against the phone-local baseline
+- transport-only loss is already small; the remaining gap is still verifier-side cooperative work
+- the middle-collaboration loss target of `<10%` is not met yet, so optimization must continue from this state
+- use [collaboration-acceleration-history.md](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/docs/project/collaboration-acceleration-history.md) as the running ledger of all kept and reverted acceleration attempts
+
 ## Definition Of Done For The Next Node
 
 The next node is complete when all of the following are true:

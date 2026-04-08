@@ -264,6 +264,43 @@ Interpretation:
 - Android-side draft compute still did not regress relative to the local-only baseline
 - the main limiter is no longer overwhelmingly `remotePropose`; the split lane is now closer to balanced between verifier cost and draft-side runtime maintenance
 
+## Latest Compression Follow-Up
+
+Two more verifier-boundary compression passes were tested on `2026-04-08`:
+
+1. split/native response thinning
+2. native helper start-session sampling alignment
+
+The important semantic point is that neither change altered the draft/verify contract:
+
+- Android still owns the draft runtime state
+- desktop still owns verifier state
+- accepted prefix semantics, correction semantics, and rollback behavior are unchanged
+
+The second change was the one that clearly mattered. By giving the helper its final sampling config during `start_session`, the split verifier no longer had to rebuild the sampler and replay the prompt again on round 1.
+
+Latest measured result:
+
+- run: `2026-04-08T14:56:01+08:00`
+- output: [android_spec_split_app_output_2026-04-08T14-56-01+08-00.txt](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/reference/spec-split-demo-project/experiments/2026-04-08/android_spec_split_app_output_2026-04-08T14-56-01+08-00.txt)
+- comparison: [android_local_vs_split_comparison_2026-04-08T14-57-30+08-00.json](/C:/Users/JXZ/AndroidStudioProjects/MyApplication2/reference/spec-split-demo-project/experiments/2026-04-08/android_local_vs_split_comparison_2026-04-08T14-57-30+08-00.json)
+- `totalMs=5669`
+- `totalRemoteProposeMs=1840`
+- `overallTokensPerSecond=11.289`
+- split remote share: `32.46%`
+
+Direct comparison against the earlier thread-budget best run `2026-04-08T14:27:55+08:00`:
+
+- `totalRemoteProposeMs`: `1934 -> 1840`
+- `totalMs`: `5772 -> 5669`
+- step 1 `prepareMs`: about `142-160 ms -> 0 ms`
+
+Interpretation:
+
+- parity is still preserved because only helper startup/state preparation changed
+- Android draft speed remains aligned with the local baseline
+- the remaining bottleneck is still not just transport; it is the persistent verifier round cost
+
 ## Recording Rule
 
 Every new split optimization experiment must record:
