@@ -598,7 +598,9 @@ json handle_verify_draft_batch(const json & request, const bool split_mode = fal
     response["rejectedFromIndex"] = fully_accepted ? -1 : accepted_draft_count;
     response["targetTextDelta"] = common_detokenize(g_runtime.vocab, returned_tokens, true);
     response["targetSampledTokenIds"] = sampled_tokens;
-    response["acceptedTextAfterStep"] = common_detokenize(g_runtime.vocab, session.accepted_tokens, true);
+    // The service can reconstruct cumulative accepted text by appending the
+    // per-step delta, so avoid an O(prefix) detokenize on every helper round.
+    response["acceptedTextAfterStep"] = "";
     response["finishReason"] = "";
     response["targetIndexBeforeStep"] = static_cast<int>(session.accepted_tokens.size() - returned_tokens.size());
     response["targetRemainingCount"] = 0;

@@ -2121,11 +2121,16 @@ def apply_verify_computation_to_sessions(
     session.accepted_token_ids.extend(committed_token_ids)
     session.accepted_token_count = len(session.accepted_token_ids)
     session.correction_token_ids = computation.correction_token_ids[:max_correction_tokens]
-    session.accepted_text = computation.accepted_text_after_step or render_token_ids_for_verifier(
-        config,
-        target_session,
-        session.accepted_token_ids,
-    )
+    if computation.accepted_text_after_step:
+        session.accepted_text = computation.accepted_text_after_step
+    elif computation.target_text_delta:
+        session.accepted_text = f"{session.accepted_text}{computation.target_text_delta}"
+    else:
+        session.accepted_text = render_token_ids_for_verifier(
+            config,
+            target_session,
+            session.accepted_token_ids,
+        )
     session.target_token_ids = session.accepted_token_ids[:]
     session.last_target_text_delta = computation.target_text_delta
     session.last_finish_reason = computation.finish_reason
@@ -3347,6 +3352,7 @@ class InferenceRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 

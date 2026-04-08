@@ -7,6 +7,7 @@ Its purpose is to keep high-signal operational knowledge in one place instead of
 ## Recommended Read Order
 
 1. `project/current-status.md`
+2. `project/split-parity-tracker.md`
 2. `environment/desktop-gguf-runtime-supplement.md`
 3. `workflow/collaboration-rules.md`
 4. `archive/root-document-map.md`
@@ -40,6 +41,7 @@ Instead:
 ## Current Most Useful Documents
 
 - `project/current-status.md`
+- `project/split-parity-tracker.md`
   Use this first when resuming technical work and deciding what to do next.
 - `project/project-progress-summary.md`
   Use this when you want a single milestone summary of everything that has already been completed so far.

@@ -223,18 +223,22 @@ try {
 
     Invoke-Adb @("logcat", "-c") | Out-Null
 
-    $receiverArgs = @("shell", "am", "broadcast", "-n", $receiverComponent, "--es", "baseUrl", $BaseUrl)
-    $startResult = Invoke-AdbCapture -CommandArgs $receiverArgs
+    $serviceShellCommand =
+        "am start-foreground-service -n $serviceComponent --es baseUrl " +
+        (New-ShellSingleQuoted $BaseUrl) +
+        " --es prompt " +
+        (New-ShellSingleQuoted $Prompt)
+    $startResult = Invoke-AdbCapture -CommandArgs @("shell", $serviceShellCommand)
     if ($startResult.ExitCode -ne 0) {
         $resultStatus = "blocked_runtime"
-        $failureReason = "receiver_start_failed"
-        throw "Failed to trigger Android speculative experiment receiver.`n$($startResult.Output)"
+        $failureReason = "service_start_failed"
+        throw "Failed to start Android speculative experiment service.`n$($startResult.Output)"
     }
     Set-Content -Path $broadcastOutputPath -Value $startResult.Output
-    Write-Host "[android-spec] receiver broadcast completed"
+    Write-Host "[android-spec] foreground service start completed"
 
     $latestText = ""
-    for ($i = 0; $i -lt 90; $i++) {
+    for ($i = 0; $i -lt 240; $i++) {
         if ($i -gt 0) {
             Start-Sleep -Seconds 2
         }
