@@ -75,7 +75,7 @@ data class SpeculativeProposeRequest(
     val sessionId: String,
     val draftStep: Int,
     val proposedTokenIds: List<Int>,
-    val proposedText: String,
+    val proposedText: String = "",
     val maxCorrectionTokens: Int = 1,
     val draftTree: DraftTreeProposal? = null
 )
@@ -105,6 +105,13 @@ data class SpeculativeProposeResponse(
     val treeBranchFactor: Int,
     val treeDepthEvaluated: Int,
     val treeDebugSummary: String,
+    val timingPrepareMs: Double,
+    val timingDecodeMs: Double,
+    val timingSampleMs: Double,
+    val timingRollbackMs: Double,
+    val timingHelperTotalMs: Double,
+    val timingHelperRoundTripMs: Double,
+    val timingServiceTotalMs: Double,
     val draftTreeNodeCount: Int,
     val draftTreeDepthEvaluated: Int,
     val draftTreeBestPathNodeIndices: List<Int>,
@@ -282,7 +289,9 @@ class RemoteInferenceClient {
             put("sessionId", request.sessionId)
             put("draftStep", request.draftStep)
             put("proposedTokenIds", JSONArray(request.proposedTokenIds))
-            put("proposedText", request.proposedText)
+            if (request.proposedText.isNotBlank()) {
+                put("proposedText", request.proposedText)
+            }
             put("maxCorrectionTokens", request.maxCorrectionTokens)
             if (request.draftTree != null) {
                 put("draftTree", request.draftTree.toJson())
@@ -327,6 +336,13 @@ class RemoteInferenceClient {
                 treeBranchFactor = json.optJSONObject("debug")?.optInt("treeBranchFactor", 0) ?: 0,
                 treeDepthEvaluated = json.optJSONObject("debug")?.optInt("treeDepthEvaluated", 0) ?: 0,
                 treeDebugSummary = json.optJSONObject("debug")?.optString("treeDebugSummary").orEmpty(),
+                timingPrepareMs = json.optJSONObject("debug")?.optDouble("timingPrepareMs", 0.0) ?: 0.0,
+                timingDecodeMs = json.optJSONObject("debug")?.optDouble("timingDecodeMs", 0.0) ?: 0.0,
+                timingSampleMs = json.optJSONObject("debug")?.optDouble("timingSampleMs", 0.0) ?: 0.0,
+                timingRollbackMs = json.optJSONObject("debug")?.optDouble("timingRollbackMs", 0.0) ?: 0.0,
+                timingHelperTotalMs = json.optJSONObject("debug")?.optDouble("timingHelperTotalMs", 0.0) ?: 0.0,
+                timingHelperRoundTripMs = json.optJSONObject("debug")?.optDouble("timingHelperRoundTripMs", 0.0) ?: 0.0,
+                timingServiceTotalMs = json.optJSONObject("debug")?.optDouble("timingServiceTotalMs", 0.0) ?: 0.0,
                 draftTreeNodeCount = json.optJSONObject("debug")?.optInt("draftTreeNodeCount", 0) ?: 0,
                 draftTreeDepthEvaluated = json.optJSONObject("debug")?.optInt("draftTreeDepthEvaluated", 0) ?: 0,
                 draftTreeBestPathNodeIndices = json.optJSONObject("debug")?.optJSONArray("draftTreeBestPathNodeIndices").toIntList(),

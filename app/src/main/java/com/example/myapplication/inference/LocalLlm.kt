@@ -13,6 +13,7 @@ interface LocalLlm {
     fun loadedModelPath(): String
     fun lastError(): String
     fun supportsDraftSession(): Boolean = false
+    fun supportsSplitDraftControl(): Boolean = false
     fun supportsDraftTree(): Boolean = false
     suspend fun loadModel(modelPath: String): Boolean
     suspend fun setSystemPrompt(systemPrompt: String): Boolean
@@ -31,6 +32,12 @@ interface LocalLlm {
     }
     suspend fun draftNextRealTokenIds(sessionId: String, maxTokens: Int): List<Int> {
         throw UnsupportedOperationException("Real-token draft generation is not implemented by this LocalLlm.")
+    }
+    suspend fun syncAndDraftNextRealTokenIds(sessionId: String, authoritativeTokenIds: List<Int>, maxTokens: Int): List<Int> {
+        throw UnsupportedOperationException("Combined split draft synchronization/generation is not implemented by this LocalLlm.")
+    }
+    suspend fun syncRealTokenDraftSession(sessionId: String, authoritativeTokenIds: List<Int>): DraftSessionHandle {
+        throw UnsupportedOperationException("Split draft synchronization is not implemented by this LocalLlm.")
     }
     suspend fun draftRealTokenTreeProposal(sessionId: String, maxDepth: Int, branchFactor: Int): DraftTreeProposal {
         throw UnsupportedOperationException("Real-token draft tree generation is not implemented by this LocalLlm.")

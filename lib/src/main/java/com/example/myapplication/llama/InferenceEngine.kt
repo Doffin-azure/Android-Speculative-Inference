@@ -73,6 +73,8 @@ interface InferenceEngine {
 
     fun supportsDraftSession(): Boolean = false
 
+    fun supportsSplitDraftControl(): Boolean = false
+
     fun supportsDraftTree(): Boolean = false
 
     suspend fun startDraftSession(
@@ -101,6 +103,18 @@ interface InferenceEngine {
 
     suspend fun draftNextRealTokenIds(sessionId: String, maxTokens: Int): List<Int> {
         throw UnsupportedOperationException("Real-token draft generation is not implemented by this engine.")
+    }
+
+    suspend fun syncAndDraftNextRealTokenIds(
+        sessionId: String,
+        authoritativeTokenIds: List<Int>,
+        maxTokens: Int
+    ): List<Int> {
+        throw UnsupportedOperationException("Combined split draft synchronization/generation is not implemented by this engine.")
+    }
+
+    suspend fun syncRealTokenDraftSession(sessionId: String, authoritativeTokenIds: List<Int>): DraftSessionHandle {
+        throw UnsupportedOperationException("Split draft synchronization is not implemented by this engine.")
     }
 
     suspend fun draftRealTokenTreeProposal(

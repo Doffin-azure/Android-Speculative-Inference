@@ -85,6 +85,20 @@ Instead:
   Use this when you want the node record for the first continuity-focused implementation pass on `llama_cpp_spec_native`, covering Android committed snapshots and the desktop helper fast path.
 - `archive/2026-04-02-android-draft-hotspots-and-lightweight-sampling.md`
   Use this when you want the follow-up node that records why Android draft still regressed badly and how the project reduced two confirmed hotspots: full-vocabulary candidate extraction and whole-state persistence.
+- `archive/2026-04-02-llama-cpp-spec-native-split-contract-alignment.md`
+  Use this when you want the node that records the first explicit contract-level alignment between the project's `llama_cpp_spec_native` lane and upstream `llama.cpp` draft/verifier exchange.
+- `archive/2026-04-03-android-draft-committed-runtime-reuse.md`
+  Use this when you want the follow-up node that records the Android draft continuity improvement which skips redundant committed-state restore work when the session is already live.
+- `archive/2026-04-03-android-draft-in-place-tail-rollback.md`
+  Use this when you want the follow-up node that records the first in-place rollback step on the Android draft lane, where speculative tail tokens are trimmed before falling back to full restore.
+- `archive/2026-04-03-llama-cpp-spec-native-helper-state-ownership.md`
+  Use this when you want the verifier-side node that records the narrower helper contract, where the Python service stops re-sending accepted verifier state on every step.
+- `archive/2026-04-03-llama-cpp-spec-split-experimental-lane.md`
+  Use this when you want the node that records the new experimental split-contract lane, where Android owns draft state, the desktop helper owns verifier state, and Python only routes token batches.
+- `archive/2026-04-03-android-split-draft-sync-interface.md`
+  Use this when you want the node that records the new Android split-style draft synchronization interface for aligning local draft state to an authoritative accepted token sequence.
+- `archive/2026-04-03-android-native-split-draft-sync.md`
+  Use this when you want the follow-up node where the split-style draft synchronization logic moves into `ai_chat.cpp` itself and starts aligning live draft state natively.
 - `environment/desktop-gguf-runtime-supplement.md`
   Use this when you want to validate a GGUF on the computer or try running it outside Android.
 - `workflow/collaboration-rules.md`
@@ -125,6 +139,20 @@ Instead:
   The archive note for the first continuity-focused implementation pass on `llama_cpp_spec_native`.
 - `docs/archive/2026-04-02-android-draft-hotspots-and-lightweight-sampling.md`
   The archive note for the follow-up Android draft hotspot analysis and the lightweight sampling / sequence-state persistence optimization.
+- `docs/archive/2026-04-02-llama-cpp-spec-native-split-contract-alignment.md`
+  The archive note for the first token-only hot-path contract alignment on `llama_cpp_spec_native`.
+- `docs/archive/2026-04-03-android-draft-committed-runtime-reuse.md`
+  The archive note for the Android draft committed-runtime reuse improvement.
+- `docs/archive/2026-04-03-android-draft-in-place-tail-rollback.md`
+  The archive note for the first in-place Android draft tail-rollback step.
+- `docs/archive/2026-04-03-llama-cpp-spec-native-helper-state-ownership.md`
+  The archive note for the verifier-side helper-state ownership cleanup.
+- `docs/archive/2026-04-03-llama-cpp-spec-split-experimental-lane.md`
+  The archive note for the new experimental split-contract native lane.
+- `docs/archive/2026-04-03-android-split-draft-sync-interface.md`
+  The archive note for the new Android split-style draft synchronization interface.
+- `docs/archive/2026-04-03-android-native-split-draft-sync.md`
+  The archive note for the native Android split-draft synchronization pass.
 - `docs/project/project-core-code-history.md`
   The historical core-code ledger that records completed feature nodes from git history and the key code for each one.
 - `docs/project/android-draft-eagle-runtime-gap.md`

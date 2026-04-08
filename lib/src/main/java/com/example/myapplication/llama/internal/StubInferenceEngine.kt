@@ -29,6 +29,8 @@ class StubInferenceEngine : InferenceEngine {
 
     override fun lastError(): String = lastError
 
+    override fun supportsSplitDraftControl(): Boolean = false
+
     override suspend fun loadModel(pathToModel: String) {
         mutableState.value = InferenceEngine.State.LoadingModel
 
@@ -138,6 +140,21 @@ class StubInferenceEngine : InferenceEngine {
 
     override suspend fun draftNextRealTokenIds(sessionId: String, maxTokens: Int): List<Int> {
         return emptyList()
+    }
+
+    override suspend fun syncAndDraftNextRealTokenIds(
+        sessionId: String,
+        authoritativeTokenIds: List<Int>,
+        maxTokens: Int
+    ): List<Int> {
+        return emptyList()
+    }
+
+    override suspend fun syncRealTokenDraftSession(
+        sessionId: String,
+        authoritativeTokenIds: List<Int>
+    ): com.example.myapplication.llama.DraftSessionHandle {
+        throw UnsupportedOperationException("StubInferenceEngine does not keep split draft sessions.")
     }
 
     override suspend fun draftRealTokenTreeProposal(

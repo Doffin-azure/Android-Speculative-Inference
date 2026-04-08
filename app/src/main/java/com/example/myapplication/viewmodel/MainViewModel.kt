@@ -13,6 +13,7 @@ import com.example.myapplication.inference.RemoteInferenceClient
 import com.example.myapplication.inference.SpeculativeCloseRequest
 import com.example.myapplication.inference.SpeculativeProposeRequest
 import com.example.myapplication.inference.SpeculativeStartRequest
+import com.example.myapplication.llama.DraftSessionHandle
 import com.example.myapplication.llama.DraftTreeProposal
 import com.example.myapplication.llama.debug.DraftRuntimeProbeDemo
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,6 +56,13 @@ class MainViewModel(
         val treeBranchFactor: Int,
         val treeDepthEvaluated: Int,
         val treeDebugSummary: String,
+        val timingPrepareMs: Double,
+        val timingDecodeMs: Double,
+        val timingSampleMs: Double,
+        val timingRollbackMs: Double,
+        val timingHelperTotalMs: Double,
+        val timingHelperRoundTripMs: Double,
+        val timingServiceTotalMs: Double,
         val draftTreeNodeCount: Int,
         val draftTreeDepthEvaluated: Int,
         val draftTreeBestPathNodeIndices: List<Int>,
@@ -579,7 +587,12 @@ class MainViewModel(
                 val verifierNeedsRealTokenDraft = (
                     startResponse.verifierMode == "llama_true_tree_pq_tokens" ||
                         startResponse.verifierMode == "llama_eagle_aligned" ||
-                        startResponse.verifierMode == "llama_cpp_spec_native"
+                        startResponse.verifierMode == "llama_cpp_spec_native" ||
+                        startResponse.verifierMode == "llama_cpp_spec_split"
+                )
+                val useReferenceStyleSplitDraft = (
+                    startResponse.verifierMode == "llama_cpp_spec_native" ||
+                        startResponse.verifierMode == "llama_cpp_spec_split"
                 )
                 val verifierNeedsDraftTree = (
                     startResponse.verifierMode == "llama_true_tree" ||
@@ -626,10 +639,18 @@ class MainViewModel(
                                 selectedTreeProposal.bestPathTokenIds.take(SPECULATIVE_TEST_MAX_DRAFT_TOKENS)
                             } else {
                                 if (useRealTokenDraftPath) {
-                                    localLlm.draftNextRealTokenIds(
-                                        sessionId = activeLocalDraftSessionId,
-                                        maxTokens = SPECULATIVE_TEST_MAX_DRAFT_TOKENS
-                                    )
+                                    if (useReferenceStyleSplitDraft) {
+                                        localLlm.syncAndDraftNextRealTokenIds(
+                                            sessionId = activeLocalDraftSessionId,
+                                            authoritativeTokenIds = committedTokenIds,
+                                            maxTokens = SPECULATIVE_TEST_MAX_DRAFT_TOKENS
+                                        )
+                                    } else {
+                                        localLlm.draftNextRealTokenIds(
+                                            sessionId = activeLocalDraftSessionId,
+                                            maxTokens = SPECULATIVE_TEST_MAX_DRAFT_TOKENS
+                                        )
+                                    }
                                 } else {
                                     localLlm.draftNextTokenIds(
                                         sessionId = activeLocalDraftSessionId,
@@ -685,9 +706,15 @@ class MainViewModel(
                             sessionId = startResponse.sessionId,
                             draftStep = draftStep,
                             proposedTokenIds = proposedTokens,
-                            proposedText = draftText,
+                            proposedText = if (
+                                startResponse.verifierMode == "llama_cpp_spec_native" ||
+                                startResponse.verifierMode == "llama_cpp_spec_split"
+                            ) "" else draftText,
                             maxCorrectionTokens = 1,
-                            draftTree = localDraftTreeProposal
+                            draftTree = if (
+                                startResponse.verifierMode == "llama_cpp_spec_native" ||
+                                startResponse.verifierMode == "llama_cpp_spec_split"
+                            ) null else localDraftTreeProposal
                         )
                     )
                     val remoteProposeMs = System.currentTimeMillis() - proposeStartedAt
@@ -700,15 +727,22 @@ class MainViewModel(
                     committedTokenIds += proposeResponse.correctionTokenIds
                     var localApplyMs = 0L
                     if (activeLocalDraftSessionId != null) {
-                        val verifiedTokens = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
                         runCatching {
                             val applyStartedAt = System.currentTimeMillis()
-                            if (useRealTokenDraftPath) {
-                                localLlm.applyVerifiedRealTokens(
+                            if (useReferenceStyleSplitDraft) {
+                                DraftSessionHandle(
                                     sessionId = activeLocalDraftSessionId,
-                                    tokenIds = verifiedTokens
+                                    runtimeLabel = "ai-chat split draft session",
+                                    acceptedText = "",
+                                    acceptedTokenCount = committedTokenIds.size
+                                )
+                            } else if (useRealTokenDraftPath) {
+                                localLlm.syncRealTokenDraftSession(
+                                    sessionId = activeLocalDraftSessionId,
+                                    authoritativeTokenIds = committedTokenIds
                                 )
                             } else {
+                                val verifiedTokens = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
                                 localLlm.applyVerifiedTokens(
                                     sessionId = activeLocalDraftSessionId,
                                     tokenIds = verifiedTokens
@@ -756,6 +790,13 @@ class MainViewModel(
                         treeBranchFactor = proposeResponse.treeBranchFactor,
                         treeDepthEvaluated = proposeResponse.treeDepthEvaluated,
                         treeDebugSummary = proposeResponse.treeDebugSummary,
+                        timingPrepareMs = proposeResponse.timingPrepareMs,
+                        timingDecodeMs = proposeResponse.timingDecodeMs,
+                        timingSampleMs = proposeResponse.timingSampleMs,
+                        timingRollbackMs = proposeResponse.timingRollbackMs,
+                        timingHelperTotalMs = proposeResponse.timingHelperTotalMs,
+                        timingHelperRoundTripMs = proposeResponse.timingHelperRoundTripMs,
+                        timingServiceTotalMs = proposeResponse.timingServiceTotalMs,
                         draftTreeNodeCount = proposeResponse.draftTreeNodeCount,
                         draftTreeDepthEvaluated = proposeResponse.draftTreeDepthEvaluated,
                         draftTreeBestPathNodeIndices = proposeResponse.draftTreeBestPathNodeIndices,
@@ -786,6 +827,21 @@ class MainViewModel(
                 activeSessionId = null
 
                 val finalStep = stepTraces.lastOrNull()
+                val totalCommittedTokens = committedTokenIds.size
+                val averageDraftFetchMs = if (stepTraces.isNotEmpty()) totalDraftFetchMs.toDouble() / stepTraces.size else 0.0
+                val averageRemoteProposeMs = if (stepTraces.isNotEmpty()) totalRemoteProposeMs.toDouble() / stepTraces.size else 0.0
+                val averageLocalApplyMs = if (stepTraces.isNotEmpty()) totalLocalApplyMs.toDouble() / stepTraces.size else 0.0
+                val averageVerifyPrepareMs = if (stepTraces.isNotEmpty()) stepTraces.map { it.timingPrepareMs }.average() else 0.0
+                val averageVerifyDecodeMs = if (stepTraces.isNotEmpty()) stepTraces.map { it.timingDecodeMs }.average() else 0.0
+                val averageVerifySampleMs = if (stepTraces.isNotEmpty()) stepTraces.map { it.timingSampleMs }.average() else 0.0
+                val averageVerifyRollbackMs = if (stepTraces.isNotEmpty()) stepTraces.map { it.timingRollbackMs }.average() else 0.0
+                val averageHelperRoundTripMs = if (stepTraces.isNotEmpty()) stepTraces.map { it.timingHelperRoundTripMs }.average() else 0.0
+                val averageServiceTotalMs = if (stepTraces.isNotEmpty()) stepTraces.map { it.timingServiceTotalMs }.average() else 0.0
+                val averageEstimatedTransportMs = if (stepTraces.isNotEmpty()) stepTraces.map {
+                    (it.remoteProposeMs.toDouble() - it.timingServiceTotalMs).coerceAtLeast(0.0)
+                }.average() else 0.0
+                val overallTokensPerSecond = if (speculativeRunMs > 0) totalCommittedTokens * 1000.0 / speculativeRunMs else 0.0
+                val draftTokensPerSecond = if (totalDraftFetchMs > 0) stepTraces.sumOf { it.proposedTokenIds.size } * 1000.0 / totalDraftFetchMs else 0.0
 
                 _speculativeSessionSummary.value = buildString {
                     appendLine("SessionId: ${startResponse.sessionId}")
@@ -816,8 +872,21 @@ class MainViewModel(
                     appendLine("Timing total remote propose ms: $totalRemoteProposeMs")
                     appendLine("Timing total local apply ms: $totalLocalApplyMs")
                     appendLine("Timing close session ms: $closeMs")
+                    appendLine("Timing avg draft fetch ms: ${"%.3f".format(averageDraftFetchMs)}")
+                    appendLine("Timing avg remote propose ms: ${"%.3f".format(averageRemoteProposeMs)}")
+                    appendLine("Timing avg local apply ms: ${"%.3f".format(averageLocalApplyMs)}")
+                    appendLine("Timing avg verify prepare ms: ${"%.3f".format(averageVerifyPrepareMs)}")
+                    appendLine("Timing avg verify decode ms: ${"%.3f".format(averageVerifyDecodeMs)}")
+                    appendLine("Timing avg verify sample ms: ${"%.3f".format(averageVerifySampleMs)}")
+                    appendLine("Timing avg verify rollback ms: ${"%.3f".format(averageVerifyRollbackMs)}")
+                    appendLine("Timing avg helper round trip ms: ${"%.3f".format(averageHelperRoundTripMs)}")
+                    appendLine("Timing avg service total ms: ${"%.3f".format(averageServiceTotalMs)}")
+                    appendLine("Timing avg estimated transport ms: ${"%.3f".format(averageEstimatedTransportMs)}")
                     appendLine("Draft steps completed: ${stepTraces.size}")
                     appendLine("Committed token ids: ${committedTokenIds.joinToString()}")
+                    appendLine("Committed token count: $totalCommittedTokens")
+                    appendLine("Overall generated t/s: ${"%.3f".format(overallTokensPerSecond)}")
+                    appendLine("Draft proposed t/s: ${"%.3f".format(draftTokensPerSecond)}")
                     appendLine(
                         "Committed text: ${
                             if (useRealTokenDraftPath) runCatching { localLlm.renderTokenIds(committedTokenIds) }.getOrElse { tokenIdsToReadableText(committedTokenIds) }
@@ -853,6 +922,12 @@ class MainViewModel(
                         if (finalStep.lastReplayPrompt.isNotBlank()) {
                             appendLine("Final replay prompt: ${finalStep.lastReplayPrompt}")
                         }
+                        appendLine("Final verify prepare ms: ${"%.3f".format(finalStep.timingPrepareMs)}")
+                        appendLine("Final verify decode ms: ${"%.3f".format(finalStep.timingDecodeMs)}")
+                        appendLine("Final verify sample ms: ${"%.3f".format(finalStep.timingSampleMs)}")
+                        appendLine("Final verify rollback ms: ${"%.3f".format(finalStep.timingRollbackMs)}")
+                        appendLine("Final helper round trip ms: ${"%.3f".format(finalStep.timingHelperRoundTripMs)}")
+                        appendLine("Final service total ms: ${"%.3f".format(finalStep.timingServiceTotalMs)}")
                         if (finalStep.treeCandidateCount > 0) {
                             appendLine("Final tree candidate count: ${finalStep.treeCandidateCount}")
                             appendLine("Final tree branch factor: ${finalStep.treeBranchFactor}")

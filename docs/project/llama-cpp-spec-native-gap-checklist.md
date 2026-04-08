@@ -32,6 +32,9 @@ Current note after the first continuity pass:
 
 - text replay is no longer the dominant real-token fast-path mechanism
 - but draft-side persistence must still stay lightweight enough to avoid replacing replay cost with an equally heavy whole-state round-trip
+- the native draft runtime now also skips redundant restore calls when the current session is already live at its committed state
+- the native draft runtime now also attempts an in-place rollback-to-committed path before falling back to sequence-state restore
+- the remaining continuity gap is therefore no longer "always restore before every draft fetch"; it is that the project still relies on committed snapshot round-trips instead of upstream-style in-place KV reuse and trim
 
 ### 1b. Android real-token draft candidate extraction
 
@@ -120,6 +123,8 @@ Current note:
 
 - the real-token speculative fast path no longer renders `proposedText` on every step for request submission
 - final committed text rendering and debug summaries still remain as separate overhead sources
+- the hot-path protocol for `llama_cpp_spec_native` no longer includes `proposedText` or `draftTree`; older lanes still keep those payloads for regression and tree-aware verification
+- the new experimental `llama_cpp_spec_split` lane now goes one step further and locks helper verification onto a dedicated split command that does not accept helper-side accepted-token reinjection on the hot path
 
 ## Current Benchmark Template
 

@@ -6,7 +6,7 @@ This document compares three speculative-decoding implementation styles that now
 
 1. `Android-Speculative-Inference` demo
 2. upstream `llama.cpp` speculative decoding
-3. the current project `llama_cpp_spec_native` implementation
+3. the current project `llama_cpp_spec_native` / `llama_cpp_spec_split` implementations
 4. `spec-split-demo-project`
 
 The goal is not to decide which code is "better" in the abstract.
@@ -18,6 +18,25 @@ The goal is to make it easy to answer:
 - which code path is carrying the verifier state
 - why upstream `llama.cpp` behaves differently from the earlier demo
 - why the current project is closer to upstream than to the older demo, while still carrying extra cross-device cost
+- what the new split-contract experimental lane changes relative to the original `llama_cpp_spec_native` lane
+
+## Current Project Note
+
+The current project now has two closely related native verifier lanes:
+
+- `llama_cpp_spec_native`
+- `llama_cpp_spec_split`
+
+They share the same Android real-token draft runtime and the same native desktop helper foundation.
+
+The difference is that `llama_cpp_spec_split` makes the draft/verifier ownership boundary stricter:
+
+- Android owns draft state
+- desktop helper owns verifier state
+- Python only routes token batches
+- helper hot path no longer accepts helper-side accepted-token reinjection
+- Android split lane now also exposes an explicit authoritative-token synchronization API for draft control, which is the first direct project-side move toward the reference `spec-split-draft.cpp` control shape
+- the newest Android native pass now also pulls that synchronization into `ai_chat.cpp`, so split-lane draft alignment is no longer mainly a Kotlin-side prefix/tail policy
 
 ## Reading Rule
 
@@ -305,6 +324,75 @@ Implementation meaning:
 - Upstream is optimized around light hot-path token production.
 - This is one of the reasons it does not suffer from the same draft degradation pattern as a replay-heavy service demo.
 
+### 2.4 What Draft And Verifier Actually Exchange
+
+Files:
+
+- `reference/llama.cpp-upstream/examples/speculative-simple/speculative-simple.cpp`
+- `reference/llama.cpp-upstream/common/speculative.cpp`
+- `reference/llama.cpp-upstream/common/sampling.cpp`
+
+Core code:
+
+```cpp
+llama_tokens draft = common_speculative_draft(spec, params_spec, prompt_tgt, id_last);
+```
+
+```cpp
+llama_tokens common_speculative_draft(
+        common_speculative * spec,
+        const common_params_speculative & params,
+        const llama_tokens & prompt_tgt,
+        llama_token id_last) {
+```
+
+```cpp
+common_batch_add  (batch_tgt, id_last, n_past++, { 0 }, true);
+for (size_t i = 0; i < draft.size(); ++i) {
+    common_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
+}
+llama_decode(ctx_tgt, batch_tgt);
+
+const auto ids = common_sampler_sample_and_accept_n(smpl, ctx_tgt, draft);
+```
+
+```cpp
+for (; i < draft.size(); i++) {
+    const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
+    common_sampler_accept(gsmpl, id, true);
+    result.push_back(id);
+
+    if (draft[i] != id) {
+        break;
+    }
+}
+
+if (i == draft.size()) {
+    const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
+    common_sampler_accept(gsmpl, id, true);
+    result.push_back(id);
+}
+```
+
+Explanation:
+
+- Upstream target-side outer loop passes only:
+  - `prompt_tgt`
+  - `id_last`
+  to the draft implementation.
+- The draft side returns only one real payload:
+  - `draft`, a token-id sequence.
+- The verifier side evaluates `id_last + draft...` in the target context, then returns:
+  - the accepted draft prefix
+  - one extra target token
+- The speculative implementation is then told only how many draft tokens were accepted through `common_speculative_accept(...)`.
+
+Implementation meaning:
+
+- Upstream draft/verifier communication is token-first and extremely narrow.
+- It does not rely on text payloads, debug strings, or protocol metadata in the hot path.
+- This is the contract the current project should imitate on the `llama_cpp_spec_native` lane, even though the project still has to carry that contract across a cross-device boundary.
+
 ## 3. Current Project `llama_cpp_spec_native`
 
 ### 3.1 Android Real-Token Draft Session
@@ -477,6 +565,57 @@ Implementation meaning:
 
 - This is directly modeled after upstream `llama.cpp` verifier behavior.
 - It is much closer to the upstream runtime than to the Python-shell verifier in the older demo.
+
+### 3.5 Current Split Contract On `llama_cpp_spec_native`
+
+Files:
+
+- `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
+- `app/src/main/java/com/example/myapplication/inference/RemoteInferenceClient.kt`
+- `tools/desktop_inference_service.py`
+
+Core code:
+
+```kotlin
+request = SpeculativeProposeRequest(
+    sessionId = startResponse.sessionId,
+    draftStep = draftStep,
+    proposedTokenIds = proposedTokens,
+    proposedText = if (startResponse.verifierMode == "llama_cpp_spec_native") "" else draftText,
+    maxCorrectionTokens = 1,
+    draftTree = if (startResponse.verifierMode == "llama_cpp_spec_native") null else localDraftTreeProposal
+)
+```
+
+```kotlin
+put("proposedTokenIds", JSONArray(request.proposedTokenIds))
+if (request.proposedText.isNotBlank()) {
+    put("proposedText", request.proposedText)
+}
+if (request.draftTree != null) {
+    put("draftTree", request.draftTree.toJson())
+}
+```
+
+```python
+proposed_token_ids = parse_int_list("proposedTokenIds", payload.get("proposedTokenIds"))
+draft_tree = None
+if session.verifier_mode != "llama_cpp_spec_native":
+    draft_tree = parse_optional_draft_tree_payload(payload.get("draftTree"))
+```
+
+Explanation:
+
+- On the current `llama_cpp_spec_native` lane, the Android client now sends only the token-id draft sequence on the hot path.
+- `proposedText` and `draftTree` stay available for the older verifier lanes, but they are not part of the main split contract for the llama.cpp-style lane.
+- Desktop `propose` still keeps session bookkeeping and debug reporting, but the verifier-facing payload is now much closer to upstream:
+  - draft token ids in
+  - accepted prefix plus one target token out
+
+Implementation meaning:
+
+- The project still is not the same as in-process upstream `llama.cpp`.
+- But on the native verifier lane, the draft/verifier split contract is now intentionally narrowed to token-first communication instead of mixed debug-oriented payloads.
 
 ## 4. Direct Comparison
 

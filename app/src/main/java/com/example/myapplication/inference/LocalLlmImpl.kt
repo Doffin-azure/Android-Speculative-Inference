@@ -30,6 +30,10 @@ class LocalLlmImpl(context: Context) : LocalLlm {
         return engine.supportsDraftSession()
     }
 
+    override fun supportsSplitDraftControl(): Boolean {
+        return engine.supportsSplitDraftControl()
+    }
+
     override fun supportsDraftTree(): Boolean {
         return engine.supportsDraftTree()
     }
@@ -82,6 +86,21 @@ class LocalLlmImpl(context: Context) : LocalLlm {
 
     override suspend fun draftNextRealTokenIds(sessionId: String, maxTokens: Int): List<Int> {
         return engine.draftNextRealTokenIds(sessionId, maxTokens)
+    }
+
+    override suspend fun syncAndDraftNextRealTokenIds(
+        sessionId: String,
+        authoritativeTokenIds: List<Int>,
+        maxTokens: Int
+    ): List<Int> {
+        return engine.syncAndDraftNextRealTokenIds(sessionId, authoritativeTokenIds, maxTokens)
+    }
+
+    override suspend fun syncRealTokenDraftSession(
+        sessionId: String,
+        authoritativeTokenIds: List<Int>
+    ): DraftSessionHandle {
+        return engine.syncRealTokenDraftSession(sessionId, authoritativeTokenIds)
     }
 
     override suspend fun draftRealTokenTreeProposal(sessionId: String, maxDepth: Int, branchFactor: Int): DraftTreeProposal {
