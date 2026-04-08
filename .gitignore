@@ -18,8 +18,8 @@ models/
 MIDTERM_REPORT.md
 desktop-service.*.log
 logs/
-reference/
 tools/desktop_target_runtime
+reference/
 
 # Android Studio / IntelliJ
 .idea/caches

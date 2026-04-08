@@ -1,0 +1,124 @@
+# Split Parity Tracker
+
+## Purpose
+
+This document makes `reference/spec-split-demo-project` the fixed source-of-truth baseline for the split speculative design.
+
+The project now treats two experiment paths as directly comparable variants of the same design:
+
+- local reference split:
+  - `reference/spec-split-demo-project`
+  - native draft worker + native verify worker
+  - same-machine dual-process execution
+- Android + desktop split:
+  - Android app draft runtime in `lib/src/main/cpp/ai_chat.cpp`
+  - desktop verifier helper in `tools/desktop_target_runtime.cpp`
+  - desktop orchestration in `tools/desktop_inference_service.py`
+  - split across two devices
+
+The engineering goal is not to invent a separate Android protocol.
+
+The goal is to keep the Android + desktop path source-level aligned with the reference split design, while moving the two workers onto different devices.
+
+## Required Comparison Rule
+
+From this point on, every meaningful `llama_cpp_spec_split` optimization pass should compare against the reference split baseline in at least one of these dimensions:
+
+- control flow / ownership
+- request or transport boundary
+- state continuity behavior
+- rollback semantics
+- acceptance behavior
+- timing and throughput
+
+When possible, use paired runs with:
+
+- `reference/spec-split-demo-project/run_recorded_native_full_experiment.ps1`
+- `tools/run_android_spec_split_experiment.ps1`
+
+or the combined wrapper:
+
+- `tools/run_split_parity_experiment.ps1`
+- `tools/run_split_parity_experiment.cmd`
+
+## Source Alignment Checklist
+
+Reference split draft worker responsibilities:
+
+- hold persistent draft context
+- align local draft runtime to authoritative accepted tokens
+- roll back speculative tail in place when possible
+- generate only the next draft slice
+
+Android draft runtime should match that shape:
+
+- `lib/src/main/cpp/ai_chat.cpp`
+- `app/src/main/java/com/example/myapplication/inference/LocalLlmImpl.kt`
+
+Reference split verify worker responsibilities:
+
+- hold persistent verifier context
+- decode `[last accepted token + drafted slice]` in one batch
+- run `common_sampler_sample_and_accept_n(...)`
+- append accepted prefix and one follow-up token
+- roll back uncommitted verifier tail in place
+
+Desktop verifier helper should match that shape:
+
+- `tools/desktop_target_runtime.cpp`
+- `tools/desktop_inference_service.py`
+
+Python service responsibilities should stay thin:
+
+- session lifecycle
+- helper process control
+- HTTP shaping
+- experiment logging
+
+It should not grow verifier logic that already exists in the native helper unless the helper boundary is missing data.
+
+## Current Bottleneck Ledger
+
+Confirmed Android-side costs:
+
+- mobile CPU throughput is lower than desktop WSL/native baseline
+- authoritative sync still pays non-trivial per-step runtime maintenance cost
+- sampler history rebuild remains O(prefix) on the draft side
+- tail-logit refresh is still needed on some sync paths
+- JNI / app-private device environment adds extra orchestration overhead outside pure draft compute
+
+Confirmed desktop-side costs:
+
+- helper round-trip still adds transport overhead versus same-process reference
+- Python service still adds request framing and response parsing cost
+- desktop helper used to detokenize full accepted text every round; this is now removed from the hot path
+
+Confirmed system-level gap versus local reference:
+
+- cross-device split adds ADB/device orchestration, phone thermal limits, and network/HTTP boundaries that do not exist in the local dual-process reference run
+
+## Recording Rule
+
+Every new split optimization experiment must record:
+
+- timestamped raw artifacts
+- the exact script used
+- whether the run is reference local, Android split, or paired
+- the concrete source change being tested
+- the strongest remaining bottleneck after the run
+
+Recommended record locations:
+
+- `reference/spec-split-demo-project/EXPERIMENT_INDEX.md`
+- `reference/spec-split-demo-project/EXPERIMENT_TIMING_YYYY-MM-DD.md`
+- `docs/project/current-status.md`
+
+## Stop Condition
+
+Keep iterating until one of these happens:
+
+- a bottleneck is improved and re-measured
+- a bottleneck is proven to be device/platform-limited for now
+- a blocker cannot be resolved without changing upstream `llama.cpp` or device policy/runtime limits
+
+At each stop point, sync git so the measurement and code state stay aligned.

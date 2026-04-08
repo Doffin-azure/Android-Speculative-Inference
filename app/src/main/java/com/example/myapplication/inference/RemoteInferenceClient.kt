@@ -404,6 +404,7 @@ class RemoteInferenceClient {
         connection.connectTimeout = 10_000
         connection.readTimeout = 180_000
         connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Connection", "close")
         if (method == "POST") {
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")

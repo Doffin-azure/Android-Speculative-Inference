@@ -180,6 +180,18 @@ Current strongest conclusion:
 - the newest Android-side finding is that draft degradation was not explained primarily by the 1B model size:
   - the draft path itself was heavier than ordinary local generation because it performed extra logits processing and state persistence work per step
   - model size still matters, but the current dominant issue is the implementation cost model of the draft path
+- the reference `model-native-full` split demo is now the fixed source-of-truth baseline for split design and timing comparison
+- the Android + desktop `llama_cpp_spec_split` lane must now be evaluated as the same split design moved across devices, not as a separate architecture
+- the project now also has a dedicated split-parity tracker and a paired experiment wrapper so reference local split and Android split runs can be recorded side by side with timestamps
+- the paired parity harness is now working with:
+  - `tools/run_split_parity_experiment.ps1`
+  - timestamped native reference summary
+  - timestamped Android split summary
+  - timestamped comparison JSON
+- the newest paired run indicates the strongest Android split bottleneck is currently proposal efficiency rather than pure draft fetch speed:
+  - Android delivered `37` committed tokens from `362` proposed tokens in the latest stable paired run
+  - accepted/proposed ratio was only about `10.22%`
+  - draft-side wall clock is still large, but low acceptance is now the more damaging efficiency loss
 - the Android speculative client now also skips per-step real-token `proposedText` rendering on the hot path for `llama_cpp_spec_native`, because the verifier decision is driven by token ids rather than that debug text field
 - the Android real-token local apply path now also skips per-step accepted-text detokenize work and keeps the draft session token-first during speculative commits
 - the `llama_cpp_spec_native` split contract is now narrower on the hot path:
@@ -291,6 +303,7 @@ The next step should focus on one of these:
 3. keep ordinary remote fallback active while the real verifier is introduced
 4. migrate the mixed codepoint/piece speculative path toward unified real `llama_token` ids before re-attempting standard per-token `p/q` acceptance
 5. validate the new Android committed-snapshot draft path and desktop persistent-helper fast path with the standard LOCAL / REMOTE / SPECULATIVE benchmark template
+6. pair each Android split optimization with the reference `model-native-full` baseline and keep the source alignment record updated in `docs/project/split-parity-tracker.md`
 
 ## Immediate Execution Order
 
@@ -317,6 +330,7 @@ Practical interpretation:
 - use `docs/project/project-progress-summary.md` when you need the milestone-level view of everything completed so far
 - use `docs/project/speculative-core-code-explanation.md` when you need the current implementation's key code snippets instead of only milestone summaries
 - use `docs/project/project-core-code-history.md` when you need the historical ledger of completed feature nodes and their core code
+- use `docs/project/split-parity-tracker.md` when you need the standing rule for comparing the Android split path against `reference/spec-split-demo-project`
 - use `docs/project/android-draft-eagle-runtime-gap.md` when you need the current capability gap analysis for pushing the Android draft runtime toward an EAGLE-style branch-aware implementation
 - use `docs/project/desktop-true-verifier-minimum-boundary.md` when deciding what the first real desktop verifier is allowed to change
 - use `docs/project/computer-inference-service-boundary.md` for architecture boundaries
