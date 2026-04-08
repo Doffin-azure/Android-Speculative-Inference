@@ -209,6 +209,30 @@ Current strongest conclusion:
   - desktop verify sampler history is now rebuilt from the full known sequence
   - helper sampling config is now aligned to the Android greedy draft defaults
   - the post-alignment verification run still completed successfully on `2026-04-08T12-53-27+08-00`
+- the split lane has now completed a second, more important source-alignment step on `2026-04-08`:
+  - Android reference-style split drafting no longer does full authoritative `syncAndDraft` on every round
+  - both the experiment runner and the main speculative UI path now use incremental `applyVerifiedRealTokens(...)` commits between proposal rounds
+  - this matches the reference split-draft shape more closely:
+    - keep the draft runtime alive
+    - roll back speculative tail to the committed snapshot
+    - append newly verified tokens
+    - continue drafting from that updated runtime
+- the latest incremental-commit Android split run on `2026-04-08T13-34-05+08-00` produced:
+  - `committedTokens=64`
+  - `totalProposedTokens=67`
+  - accepted/proposed `= 40 / 67 = 59.70%`
+  - `totalMs=6653`
+  - `totalRemoteProposeMs=2759`
+  - `overallTokensPerSecond=9.620`
+- paired against the refreshed Android local baseline on `2026-04-08T13-37-34+08-00`, the new comparison now shows:
+  - Android local draft-loop throughput: `17.279 tok/s`
+  - Android split draft-side throughput: `41.409 tok/s`
+  - Android split overall throughput: `9.620 tok/s`
+  - Android split remote-propose share: `41.47%`
+- this changes the current bottleneck reading again:
+  - Android draft-side runtime maintenance is no longer the dominant problem on the current split lane
+  - the remaining limiter is still `remotePropose`, but it is now materially smaller per committed token because acceptance stayed high much longer
+  - a follow-up experiment raising experimental `draftMaxTokens` from `6` to `8` did not improve the result and was reverted
 - the Android speculative client now also skips per-step real-token `proposedText` rendering on the hot path for `llama_cpp_spec_native`, because the verifier decision is driven by token ids rather than that debug text field
 - the Android real-token local apply path now also skips per-step accepted-text detokenize work and keeps the draft session token-first during speculative commits
 - the `llama_cpp_spec_native` split contract is now narrower on the hot path:

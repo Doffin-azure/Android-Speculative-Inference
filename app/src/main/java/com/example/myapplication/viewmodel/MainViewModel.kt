@@ -640,9 +640,8 @@ class MainViewModel(
                             } else {
                                 if (useRealTokenDraftPath) {
                                     if (useReferenceStyleSplitDraft) {
-                                        localLlm.syncAndDraftNextRealTokenIds(
+                                        localLlm.draftNextRealTokenIds(
                                             sessionId = activeLocalDraftSessionId,
-                                            authoritativeTokenIds = committedTokenIds,
                                             maxTokens = SPECULATIVE_TEST_MAX_DRAFT_TOKENS
                                         )
                                     } else {
@@ -730,11 +729,9 @@ class MainViewModel(
                         runCatching {
                             val applyStartedAt = System.currentTimeMillis()
                             if (useReferenceStyleSplitDraft) {
-                                DraftSessionHandle(
+                                localLlm.applyVerifiedRealTokens(
                                     sessionId = activeLocalDraftSessionId,
-                                    runtimeLabel = "ai-chat split draft session",
-                                    acceptedText = "",
-                                    acceptedTokenCount = committedTokenIds.size
+                                    tokenIds = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
                                 )
                             } else if (useRealTokenDraftPath) {
                                 localLlm.syncRealTokenDraftSession(
