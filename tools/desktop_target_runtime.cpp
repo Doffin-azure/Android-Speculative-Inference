@@ -31,6 +31,7 @@ struct SessionState {
     llama_batch batch = {};
     int32_t batch_capacity = DEFAULT_SESSION_N_BATCH;
     std::vector<llama_token> accepted_tokens;
+    std::vector<llama_token> prompt_prefix_tokens;
     std::vector<llama_token> anchor_prefix_tokens;
     llama_token anchor_last_token = LLAMA_TOKEN_NULL;
     int32_t anchor_prefix_count = 0;
@@ -151,11 +152,22 @@ bool decode_tokens(
     return true;
 }
 
+std::vector<llama_token> build_known_sequence_tokens(const SessionState & session) {
+    std::vector<llama_token> known_tokens = session.prompt_prefix_tokens;
+    known_tokens.insert(
+        known_tokens.end(),
+        session.accepted_tokens.begin(),
+        session.accepted_tokens.end()
+    );
+    return known_tokens;
+}
+
 bool restore_anchor_state(SessionState & session, std::string & error) {
     clear_context(session);
     common_sampler_reset(session.sampler);
-    for (llama_token token : session.accepted_tokens) {
-        common_sampler_accept(session.sampler, token, true);
+    const std::vector<llama_token> known_tokens = build_known_sequence_tokens(session);
+    for (llama_token token : known_tokens) {
+        common_sampler_accept(session.sampler, token, false);
     }
     if (session.anchor_prefix_tokens.empty()) {
         return true;
@@ -199,16 +211,14 @@ bool tokenize_chat_fragment(
     return true;
 }
 
-bool build_session_replay_tokens(
+bool build_session_prompt_prefix_tokens(
     const SessionState & session,
-    const std::vector<llama_token> & accepted_tokens,
-    std::vector<llama_token> & replay_tokens,
+    std::vector<llama_token> & prompt_prefix_tokens,
     std::string & replay_prompt,
     std::string & error
 ) {
-    replay_tokens.clear();
+    prompt_prefix_tokens.clear();
     std::ostringstream replay_prompt_builder;
-    const std::string accepted_text = common_detokenize(g_runtime.vocab, accepted_tokens, true);
     const bool has_chat_template = g_runtime.chat_templates && common_chat_templates_was_explicit(g_runtime.chat_templates.get());
     std::vector<common_chat_msg> chat_msgs;
 
@@ -222,7 +232,7 @@ bool build_session_replay_tokens(
             chat_msgs.push_back(msg);
         }
         replay_prompt_builder << formatted_system;
-        tokenize_chat_fragment(formatted_system, has_chat_template, has_chat_template, replay_tokens);
+        tokenize_chat_fragment(formatted_system, has_chat_template, has_chat_template, prompt_prefix_tokens);
     }
 
     if (!session.user_prompt.empty()) {
@@ -235,16 +245,11 @@ bool build_session_replay_tokens(
             chat_msgs.push_back(msg);
         }
         replay_prompt_builder << formatted_user;
-        tokenize_chat_fragment(formatted_user, has_chat_template, has_chat_template, replay_tokens);
-    }
-
-    if (!accepted_text.empty()) {
-        replay_prompt_builder << accepted_text;
-        tokenize_chat_fragment(accepted_text, false, true, replay_tokens);
+        tokenize_chat_fragment(formatted_user, has_chat_template, has_chat_template, prompt_prefix_tokens);
     }
 
     replay_prompt = replay_prompt_builder.str();
-    if (replay_tokens.empty()) {
+    if (prompt_prefix_tokens.empty()) {
         error = "Replay prompt tokenization produced no tokens.";
         return false;
     }
@@ -256,19 +261,27 @@ bool rebuild_session_anchor(SessionState & session, std::string & error) {
     clear_context(session);
     common_sampler_reset(session.sampler);
 
-    std::vector<llama_token> replay_tokens;
-    if (!build_session_replay_tokens(session, session.accepted_tokens, replay_tokens, session.replay_prompt, error)) {
+    std::vector<llama_token> prompt_prefix_tokens;
+    if (!build_session_prompt_prefix_tokens(session, prompt_prefix_tokens, session.replay_prompt, error)) {
+        return false;
+    }
+    session.prompt_prefix_tokens = prompt_prefix_tokens;
+
+    const std::vector<llama_token> known_tokens = build_known_sequence_tokens(session);
+    if (known_tokens.empty()) {
+        error = "Known session token sequence is empty.";
         return false;
     }
 
-    session.anchor_last_token = replay_tokens.back();
-    session.anchor_prefix_count = std::max<int32_t>(0, static_cast<int32_t>(replay_tokens.size()) - 1);
-    session.anchor_prefix_tokens.assign(replay_tokens.begin(), replay_tokens.end() - 1);
-    session.fast_path_ready = false;
-
-    for (llama_token token : session.accepted_tokens) {
-        common_sampler_accept(session.sampler, token, true);
+    const std::string accepted_text = common_detokenize(g_runtime.vocab, session.accepted_tokens, true);
+    if (!accepted_text.empty()) {
+        session.replay_prompt += accepted_text;
     }
+
+    session.anchor_last_token = known_tokens.back();
+    session.anchor_prefix_count = std::max<int32_t>(0, static_cast<int32_t>(known_tokens.size()) - 1);
+    session.anchor_prefix_tokens.assign(known_tokens.begin(), known_tokens.end() - 1);
+    session.fast_path_ready = false;
 
     return true;
 }
@@ -276,8 +289,9 @@ bool rebuild_session_anchor(SessionState & session, std::string & error) {
 bool initialize_fast_path(SessionState & session, std::string & error) {
     clear_context(session);
     common_sampler_reset(session.sampler);
-    for (llama_token token : session.accepted_tokens) {
-        common_sampler_accept(session.sampler, token, true);
+    const std::vector<llama_token> known_tokens = build_known_sequence_tokens(session);
+    for (llama_token token : known_tokens) {
+        common_sampler_accept(session.sampler, token, false);
     }
     if (!session.anchor_prefix_tokens.empty() &&
         !decode_tokens(session, session.anchor_prefix_tokens, 0, false, error)) {

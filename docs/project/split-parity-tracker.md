@@ -159,6 +159,22 @@ That changes the bottleneck reading in an important way:
   - too many correction-driven short rounds
   - late-stage draft/target divergence that collapses the system toward 1-token proposals
 
+## Latest Interface Alignment
+
+The split lane has now been tightened one step closer to the local reference `model-native-full` contract:
+
+- desktop verify session rebuild is now token-native
+  - it rebuilds from prompt-prefix token ids plus accepted verifier token ids
+  - it no longer depends on `acceptedText` detokenize/re-tokenize for anchor-state reconstruction
+- desktop verify sampler history is now rebuilt from the full known sequence, not only accepted generated tokens
+- helper sampling config for `llama_cpp_spec_split` is now aligned to the Android greedy draft defaults
+- Android draft session start now captures prompt-prefix tokens through an explicit helper
+
+This matters because it removes one interface-level mismatch before further performance tuning:
+
+- remaining slowdowns after this point are more credibly attributable to the split boundary and proposal economics
+- they are less likely to be artifacts from verifier-side text replay drift or sampler-history mismatch
+
 ## Recording Rule
 
 Every new split optimization experiment must record:
