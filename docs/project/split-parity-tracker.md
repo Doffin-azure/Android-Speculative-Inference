@@ -216,6 +216,54 @@ Interpretation:
 - the remaining main bottleneck is still the remote verifier boundary, but proposal economics are much better than the earlier micro-round dominated runs
 - a follow-up experiment that raised only the experimental runner's `draftMaxTokens` from `6` to `8` did not improve throughput and was reverted
 
+## Latest Verifier-Thread Compression
+
+The next successful optimization on `2026-04-08` did not change speculative semantics.
+
+It fixed an execution-configuration mismatch:
+
+- the desktop service already had a `threads` setting
+- but the exact desktop verifier helper was not consuming that thread budget
+- helper-side speculative verify sessions therefore ran with the helper's default context thread count instead of the configured service thread count
+
+The fix now:
+
+- forwards `threadCount` from `tools/desktop_inference_service.py` into the native helper load request
+- stores that thread budget in `tools/desktop_target_runtime.cpp`
+- applies it to each verifier session context through `ctx_params.n_threads` and `ctx_params.n_threads_batch`
+- raises the desktop service default from a fixed `2` threads to `max(4, cpu_count / 2)`
+
+Latest measured result:
+
+- run: `2026-04-08T14-27-55+08-00`
+- `committedTokens=64`
+- `totalProposedTokens=67`
+- accepted/proposed `= 40 / 67 = 59.70%`
+- `totalMs=5772`
+- `totalRemoteProposeMs=1934`
+- `overallTokensPerSecond=11.088`
+
+Direct comparison against the earlier incremental-commit run `2026-04-08T13-34-05+08-00`:
+
+- `totalRemoteProposeMs`: `2759 -> 1934`
+- `overallTokensPerSecond`: `9.620 -> 11.088`
+- remote verifier portion improved by about `1.43x`
+
+Refreshed Android local comparison:
+
+- local run: `2026-04-08T14-29-26+08-00`
+- comparison: `2026-04-08T14-30-34+08-00`
+- Android local draft-loop throughput: `17.616 tok/s`
+- Android split draft-side throughput: `18.074 tok/s`
+- Android split overall throughput: `11.088 tok/s`
+- Android split remote-propose share: `33.51%`
+
+Interpretation:
+
+- this pass improved the verifier lane without changing draft/verify contract semantics
+- Android-side draft compute still did not regress relative to the local-only baseline
+- the main limiter is no longer overwhelmingly `remotePropose`; the split lane is now closer to balanced between verifier cost and draft-side runtime maintenance
+
 ## Recording Rule
 
 Every new split optimization experiment must record:

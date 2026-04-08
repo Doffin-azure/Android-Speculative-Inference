@@ -45,6 +45,13 @@ interface LocalLlm {
     suspend fun applyVerifiedRealTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {
         throw UnsupportedOperationException("Applying verified real tokens is not implemented by this LocalLlm.")
     }
+    suspend fun applyVerifiedRealTokensAndDraftNextRealTokenIds(
+        sessionId: String,
+        tokenIds: List<Int>,
+        maxTokens: Int
+    ): List<Int> {
+        throw UnsupportedOperationException("Combined real-token apply/draft is not implemented by this LocalLlm.")
+    }
     suspend fun applyVerifiedTokens(sessionId: String, tokenIds: List<Int>): DraftSessionHandle {
         throw UnsupportedOperationException("Applying verified tokens is not implemented by this LocalLlm.")
     }

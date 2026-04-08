@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import shlex
 import socket
 import subprocess
@@ -23,7 +24,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PORT = 8080
-DEFAULT_THREADS = 2
+DEFAULT_THREADS = max(4, (os.cpu_count() or 4) // 2)
 DEFAULT_MAX_TOKENS = 64
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.9
@@ -599,9 +600,10 @@ def request_json(
 
 
 class DesktopTargetRuntimeClient:
-    def __init__(self, helper_path: Path, model_path: Path) -> None:
+    def __init__(self, helper_path: Path, model_path: Path, thread_count: int) -> None:
         self.helper_path = helper_path
         self.model_path = model_path
+        self.thread_count = max(1, int(thread_count))
         self.process: subprocess.Popen[str] | None = None
         self.lock = threading.Lock()
         self.model_loaded = False
@@ -635,7 +637,11 @@ class DesktopTargetRuntimeClient:
             if self.process.stdin is None or self.process.stdout is None:
                 raise RuntimeError("Exact desktop target runtime helper pipes are not available.")
             if not self.model_loaded:
-                self._write_request({"command": "load_model", "modelPath": str(self.model_path)})
+                self._write_request({
+                    "command": "load_model",
+                    "modelPath": str(self.model_path),
+                    "threadCount": self.thread_count,
+                })
                 load_response = self._read_response()
                 if not bool(load_response.get("ok")):
                     raise RuntimeError(str(load_response.get("error") or "Failed to load exact desktop target runtime model."))
@@ -3390,7 +3396,7 @@ class InferenceServer(ThreadingHTTPServer):
         self.target_sessions: dict[str, TargetSessionState] = {}
         self.sessions_lock = threading.Lock()
         self.desktop_target_runtime = (
-            DesktopTargetRuntimeClient(config.desktop_target_runtime_path, config.model_path)
+            DesktopTargetRuntimeClient(config.desktop_target_runtime_path, config.model_path, config.threads)
             if config.desktop_target_runtime_path is not None
             else None
         )

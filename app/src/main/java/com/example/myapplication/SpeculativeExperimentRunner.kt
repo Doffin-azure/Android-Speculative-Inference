@@ -72,6 +72,7 @@ object SpeculativeExperimentRunner {
         var currentDraftMaxTokens = INITIAL_DRAFT_TOKENS
         var consecutiveZeroAcceptSteps = 0
         var consecutivePositiveAcceptSteps = 0
+        var pendingVerifiedTokenIds = emptyList<Int>()
 
         try {
             for (draftStep in 1..128) {
@@ -81,12 +82,21 @@ object SpeculativeExperimentRunner {
 
                 val requestedDraftMaxTokens = currentDraftMaxTokens
                 val draftFetchStartedAt = System.currentTimeMillis()
-                val proposedTokenIds = localLlm.draftNextRealTokenIds(
-                    sessionId = localDraftSession.sessionId,
-                    maxTokens = requestedDraftMaxTokens
-                )
+                val proposedTokenIds = if (pendingVerifiedTokenIds.isEmpty()) {
+                    localLlm.draftNextRealTokenIds(
+                        sessionId = localDraftSession.sessionId,
+                        maxTokens = requestedDraftMaxTokens
+                    )
+                } else {
+                    localLlm.applyVerifiedRealTokensAndDraftNextRealTokenIds(
+                        sessionId = localDraftSession.sessionId,
+                        tokenIds = pendingVerifiedTokenIds,
+                        maxTokens = requestedDraftMaxTokens
+                    )
+                }
                 val draftFetchMs = System.currentTimeMillis() - draftFetchStartedAt
                 totalDraftFetchMs += draftFetchMs
+                pendingVerifiedTokenIds = emptyList()
 
                 if (proposedTokenIds.size < MIN_DRAFT_TOKENS) {
                     traces += "step=$draftStep stopped draftCount=${proposedTokenIds.size}"
@@ -134,11 +144,8 @@ object SpeculativeExperimentRunner {
                     }
                 }
 
+                pendingVerifiedTokenIds = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
                 val localApplyStartedAt = System.currentTimeMillis()
-                localLlm.applyVerifiedRealTokens(
-                    sessionId = localDraftSession.sessionId,
-                    tokenIds = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
-                )
                 val localApplyMs = System.currentTimeMillis() - localApplyStartedAt
                 totalLocalApplyMs += localApplyMs
 
