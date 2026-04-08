@@ -367,7 +367,14 @@ json handle_start_session(const json & request) {
     }
 
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = std::max(DEFAULT_SESSION_N_CTX, llama_model_n_ctx_train(g_runtime.model));
+    // The verifier fast path only needs a modest live context window for the
+    // replayed prompt + accepted prefix. Allocating up to the model's training
+    // context here can trigger huge, unnecessary KV reservations and make
+    // start_session unstable under the desktop helper.
+    ctx_params.n_ctx = std::min<int32_t>(
+        DEFAULT_SESSION_N_CTX,
+        static_cast<int32_t>(llama_model_n_ctx_train(g_runtime.model))
+    );
     ctx_params.n_batch = DEFAULT_SESSION_N_BATCH;
     ctx_params.no_perf = false;
 
@@ -381,7 +388,8 @@ json handle_start_session(const json & request) {
     }
 
     session.batch = llama_batch_init(DEFAULT_SESSION_N_BATCH, 0, 1);
-    common_params_sampling sampling_params;
+    const json sampling_config = request.value("samplingConfig", json::object());
+    common_params_sampling sampling_params = build_sampling_params(sampling_config);
     sampling_params.no_perf = false;
     session.sampler = common_sampler_init(g_runtime.model, sampling_params);
     if (session.sampler == nullptr) {
@@ -389,7 +397,7 @@ json handle_start_session(const json & request) {
         return error_json("Failed to create speculative sampler.");
     }
 
-    session.sampling_config_key = "{}";
+    session.sampling_config_key = sampling_config_key(sampling_config);
 
     if (!rebuild_and_restore_session(session, error)) {
         free_session(session);
@@ -438,11 +446,12 @@ json handle_tokenize_text(const json & request) {
     return response;
 }
 
-json handle_verify_draft_batch(const json & request) {
+json handle_verify_draft_batch(const json & request, const bool split_mode = false) {
     std::string error;
     if (!ensure_model_loaded(error)) {
         return error_json(error);
     }
+    const int64_t t_helper_begin_us = ggml_time_us();
 
     const std::string session_id = request.value("sessionId", "");
     if (session_id.empty()) {
@@ -456,7 +465,7 @@ json handle_verify_draft_batch(const json & request) {
     auto & session = it->second;
 
     const std::vector<llama_token> request_accepted = json_to_tokens(request.value("acceptedTokenIds", json::array()));
-    if (request.contains("acceptedTokenIds") && request_accepted != session.accepted_tokens) {
+    if (!split_mode && request.contains("acceptedTokenIds") && request_accepted != session.accepted_tokens) {
         session.accepted_tokens = request_accepted;
         if (!rebuild_and_restore_session(session, error)) {
             return error_json(error);
@@ -470,6 +479,10 @@ json handle_verify_draft_batch(const json & request) {
 
     const json sampling_config = request.value("samplingConfig", json::object());
     const std::string requested_sampling_key = sampling_config_key(sampling_config);
+    const int64_t t_prepare_begin_us = ggml_time_us();
+    const bool fast_path_was_ready = session.fast_path_ready;
+    bool sampler_rebuilt = false;
+    bool fast_path_reinitialized = false;
     if (requested_sampling_key != session.sampling_config_key) {
         const common_params_sampling sampling_params = build_sampling_params(sampling_config);
         common_sampler_free(session.sampler);
@@ -477,16 +490,20 @@ json handle_verify_draft_batch(const json & request) {
         if (session.sampler == nullptr) {
             return error_json("Failed to rebuild speculative sampler for verify_draft_batch.");
         }
+        sampler_rebuilt = true;
         session.sampling_config_key = requested_sampling_key;
         if (!rebuild_and_restore_session(session, error)) {
             return error_json(error);
         }
     } else if (!session.fast_path_ready) {
+        fast_path_reinitialized = true;
         if (!initialize_fast_path(session, error)) {
             return error_json(error);
         }
     }
+    const int64_t t_prepare_end_us = ggml_time_us();
 
+    const int64_t t_decode_begin_us = ggml_time_us();
     common_batch_clear(session.batch);
     common_batch_add(
         session.batch,
@@ -508,18 +525,21 @@ json handle_verify_draft_batch(const json & request) {
     if (llama_decode(session.ctx, session.batch) != 0) {
         return error_json("llama_decode failed during verify_draft_batch.");
     }
+    const int64_t t_decode_end_us = ggml_time_us();
 
     std::vector<int> idxs(draft_tokens.size() + 1);
     for (size_t index = 0; index < idxs.size(); ++index) {
         idxs[index] = static_cast<int>(index);
     }
 
+    const int64_t t_sample_begin_us = ggml_time_us();
     const std::vector<llama_token> sampled_tokens = common_sampler_sample_and_accept_n(
         session.sampler,
         session.ctx,
         idxs,
         draft_tokens
     );
+    const int64_t t_sample_end_us = ggml_time_us();
 
     if (sampled_tokens.empty()) {
         return error_json("Target sampling returned no tokens.");
@@ -554,6 +574,7 @@ json handle_verify_draft_batch(const json & request) {
     session.anchor_prefix_count = static_cast<int32_t>(session.anchor_prefix_tokens.size());
     session.anchor_last_token = followup_token;
     session.accepted_tokens.insert(session.accepted_tokens.end(), returned_tokens.begin(), returned_tokens.end());
+    const int64_t t_rollback_begin_us = ggml_time_us();
     if (!llama_memory_seq_rm(
             llama_get_memory(session.ctx),
             0,
@@ -564,7 +585,9 @@ json handle_verify_draft_batch(const json & request) {
             return error_json("Failed to trim speculative verifier tail and could not rebuild fast path.");
         }
     }
+    const int64_t t_rollback_end_us = ggml_time_us();
     session.fast_path_ready = true;
+    const int64_t t_helper_end_us = ggml_time_us();
 
     auto response = ok_json();
     response["acceptedTokenIds"] = accepted_tokens;
@@ -580,13 +603,25 @@ json handle_verify_draft_batch(const json & request) {
     response["targetIndexBeforeStep"] = static_cast<int>(session.accepted_tokens.size() - returned_tokens.size());
     response["targetRemainingCount"] = 0;
     response["targetPreviewDebug"] = "";
-    response["runtimeBackend"] = "desktop_target_runtime_llama_cpp_spec_native";
+    response["runtimeBackend"] = split_mode
+        ? "desktop_target_runtime_llama_cpp_spec_split"
+        : "desktop_target_runtime_llama_cpp_spec_native";
     response["debug"] = json{
         {"draftCount", static_cast<int>(draft_tokens.size())},
         {"acceptedDraftCount", accepted_draft_count},
         {"rolledBackDraftCount", static_cast<int>(draft_tokens.size()) - accepted_draft_count},
         {"usedSpeculative", true},
         {"llamaCppStyleMode", true},
+        {"splitContractMode", split_mode},
+        {"fastPathWasReady", fast_path_was_ready},
+        {"fastPathReadyAfterPrepare", session.fast_path_ready},
+        {"samplerRebuilt", sampler_rebuilt},
+        {"fastPathReinitialized", fast_path_reinitialized},
+        {"timingPrepareMs", (t_prepare_end_us - t_prepare_begin_us) / 1000.0},
+        {"timingDecodeMs", (t_decode_end_us - t_decode_begin_us) / 1000.0},
+        {"timingSampleMs", (t_sample_end_us - t_sample_begin_us) / 1000.0},
+        {"timingRollbackMs", (t_rollback_end_us - t_rollback_begin_us) / 1000.0},
+        {"timingHelperTotalMs", (t_helper_end_us - t_helper_begin_us) / 1000.0},
     };
     return response;
 }
@@ -618,7 +653,10 @@ json handle_request(const json & request) {
         return handle_start_session(request);
     }
     if (command == "verify_draft_batch") {
-        return handle_verify_draft_batch(request);
+        return handle_verify_draft_batch(request, false);
+    }
+    if (command == "verify_split_draft_batch") {
+        return handle_verify_draft_batch(request, true);
     }
     if (command == "render_tokens") {
         return handle_render_tokens(request);

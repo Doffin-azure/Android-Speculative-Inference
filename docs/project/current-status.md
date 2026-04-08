@@ -182,6 +182,31 @@ Current strongest conclusion:
   - model size still matters, but the current dominant issue is the implementation cost model of the draft path
 - the Android speculative client now also skips per-step real-token `proposedText` rendering on the hot path for `llama_cpp_spec_native`, because the verifier decision is driven by token ids rather than that debug text field
 - the Android real-token local apply path now also skips per-step accepted-text detokenize work and keeps the draft session token-first during speculative commits
+- the `llama_cpp_spec_native` split contract is now narrower on the hot path:
+  - Android still keeps older verifier lanes compatible with `proposedText` and optional `draftTree`
+  - but the llama.cpp-style lane now sends only real-token draft ids to desktop `propose`
+  - desktop correspondingly ignores `draftTree` on that lane and derives verifier behavior only from token-level speculative state
+- the same llama.cpp-style lane now also treats the native desktop helper as the verifier-state owner:
+  - the Python orchestration shell no longer re-sends `acceptedTokenIds` to the helper on every verify step
+  - helper-side committed anchor state now remains inside the native verifier session unless an explicit recovery path is needed
+- the codebase now also contains a second experimental native split lane, `llama_cpp_spec_split`:
+  - Android `ai_chat.cpp` explicitly remains the draft-state owner
+  - desktop `desktop_target_runtime.cpp` explicitly remains the verifier-state owner
+  - Python service now routes only token batches between those two runtimes on that lane
+  - desktop helper now exposes a dedicated `verify_split_draft_batch` command that refuses the older helper-side accepted-token reinjection path
+  - Android local draft control now also exposes a dedicated split-style synchronization interface, so this lane can realign the local draft runtime from the authoritative accepted token sequence before generating the next proposal slice
+  - that split-style synchronization now also has a first native implementation in `ai_chat.cpp`, which aligns live draft state against the authoritative token sequence by:
+    - computing the common prefix against the current live runtime token history
+    - trimming speculative tail tokens in place when possible
+    - appending missing authoritative tail tokens when possible
+    - only falling back to full token-sequence rebuild when divergence occurs inside the prefix
+- the Android real-token draft session now also skips redundant sequence-state restore work when the same session is already live at its committed state:
+  - start-session and post-commit states now mark the native runtime as aligned
+  - the next draft fetch can reuse that committed runtime directly instead of immediately round-tripping through another restore
+- the same Android draft session now also has a first in-place rollback step toward upstream continuity:
+  - when the live runtime belongs to the same session and only contains a speculative tail beyond the committed prefix
+  - the draft runtime now trims that tail in place and rebuilds the logits cursor
+  - only if that rollback path cannot prove the current runtime still extends the committed prefix does it fall back to a full sequence-state restore
 - the latest successful `real_token + token_pq` run also clarifies the next concrete correction-side gap:
   - observed-top-k residual correction is now wired in
   - but follow-up / correction still uses only the currently observed top-k slice instead of a fuller target residual over the whole vocabulary

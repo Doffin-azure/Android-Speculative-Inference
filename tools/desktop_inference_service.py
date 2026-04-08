@@ -75,8 +75,14 @@ def default_model_path() -> Path | None:
 
 
 def default_desktop_target_runtime_path() -> Path | None:
+    cmd_candidate = REPO_ROOT / "tools" / "desktop_target_runtime.cmd"
+    if cmd_candidate.exists():
+        return cmd_candidate
     candidate = REPO_ROOT / "tools" / "desktop_target_runtime.exe"
-    return candidate if candidate.exists() else None
+    if candidate.exists():
+        return candidate
+    raw_candidate = REPO_ROOT / "tools" / "desktop_target_runtime"
+    return raw_candidate if raw_candidate.exists() else None
 
 
 def default_llama_cli_path() -> str | None:
@@ -270,6 +276,7 @@ class TargetSessionState:
     target_session_id: str
     speculative_session_id: str
     request_id: str
+    verifier_sampling_seed: int
     verifier_mode: str
     verifier_stage: str
     target_model: str
@@ -311,6 +318,14 @@ class VerifyComputation:
     tree_branch_factor: int = 0
     tree_depth_evaluated: int = 0
     tree_debug_summary: str = ""
+    accepted_text_after_step: str = ""
+    timing_prepare_ms: float = 0.0
+    timing_decode_ms: float = 0.0
+    timing_sample_ms: float = 0.0
+    timing_rollback_ms: float = 0.0
+    timing_helper_total_ms: float = 0.0
+    timing_helper_round_trip_ms: float = 0.0
+    timing_service_total_ms: float = 0.0
 
 
 @dataclass
@@ -387,7 +402,7 @@ class TreeVerifyComputation:
 def infer_verifier_stage(verifier_mode: str) -> str:
     if verifier_mode == "prompt_stub":
         return "prompt_stub"
-    if verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned"}:
+    if verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"}:
         return "true_target"
     if verifier_mode in {"llama_preview", "llama_step_proxy", "llama_replay_proxy"}:
         return "proxy_target"
@@ -445,7 +460,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--speculative-verifier-mode",
-        choices=("prompt_stub", "llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned"),
+        choices=("prompt_stub", "llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"),
         default=DEFAULT_SPECULATIVE_VERIFIER_MODE,
         help="Verifier mode for speculative propose handling.",
     )
@@ -453,7 +468,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--desktop-target-runtime-path",
         type=Path,
         default=default_desktop_target_runtime_path(),
-        help="Optional path to the exact desktop target runtime helper for llama_eagle_aligned.",
+        help="Optional path to the desktop target runtime helper for native verifier lanes.",
     )
     return parser
 
@@ -598,8 +613,11 @@ class DesktopTargetRuntimeClient:
             raise RuntimeError(
                 f"Exact desktop target runtime helper is not available: {self.helper_path}"
             )
+        launch_command = [str(self.helper_path)]
+        if self.helper_path.suffix.lower() in {".cmd", ".bat"}:
+            launch_command = ["cmd.exe", "/c", str(self.helper_path)]
         self.process = subprocess.Popen(
-            [str(self.helper_path)],
+            launch_command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1140,7 +1158,11 @@ def candidate_probability(candidate: dict[str, Any]) -> float:
 
 
 def is_real_token_verifier_mode(verifier_mode: str) -> bool:
-    return verifier_mode in {"llama_true_tree_pq_tokens", "llama_eagle_aligned"}
+    return verifier_mode in {"llama_true_tree_pq_tokens", "llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"}
+
+
+def is_llama_cpp_native_verifier_mode(verifier_mode: str) -> bool:
+    return verifier_mode in {"llama_cpp_spec_native", "llama_cpp_spec_split"}
 
 
 def tokenize_with_server(
@@ -1396,10 +1418,10 @@ def build_target_preview_text(
     temperature: float,
     top_p: float,
 ) -> tuple[str, str]:
-    if verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned"}:
+    if verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"}:
         return "", ""
 
-    if verifier_mode == "llama_eagle_aligned":
+    if verifier_mode in {"llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"}:
         return "", ""
 
     if verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"}:
@@ -1462,7 +1484,7 @@ def resolve_target_token_ids(
         if target_preview_text.strip():
             return prefix_token_ids + token_ids_from_text(target_preview_text)
         return prefix_token_ids or [0]
-    if verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned"}:
+    if verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"}:
         return accepted_token_ids[:] if accepted_token_ids else [0]
     if verifier_mode in {"llama_preview", "llama_step_proxy"} and target_preview_text.strip():
         return token_ids_from_text(target_preview_text)
@@ -1498,10 +1520,10 @@ def refresh_llama_proxy_preview_for_target_session(
     accepted_token_ids: list[int],
     min_target_chars: int,
 ) -> None:
-    if target_session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned"}:
+    if target_session.verifier_mode not in {"llama_preview", "llama_step_proxy", "llama_replay_proxy", "llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"}:
         return
 
-    if target_session.verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned"}:
+    if target_session.verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens", "llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"}:
         return
 
     current_chars = max(0, len(target_session.target_token_ids) - target_session.accepted_token_count)
@@ -1569,10 +1591,17 @@ def current_assistant_prefix_text(session: SpeculativeSession) -> str:
 
 
 def build_target_session_state(session: SpeculativeSession) -> TargetSessionState:
+    verifier_sampling_seed = int(
+        hashlib.sha256(
+            f"{session.request_id}:{session.session_id}:verifier".encode("utf-8")
+        ).hexdigest()[:8],
+        16,
+    )
     return TargetSessionState(
         target_session_id=str(uuid.uuid4()),
         speculative_session_id=session.session_id,
         request_id=session.request_id,
+        verifier_sampling_seed=verifier_sampling_seed,
         verifier_mode=session.verifier_mode,
         verifier_stage=infer_verifier_stage(session.verifier_mode),
         target_model=session.target_model,
@@ -1592,6 +1621,10 @@ def build_target_session_state(session: SpeculativeSession) -> TargetSessionStat
         true_runtime_backend=(
             "desktop_target_runtime_exact"
             if session.verifier_mode == "llama_eagle_aligned"
+            else "desktop_target_runtime_llama_cpp_spec_split"
+            if session.verifier_mode == "llama_cpp_spec_split"
+            else "desktop_target_runtime_llama_cpp_spec_native"
+            if session.verifier_mode == "llama_cpp_spec_native"
             else "llama_server_slot"
             if session.verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"}
             else "proxy_target"
@@ -2088,7 +2121,12 @@ def apply_verify_computation_to_sessions(
     session.accepted_token_ids.extend(committed_token_ids)
     session.accepted_token_count = len(session.accepted_token_ids)
     session.correction_token_ids = computation.correction_token_ids[:max_correction_tokens]
-    session.accepted_text = render_token_ids_for_verifier(config, target_session, session.accepted_token_ids)
+    session.accepted_text = computation.accepted_text_after_step or render_token_ids_for_verifier(
+        config,
+        target_session,
+        session.accepted_token_ids,
+    )
+    session.target_token_ids = session.accepted_token_ids[:]
     session.last_target_text_delta = computation.target_text_delta
     session.last_finish_reason = computation.finish_reason
     session.status = "verifying"
@@ -2585,8 +2623,42 @@ def start_eagle_aligned_target_session(
         sessionId=target_session.target_session_id,
         systemPrompt=session.system_prompt,
         userPrompt=session.user_prompt,
+        samplingConfig={
+            "temperature": session.temperature,
+            "topP": session.top_p,
+            "topK": 40,
+            "seed": target_session.verifier_sampling_seed,
+        },
     )
     target_session.true_runtime_backend = "desktop_target_runtime_exact"
+    target_session.target_preview_text = str(response.get("targetPreviewText") or "")
+    target_session.last_replay_prompt = str(response.get("replayPrompt") or "")
+    session.target_preview_text = target_session.target_preview_text
+    session.last_replay_prompt = target_session.last_replay_prompt
+    session.target_token_ids = []
+    sync_target_session_state(target_session, session)
+
+
+def start_llama_cpp_native_target_session(
+    server: "InferenceServer",
+    session: SpeculativeSession,
+    target_session: TargetSessionState,
+) -> None:
+    if server.desktop_target_runtime is None:
+        raise ValueError(
+            f"{session.verifier_mode} requires --desktop-target-runtime-path and a desktop target runtime helper."
+        )
+    response = server.desktop_target_runtime.request(
+        "start_session",
+        sessionId=target_session.target_session_id,
+        systemPrompt=session.system_prompt,
+        userPrompt=session.user_prompt,
+    )
+    target_session.true_runtime_backend = (
+        "desktop_target_runtime_llama_cpp_spec_split"
+        if session.verifier_mode == "llama_cpp_spec_split"
+        else "desktop_target_runtime_llama_cpp_spec_native"
+    )
     target_session.target_preview_text = str(response.get("targetPreviewText") or "")
     target_session.last_replay_prompt = str(response.get("replayPrompt") or "")
     session.target_preview_text = target_session.target_preview_text
@@ -2620,20 +2692,89 @@ def compute_eagle_aligned_verifier_result(
         maxCorrectionTokens=max_correction_tokens,
         deterministicSeedMaterial=f"{target_session.request_id}:{target_session.accepted_token_count}",
     )
+    rejected_from_index_raw = response.get("rejectedFromIndex", -1)
+    target_index_before_step_raw = response.get("targetIndexBeforeStep", target_session.accepted_token_count)
+    target_remaining_count_raw = response.get("targetRemainingCount", 0)
+    tree_candidate_count_raw = response.get("treeCandidateCount", 0)
+    tree_branch_factor_raw = response.get("treeBranchFactor", 0)
+    tree_depth_evaluated_raw = response.get("treeDepthEvaluated", 0)
     return VerifyComputation(
         accepted_token_ids=parse_int_list("helper.acceptedTokenIds", response.get("acceptedTokenIds") or []),
         correction_token_ids=parse_int_list("helper.correctionTokenIds", response.get("correctionTokenIds") or []),
-        rejected_from_index=int(response.get("rejectedFromIndex", -1) or -1),
+        rejected_from_index=int(-1 if rejected_from_index_raw is None else rejected_from_index_raw),
         target_text_delta=str(response.get("targetTextDelta") or ""),
         finish_reason=str(response.get("finishReason") or ""),
-        target_index_before_step=int(response.get("targetIndexBeforeStep", target_session.accepted_token_count) or target_session.accepted_token_count),
-        target_remaining_count=int(response.get("targetRemainingCount", 0) or 0),
+        target_index_before_step=int(target_session.accepted_token_count if target_index_before_step_raw is None else target_index_before_step_raw),
+        target_remaining_count=int(0 if target_remaining_count_raw is None else target_remaining_count_raw),
         target_preview_debug=str(response.get("targetPreviewDebug") or ""),
-        tree_candidate_count=int(response.get("treeCandidateCount", 0) or 0),
+        tree_candidate_count=int(0 if tree_candidate_count_raw is None else tree_candidate_count_raw),
         tree_best_path_token_ids=parse_int_list("helper.treeBestPathTokenIds", response.get("treeBestPathTokenIds") or []),
-        tree_branch_factor=int(response.get("treeBranchFactor", 0) or 0),
-        tree_depth_evaluated=int(response.get("treeDepthEvaluated", 0) or 0),
+        tree_branch_factor=int(0 if tree_branch_factor_raw is None else tree_branch_factor_raw),
+        tree_depth_evaluated=int(0 if tree_depth_evaluated_raw is None else tree_depth_evaluated_raw),
         tree_debug_summary=str(response.get("treeDebugSummary") or ""),
+        accepted_text_after_step=str(response.get("acceptedTextAfterStep") or ""),
+    )
+
+
+def compute_llama_cpp_native_verifier_result(
+    server: "InferenceServer",
+    session: SpeculativeSession,
+    target_session: TargetSessionState,
+    *,
+    proposed_token_ids: list[int],
+) -> VerifyComputation:
+    if server.desktop_target_runtime is None:
+        raise ValueError(
+            f"{session.verifier_mode} requires --desktop-target-runtime-path and a desktop target runtime helper."
+        )
+
+    helper_started_at = time.perf_counter()
+    response = server.desktop_target_runtime.request(
+        "verify_split_draft_batch" if session.verifier_mode == "llama_cpp_spec_split" else "verify_draft_batch",
+        sessionId=target_session.target_session_id,
+        draftTokenIds=proposed_token_ids,
+        samplingConfig={
+            "temperature": session.temperature,
+            "topP": session.top_p,
+            "topK": 40,
+            "seed": target_session.verifier_sampling_seed,
+        },
+    )
+    helper_round_trip_ms = (time.perf_counter() - helper_started_at) * 1000.0
+    debug = response.get("debug") if isinstance(response.get("debug"), dict) else {}
+    rejected_from_index_raw = response.get("rejectedFromIndex", -1)
+    target_index_before_step_raw = response.get("targetIndexBeforeStep", target_session.accepted_token_count)
+    target_remaining_count_raw = response.get("targetRemainingCount", 0)
+    return VerifyComputation(
+        accepted_token_ids=parse_int_list("helper.acceptedTokenIds", response.get("acceptedTokenIds") or []),
+        correction_token_ids=parse_int_list("helper.correctionTokenIds", response.get("correctionTokenIds") or []),
+        rejected_from_index=int(-1 if rejected_from_index_raw is None else rejected_from_index_raw),
+        target_text_delta=str(response.get("targetTextDelta") or ""),
+        finish_reason=str(response.get("finishReason") or ""),
+        target_index_before_step=int(target_session.accepted_token_count if target_index_before_step_raw is None else target_index_before_step_raw),
+        target_remaining_count=int(0 if target_remaining_count_raw is None else target_remaining_count_raw),
+        target_preview_debug=str(response.get("targetPreviewDebug") or ""),
+        tree_debug_summary=(
+            f"draftCount={int(debug.get('draftCount', 0) or 0)} "
+            f"acceptedDraftCount={int(debug.get('acceptedDraftCount', 0) or 0)} "
+            f"rolledBackDraftCount={int(debug.get('rolledBackDraftCount', 0) or 0)} "
+            f"usedSpeculative={bool(debug.get('usedSpeculative'))} "
+            f"llamaCppStyleMode={bool(debug.get('llamaCppStyleMode'))} "
+            f"splitContractMode={bool(debug.get('splitContractMode'))} "
+            f"prepareMs={float(debug.get('timingPrepareMs', 0.0) or 0.0):.3f} "
+            f"decodeMs={float(debug.get('timingDecodeMs', 0.0) or 0.0):.3f} "
+            f"sampleMs={float(debug.get('timingSampleMs', 0.0) or 0.0):.3f} "
+            f"rollbackMs={float(debug.get('timingRollbackMs', 0.0) or 0.0):.3f} "
+            f"helperTotalMs={float(debug.get('timingHelperTotalMs', 0.0) or 0.0):.3f} "
+            f"helperRoundTripMs={helper_round_trip_ms:.3f}"
+        ),
+        accepted_text_after_step=str(response.get("acceptedTextAfterStep") or ""),
+        timing_prepare_ms=float(debug.get("timingPrepareMs", 0.0) or 0.0),
+        timing_decode_ms=float(debug.get("timingDecodeMs", 0.0) or 0.0),
+        timing_sample_ms=float(debug.get("timingSampleMs", 0.0) or 0.0),
+        timing_rollback_ms=float(debug.get("timingRollbackMs", 0.0) or 0.0),
+        timing_helper_total_ms=float(debug.get("timingHelperTotalMs", 0.0) or 0.0),
+        timing_helper_round_trip_ms=helper_round_trip_ms,
     )
 
 
@@ -2642,6 +2783,8 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
     target_session = build_target_session_state(session)
     if session.verifier_mode == "llama_eagle_aligned":
         start_eagle_aligned_target_session(server, session, target_session)
+    elif is_llama_cpp_native_verifier_mode(session.verifier_mode):
+        start_llama_cpp_native_target_session(server, session, target_session)
     elif session.verifier_mode in {"llama_true_step", "llama_true_tree", "llama_true_tree_pq_tokens"} and server.config.llama_server_base_url:
         target_session.true_runtime_backend = "llama_server_slot"
         target_session.llama_server_slot_id = choose_llama_server_slot(server.config.llama_server_base_url)
@@ -2718,6 +2861,7 @@ def start_speculative_session(server: "InferenceServer", payload: dict[str, Any]
 
 
 def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any]) -> dict[str, Any]:
+    t_service_begin = time.perf_counter()
     session_id = str(payload.get("sessionId") or "")
     if not session_id:
         raise ValueError("sessionId is required.")
@@ -2732,12 +2876,14 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
 
     draft_step = int(payload.get("draftStep") or 0)
     proposed_token_ids = parse_int_list("proposedTokenIds", payload.get("proposedTokenIds"))
-    draft_tree = parse_optional_draft_tree_payload(payload.get("draftTree"))
+    draft_tree = None
+    if not is_llama_cpp_native_verifier_mode(session.verifier_mode):
+        draft_tree = parse_optional_draft_tree_payload(payload.get("draftTree"))
     max_correction_tokens = max(1, int(payload.get("maxCorrectionTokens") or 1))
     if not proposed_token_ids:
         raise ValueError("proposedTokenIds must not be empty.")
 
-    if session.verifier_mode != "llama_eagle_aligned":
+    if session.verifier_mode not in {"llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"}:
         refresh_target_session_driver_state(
             server.config,
             target_session,
@@ -2772,6 +2918,15 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             proposed_token_ids=proposed_token_ids,
             max_correction_tokens=max_correction_tokens,
             draft_tree=draft_tree,
+        )
+    elif is_llama_cpp_native_verifier_mode(session.verifier_mode):
+        debug_token_mode = "real_token"
+        debug_acceptance_mode = "llama_cpp_accept_n"
+        computation = compute_llama_cpp_native_verifier_result(
+            server,
+            session,
+            target_session,
+            proposed_token_ids=proposed_token_ids,
         )
     elif session.verifier_mode == "llama_true_tree_pq_tokens":
         if draft_tree is not None and draft_tree.token_mode == "real_token":
@@ -2816,6 +2971,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             proposed_token_ids=proposed_token_ids,
             max_correction_tokens=max_correction_tokens,
         )
+    computation.timing_service_total_ms = (time.perf_counter() - t_service_begin) * 1000.0
     accepted_count = len(computation.accepted_token_ids)
     apply_verify_computation_to_sessions(
         server.config,
@@ -2831,7 +2987,7 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             sync_target_session_state(target_session, session)
     latest_cached_prefix, latest_cached_next = latest_true_cache_entry(target_session) if target_session is not None else ("", "")
 
-    if session.verifier_mode in {"llama_true_tree_pq_tokens", "llama_eagle_aligned"} and computation.rejected_from_index == -1:
+    if session.verifier_mode in {"llama_true_tree_pq_tokens", "llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"} and computation.rejected_from_index == -1:
         base_status = "accepted"
     else:
         base_status = "accepted" if not computation.correction_token_ids and computation.rejected_from_index == -1 else "corrected"
@@ -2845,6 +3001,10 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         status = f"{base_status}_by_llama_true_tree_pq_tokens"
     elif session.verifier_mode == "llama_eagle_aligned":
         status = f"{base_status}_by_llama_eagle_aligned"
+    elif session.verifier_mode == "llama_cpp_spec_native":
+        status = f"{base_status}_by_llama_cpp_spec_native"
+    elif session.verifier_mode == "llama_cpp_spec_split":
+        status = f"{base_status}_by_llama_cpp_spec_split"
     elif session.verifier_mode in {"llama_preview", "llama_step_proxy"}:
         status = f"{base_status}_by_llama_preview"
     else:
@@ -2876,6 +3036,16 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "It will fail closed if the helper is unavailable or if the Android draft payload is missing exact branch-conditioned draftPathSteps."
         if session.verifier_mode == "llama_eagle_aligned"
         else
+        "Desktop speculative verification is now using a native llama.cpp-style speculative verifier lane. "
+        "Android sends a real-token draft sequence, and the desktop helper reproduces llama.cpp's current speculative control flow: "
+        "batch verify the draft, accept the longest matching prefix, then append one target token."
+        if session.verifier_mode == "llama_cpp_spec_native"
+        else
+        "Desktop speculative verification is now using the experimental split-contract llama.cpp speculative lane. "
+        "Android owns the draft runtime state in ai_chat.cpp, the desktop helper owns the verifier state in desktop_target_runtime.cpp, "
+        "and the Python service only routes token batches between the two sides."
+        if session.verifier_mode == "llama_cpp_spec_split"
+        else
         "Desktop speculative verification is currently using llama preview text as a target proxy. "
         "It now computes accepted prefixes and correction tokens from the preview text, but it still does not run true target-model token verification yet."
         if session.verifier_mode in {"llama_preview", "llama_step_proxy"}
@@ -2905,6 +3075,8 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
         "mismatchCount": session.mismatch_count,
         "status": status,
         "verifierStage": infer_verifier_stage(session.verifier_mode),
+        "tokenMode": debug_token_mode,
+        "acceptanceMode": debug_acceptance_mode,
         "warning": warning,
         "acceptedText": session.accepted_text,
         "error": "",
@@ -2940,6 +3112,13 @@ def propose_speculative_tokens(server: "InferenceServer", payload: dict[str, Any
             "draftTreeDepthEvaluated": draft_tree.depth_evaluated if draft_tree is not None else 0,
             "draftTreeBestPathNodeIndices": draft_tree.best_path_node_indices if draft_tree is not None else [],
             "draftPathStepCount": len(draft_tree.draft_path_steps) if draft_tree is not None else 0,
+            "timingPrepareMs": computation.timing_prepare_ms,
+            "timingDecodeMs": computation.timing_decode_ms,
+            "timingSampleMs": computation.timing_sample_ms,
+            "timingRollbackMs": computation.timing_rollback_ms,
+            "timingHelperTotalMs": computation.timing_helper_total_ms,
+            "timingHelperRoundTripMs": computation.timing_helper_round_trip_ms,
+            "timingServiceTotalMs": computation.timing_service_total_ms,
         },
     }
 
@@ -3010,7 +3189,7 @@ def close_speculative_session(server: "InferenceServer", payload: dict[str, Any]
             erase_llama_server_slot(server.config.llama_server_base_url, target_session.llama_server_slot_id)
         except RuntimeError:
             pass
-    if target_session is not None and target_session.verifier_mode == "llama_eagle_aligned" and server.desktop_target_runtime is not None:
+    if target_session is not None and target_session.verifier_mode in {"llama_eagle_aligned", "llama_cpp_spec_native", "llama_cpp_spec_split"} and server.desktop_target_runtime is not None:
         try:
             server.desktop_target_runtime.request("close_session", sessionId=target_session.target_session_id)
         except RuntimeError:

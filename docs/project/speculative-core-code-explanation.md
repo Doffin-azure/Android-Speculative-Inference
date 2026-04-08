@@ -44,6 +44,9 @@ The current code below covers the present speculative scheme:
 16. explicit EAGLE gap and the exact-lane boundary
 17. Android committed-snapshot draft-session fast path
 18. desktop persistent verifier fast path and sampler reuse
+19. llama.cpp-style token-only split contract on the native verifier lane
+20. Android committed-runtime reuse inside the persistent draft session
+21. experimental split-contract lane with explicit draft-side / verifier-side ownership
 
 ## 1. Desktop Target-Session State
 
@@ -1498,3 +1501,204 @@ Explanation:
 Why this is core:
 
 - It directly targets the second major Android draft hotspot found after the first continuity pass.
+
+## 25. Llama.cpp-Style Token-Only Split Contract
+
+Files:
+
+- `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
+- `app/src/main/java/com/example/myapplication/inference/RemoteInferenceClient.kt`
+- `tools/desktop_inference_service.py`
+- `tools/desktop_target_runtime.cpp`
+
+Core code:
+
+```kotlin
+request = SpeculativeProposeRequest(
+    sessionId = startResponse.sessionId,
+    draftStep = draftStep,
+    proposedTokenIds = proposedTokens,
+    proposedText = if (startResponse.verifierMode == "llama_cpp_spec_native") "" else draftText,
+    maxCorrectionTokens = 1,
+    draftTree = if (startResponse.verifierMode == "llama_cpp_spec_native") null else localDraftTreeProposal
+)
+```
+
+```kotlin
+put("proposedTokenIds", JSONArray(request.proposedTokenIds))
+if (request.proposedText.isNotBlank()) {
+    put("proposedText", request.proposedText)
+}
+if (request.draftTree != null) {
+    put("draftTree", request.draftTree.toJson())
+}
+```
+
+```python
+proposed_token_ids = parse_int_list("proposedTokenIds", payload.get("proposedTokenIds"))
+draft_tree = None
+if session.verifier_mode != "llama_cpp_spec_native":
+    draft_tree = parse_optional_draft_tree_payload(payload.get("draftTree"))
+```
+
+```python
+response = server.desktop_target_runtime.request(
+    "verify_draft_batch",
+    sessionId=target_session.target_session_id,
+    draftTokenIds=proposed_token_ids,
+    samplingConfig={...},
+)
+```
+
+Explanation:
+
+- The older speculative lanes still keep a broader protocol shell for regression and tree-aware verification.
+- But the current `llama_cpp_spec_native` lane now narrows the hot-path exchange to what the native verifier actually consumes:
+  - draft token ids
+  - session-local verifier state on desktop
+- `proposedText` and `draftTree` are no longer part of the hot path on this lane.
+- The Python service also no longer re-sends `acceptedTokenIds` to the native helper on each `verify_draft_batch` call, so the helper is more clearly the verifier-state owner on this lane.
+
+Why this is core:
+
+- This is the first explicit protocol-shape move toward upstream `llama.cpp`'s token-first draft/verifier split.
+- It makes the project easier to reason about as two separated state owners:
+  - Android owns draft state
+  - desktop owns verifier state
+  - the hot path exchanges only the draft token sequence and verifier result
+
+## 26. Android Committed-Runtime Reuse
+
+File:
+
+- `lib/src/main/cpp/ai_chat.cpp`
+
+Core code:
+
+```cpp
+if (session_id == g_active_persistent_draft_session_id && g_active_runtime_matches_committed_snapshot) {
+    return 0;
+}
+```
+
+```cpp
+g_persistent_draft_sessions[session_id] = capture_persistent_draft_session_snapshot();
+mark_active_persistent_draft_runtime(session_id, true);
+```
+
+```cpp
+if (!g_active_persistent_draft_session_id.empty() && drafted_any) {
+    g_active_runtime_matches_committed_snapshot = false;
+}
+```
+
+```cpp
+if (session_id == g_active_persistent_draft_session_id &&
+    rollback_active_runtime_to_committed_snapshot(it->second)) {
+    mark_active_persistent_draft_runtime(session_id, true);
+    return 0;
+}
+```
+
+Explanation:
+
+- The persistent Android draft session still uses committed snapshot persistence.
+- But it now tracks whether the current native runtime is already aligned with the session's committed state.
+- When the same session is already live at its committed state, `restorePersistentDraftSession(...)` no longer round-trips through sequence-state restore.
+- When the same session is live but has only advanced into a speculative tail, the runtime now first tries to trim that tail in place and rebuild the logits cursor before falling back to sequence-state restore.
+- Draft generation marks the runtime as unaligned, while start/restore/commit mark it as aligned again.
+
+Why this is core:
+
+- This is a direct continuity improvement on the draft hot path.
+- It still does not yet reach upstream full KV reuse, but it removes a class of unnecessary restore work and introduces the first in-place rollback step on the Android draft lane.
+
+## 27. Experimental Split-Contract Native Lane
+
+Files:
+
+- `tools/desktop_inference_service.py`
+- `tools/desktop_target_runtime.cpp`
+- `app/src/main/java/com/example/myapplication/viewmodel/MainViewModel.kt`
+
+Core code:
+
+```python
+def is_llama_cpp_native_verifier_mode(verifier_mode: str) -> bool:
+    return verifier_mode in {"llama_cpp_spec_native", "llama_cpp_spec_split"}
+
+response = server.desktop_target_runtime.request(
+    "verify_split_draft_batch" if session.verifier_mode == "llama_cpp_spec_split" else "verify_draft_batch",
+    sessionId=target_session.target_session_id,
+    draftTokenIds=proposed_token_ids,
+    samplingConfig={...},
+)
+```
+
+```cpp
+json handle_verify_draft_batch(const json & request, const bool split_mode = false) {
+    ...
+    if (!split_mode && request.contains("acceptedTokenIds") && request_accepted != session.accepted_tokens) {
+        session.accepted_tokens = request_accepted;
+        ...
+    }
+}
+```
+
+```kotlin
+val verifierNeedsRealTokenDraft = (
+    startResponse.verifierMode == "llama_true_tree_pq_tokens" ||
+        startResponse.verifierMode == "llama_eagle_aligned" ||
+        startResponse.verifierMode == "llama_cpp_spec_native" ||
+        startResponse.verifierMode == "llama_cpp_spec_split"
+)
+```
+
+```kotlin
+override suspend fun syncRealTokenDraftSession(
+    sessionId: String,
+    authoritativeTokenIds: List<Int>
+): DraftSessionHandle = withContext(llamaDispatcher) {
+    ...
+}
+```
+
+```cpp
+static bool sync_runtime_to_authoritative_tokens(
+        const persistent_draft_session_snapshot &session_snapshot,
+        const std::vector<llama_token> &authoritative_token_ids,
+        const int predict_length) {
+    std::vector<llama_token> target_sequence = session_snapshot.prompt_prefix_tokens;
+    target_sequence.insert(
+            target_sequence.end(),
+            authoritative_token_ids.begin(),
+            authoritative_token_ids.end());
+
+    const size_t common_prefix = token_lcp_length(runtime_token_history, target_sequence);
+    const bool mismatch_inside_prefix = common_prefix < std::min(runtime_token_history.size(), target_sequence.size());
+    ...
+}
+```
+
+Explanation:
+
+- This lane keeps the same Android real-token draft runtime and the same native desktop helper foundation.
+- The change is ownership discipline.
+- On `llama_cpp_spec_split`, the hot path now treats:
+  - Android `ai_chat.cpp` as the only draft-state owner
+  - desktop `desktop_target_runtime.cpp` as the only verifier-state owner
+  - Python as a token-batch router only
+- The helper-side `verify_split_draft_batch` command intentionally ignores the older accepted-token reinjection seam, so this lane stays closer to the split reference model.
+- Android now also exposes a split-style draft synchronization interface:
+  - if the authoritative accepted sequence only extends the current accepted prefix, it appends the missing tail through the existing native commit path
+  - if the authoritative sequence diverges inside the current prefix, it performs a hard realign by restarting the native draft session and replaying the authoritative token sequence
+- The newest native pass moves that logic into `ai_chat.cpp` itself:
+  - the persistent session now stores an explicit `prompt_prefix_tokens`
+  - the native sync path now aligns the live runtime token history directly against `prompt_prefix + authoritative accepted tokens`
+  - it trims speculative tail with `llama_memory_seq_rm(...)`, appends missing authoritative tail with `llama_decode(...)`, refreshes tail logits, and rebuilds sampler history
+  - only a true prefix divergence now falls back to full token-sequence rebuild
+
+Why this is core:
+
+- This is the first explicit project implementation that turns the split reference idea into a running lane instead of just a design note.
+- It gives the codebase a narrower experimental path for continuing upstream-style split-state alignment without replacing the safer `llama_cpp_spec_native` baseline.

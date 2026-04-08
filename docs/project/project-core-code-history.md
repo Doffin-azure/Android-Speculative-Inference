@@ -1432,6 +1432,38 @@ Why this is core:
 - This is the first node where rejection correction on the experimental real-token lane stops defaulting directly to target top-1.
 - Instead, the verifier now approximates the paper-style `max(p-q, 0)` correction distribution over the observed target top-k set and only falls back to target best-token correction if no positive residual mass is available.
 
+## 49. Llama.cpp-Style Native Speculative Verifier Lane
+
+Commit:
+
+- current working node
+
+Core code:
+
+```python
+elif session.verifier_mode == "llama_cpp_spec_native":
+    computation = compute_llama_cpp_spec_native_verifier_result(
+        server,
+        target_session,
+        proposed_token_ids=proposed_token_ids,
+    )
+```
+
+```cpp
+const std::vector<llama_token> sampled_tokens = common_sampler_sample_and_accept_n(
+    session.sampler,
+    session.ctx,
+    idxs,
+    draft_tokens
+);
+```
+
+Why this is core:
+
+- This is the first verifier lane in the project whose goal is to reproduce llama.cpp's **currently implemented** speculative decoding behavior instead of extending the earlier tree / `token_pq` experiment.
+- The desktop verifier truth for this lane now comes from a native helper that batches the draft slice against the target runtime and returns the longest accepted prefix plus one target token, which is the same control-flow seam used by llama.cpp today.
+- This node has now also been validated end to end on device with Android local real-token draft sessions and a helper-backed desktop verifier, confirming that the project can complete multi-step speculative loops in the llama.cpp-style lane without falling back to legacy prefix matching.
+
 ## Reviewed But Not Listed As Feature Nodes
 
 These commits were reviewed during the git pass but were not promoted to the main feature list because they were documentation-only, ignore-only, template-only, or cleanup-only:

@@ -14,9 +14,12 @@ __pycache__/
 C*UsersJXZ/
 cmake-data_*.deb
 *.gguf
+models/
 MIDTERM_REPORT.md
 desktop-service.*.log
-logs/*.log
+logs/
+reference/
+tools/desktop_target_runtime
 
 # Android Studio / IntelliJ
 .idea/caches
