@@ -5,7 +5,8 @@ param(
     [string]$DraftModelName = "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
     [string]$TargetModelPath = "",
     [string]$VerifierMode = "llama_cpp_spec_split",
-    [int]$Port = 8080
+    [int]$Port = 8080,
+    [int]$Threads = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,14 +100,18 @@ function Start-DesktopService {
 
     $stdoutPath = Join-Path $logsDir "android_spec_split_service_${RunStamp}.out.log"
     $stderrPath = Join-Path $logsDir "android_spec_split_service_${RunStamp}.err.log"
+    $serviceArgs = @(
+        "tools\desktop_inference_service.py",
+        "--host", "127.0.0.1",
+        "--port", "$Port",
+        "--model-path", $ModelPath,
+        "--speculative-verifier-mode", $VerifierMode
+    )
+    if ($Threads -gt 0) {
+        $serviceArgs += @("--threads", "$Threads")
+    }
     $proc = Start-Process -FilePath python `
-        -ArgumentList @(
-            "tools\desktop_inference_service.py",
-            "--host", "127.0.0.1",
-            "--port", "$Port",
-            "--model-path", $ModelPath,
-            "--speculative-verifier-mode", $VerifierMode
-        ) `
+        -ArgumentList $serviceArgs `
         -WorkingDirectory $repoRoot `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath `
@@ -310,6 +315,7 @@ try {
         receiverComponent = $receiverComponent
         baseUrl = $BaseUrl
         verifierMode = $VerifierMode
+        threads = $Threads
         prompt = $Prompt
         draftModelName = $DraftModelName
         targetModelPath = $TargetModelPath
