@@ -47,10 +47,22 @@ class SpeculativeExperimentService : Service() {
         val prompt = intent?.getStringExtra("prompt").orEmpty().ifBlank {
             SpeculativeExperimentRunner.DEFAULT_PROMPT
         }
+        val draftModelName = intent?.getStringExtra("draftModelName").orEmpty().ifBlank {
+            SpeculativeExperimentRunner.DRAFT_MODEL_NAME
+        }
+        val targetModelName = intent?.getStringExtra("targetModelName").orEmpty().ifBlank {
+            SpeculativeExperimentRunner.TARGET_MODEL_NAME
+        }
 
         scope.launch {
             try {
-                val summary = SpeculativeExperimentRunner.run(applicationContext, baseUrl, prompt)
+                val summary = SpeculativeExperimentRunner.run(
+                    applicationContext,
+                    baseUrl,
+                    prompt,
+                    draftModelName,
+                    targetModelName
+                )
                 writeOutput(summary)
                 Log.i(TAG, summary)
             } catch (t: Throwable) {

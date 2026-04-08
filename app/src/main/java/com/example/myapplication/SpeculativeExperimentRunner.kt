@@ -22,10 +22,16 @@ object SpeculativeExperimentRunner {
     const val TARGET_MODEL_NAME = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
     const val OUTPUT_NAME = "speculative-experiment-latest.txt"
 
-    suspend fun run(context: Context, baseUrl: String, prompt: String): String {
+    suspend fun run(
+        context: Context,
+        baseUrl: String,
+        prompt: String,
+        draftModelName: String = DRAFT_MODEL_NAME,
+        targetModelName: String = TARGET_MODEL_NAME
+    ): String {
         val localLlm = LocalLlmImpl(context)
         val remoteClient = RemoteInferenceClient()
-        val modelPath = File(context.filesDir, "imported-models/$DRAFT_MODEL_NAME")
+        val modelPath = File(context.filesDir, "imported-models/$draftModelName")
         require(modelPath.exists()) { "Missing local draft model: ${modelPath.absolutePath}" }
         require(localLlm.loadModel(modelPath.absolutePath)) {
             "Failed to load local draft model at ${modelPath.absolutePath}: ${localLlm.lastError()}"
@@ -43,8 +49,8 @@ object SpeculativeExperimentRunner {
             request = SpeculativeStartRequest(
                 sessionId = UUID.randomUUID().toString(),
                 requestId = UUID.randomUUID().toString(),
-                draftModel = DRAFT_MODEL_NAME,
-                targetModel = TARGET_MODEL_NAME,
+                draftModel = draftModelName,
+                targetModel = targetModelName,
                 userPrompt = prompt,
                 temperature = 0.0,
                 topP = 1.0
@@ -206,8 +212,8 @@ object SpeculativeExperimentRunner {
             appendLine("health=$health")
             appendLine("verifierMode=${probe.speculativeVerifierMode}")
             appendLine("prompt=$prompt")
-            appendLine("draftModel=$DRAFT_MODEL_NAME")
-            appendLine("targetModel=$TARGET_MODEL_NAME")
+            appendLine("draftModel=$draftModelName")
+            appendLine("targetModel=$targetModelName")
             appendLine("draftMaxTokens=$DRAFT_MAX_TOKENS")
             appendLine("initialDraftTokens=$INITIAL_DRAFT_TOKENS")
             appendLine("adaptiveDraftMinTokens=$ADAPTIVE_DRAFT_MIN_TOKENS")
