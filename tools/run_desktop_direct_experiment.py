@@ -1,4 +1,5 @@
 import argparse
+import atexit
 import json
 import os
 import re
@@ -6,6 +7,43 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+LOCK_DIR_NAME = ".experiment-lock"
+
+
+def acquire_experiment_lock(repo_root: Path) -> Path:
+    lock_dir = repo_root / LOCK_DIR_NAME
+    owner_info_path = lock_dir / "owner.json"
+    try:
+        lock_dir.mkdir()
+    except FileExistsError:
+        owner_info = owner_info_path.read_text(encoding="utf-8") if owner_info_path.exists() else ""
+        raise RuntimeError(f"Another experiment is already running. lockDir={lock_dir} owner={owner_info}")
+
+    owner_info_path.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "script": str(Path(__file__).resolve()),
+                "startedAt": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %z"),
+                "host": os.environ.get("COMPUTERNAME", ""),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    def _cleanup() -> None:
+        try:
+            if owner_info_path.exists():
+                owner_info_path.unlink()
+            lock_dir.rmdir()
+        except OSError:
+            pass
+
+    atexit.register(_cleanup)
+    return lock_dir
 
 
 def windows_to_wsl(path: Path) -> str:
@@ -70,16 +108,24 @@ def parse_metrics(log_text: str, start: str, end: str) -> dict:
     }
 
 
+def extract_marker_timestamp(log_text: str, marker: str) -> str | None:
+    pattern = rf"{re.escape(marker)}=(\d{{4}}-\d{{2}}-\d{{2}} \d{{2}}:\d{{2}}:\d{{2}} [+-]\d{{4}})"
+    m = re.search(pattern, log_text)
+    return m.group(1) if m else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt", default="Explain speculative decoding briefly.")
     parser.add_argument("--max-output-tokens", type=int, default=64)
     parser.add_argument("--ctx-size", type=int, default=512)
+    parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--llama-root", default="")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
+    acquire_experiment_lock(repo_root)
     experiments_root = repo_root / "reference" / "spec-split-demo-project" / "experiments"
     date_dir = experiments_root / datetime.now().strftime("%Y-%m-%d")
     date_dir.mkdir(parents=True, exist_ok=True)
@@ -101,11 +147,11 @@ def main() -> int:
     bash_command = (
         f"export LD_LIBRARY_PATH='{ld_path}'; "
         f"START_TS=\"$(date '+%Y-%m-%d %H:%M:%S %z')\"; "
-        f"echo \"$START_TS\"; "
+        f"echo \"__EXPERIMENT_START__=$START_TS\"; "
         f"'{cli_wsl}' -m '{model_wsl}' -p {json.dumps(args.prompt)} -n {max(1, args.max_output_tokens)} "
-        f"--ctx-size {args.ctx_size} --no-warmup --simple-io --no-display-prompt -st -t 4 --temp 0 --top-k 1 --log-disable; "
+        f"--ctx-size {args.ctx_size} --no-warmup --simple-io --no-display-prompt -st -t {max(1, args.threads)} --temp 0 --top-k 1 --log-disable; "
         f"END_TS=\"$(date '+%Y-%m-%d %H:%M:%S %z')\"; "
-        f"echo \"$END_TS\""
+        f"echo \"__EXPERIMENT_END__=$END_TS\""
     )
 
     started_at = datetime.now(timezone.utc).astimezone()
@@ -122,8 +168,8 @@ def main() -> int:
         sys.stderr.write(combined_log)
         return proc.returncode
 
-    start = started_at.strftime("%Y-%m-%d %H:%M:%S %z")
-    end = ended_at.strftime("%Y-%m-%d %H:%M:%S %z")
+    start = extract_marker_timestamp(combined_log, "__EXPERIMENT_START__") or started_at.strftime("%Y-%m-%d %H:%M:%S %z")
+    end = extract_marker_timestamp(combined_log, "__EXPERIMENT_END__") or ended_at.strftime("%Y-%m-%d %H:%M:%S %z")
 
     stamp = start.replace(":", "-").replace(" ", "T")
     log_path = date_dir / f"desktop_direct_{stamp}.log"
@@ -136,8 +182,10 @@ def main() -> int:
         "start": start,
         "end": end,
         "prompt": args.prompt,
+        "timingBasis": "generation_metrics_from_llama_cli; shell markers bound the binary invocation",
         "maxOutputTokens": args.max_output_tokens,
         "ctxSize": args.ctx_size,
+        "threads": max(1, args.threads),
         "modelPath": str(model_path.resolve()),
         "logPath": str(log_path.resolve()),
         "metrics": metrics,

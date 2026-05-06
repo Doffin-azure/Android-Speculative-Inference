@@ -237,16 +237,23 @@ bool build_session_prompt_prefix_tokens(
     }
 
     if (!session.user_prompt.empty()) {
+        const bool use_raw_user_prompt = session.system_prompt.empty();
         std::string formatted_user = session.user_prompt;
-        if (has_chat_template) {
+        if (has_chat_template && !use_raw_user_prompt) {
             common_chat_msg msg;
             msg.role = "user";
             msg.content = session.user_prompt;
             formatted_user = common_chat_format_single(g_runtime.chat_templates.get(), chat_msgs, msg, true, false);
             chat_msgs.push_back(msg);
         }
+        const bool tokenize_with_special = use_raw_user_prompt || has_chat_template;
         replay_prompt_builder << formatted_user;
-        tokenize_chat_fragment(formatted_user, has_chat_template, has_chat_template, prompt_prefix_tokens);
+        tokenize_chat_fragment(
+            formatted_user,
+            tokenize_with_special,
+            tokenize_with_special,
+            prompt_prefix_tokens
+        );
     }
 
     replay_prompt = replay_prompt_builder.str();

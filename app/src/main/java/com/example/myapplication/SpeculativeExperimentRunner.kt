@@ -13,21 +13,32 @@ import kotlin.math.max
 object SpeculativeExperimentRunner {
     const val DEFAULT_BASE_URL = "http://127.0.0.1:8080"
     const val DEFAULT_PROMPT = "Explain speculative decoding briefly."
-    const val DRAFT_MAX_TOKENS = 6
-    const val INITIAL_DRAFT_TOKENS = 4
-    const val ADAPTIVE_DRAFT_MIN_TOKENS = 1
-    const val MIN_DRAFT_TOKENS = 1
+    const val DEFAULT_SEED = 1234
+    const val DRAFT_MAX_TOKENS = 16
+    const val INITIAL_DRAFT_TOKENS = DRAFT_MAX_TOKENS
+    const val DRAFT_MIN_TOKENS = 0
+    const val DRAFT_MIN_PROB_UNSUPPORTED = -1.0
+    const val ADAPTIVE_DRAFT_MIN_TOKENS = DRAFT_MAX_TOKENS
     const val MAX_ACCEPTED_TOKENS = 64
     const val DRAFT_MODEL_NAME = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
     const val TARGET_MODEL_NAME = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
     const val OUTPUT_NAME = "speculative-experiment-latest.txt"
+    private const val MAX_EXPERIMENT_STEPS = 2048
 
     suspend fun run(
         context: Context,
         baseUrl: String,
         prompt: String,
         draftModelName: String = DRAFT_MODEL_NAME,
-        targetModelName: String = TARGET_MODEL_NAME
+        targetModelName: String = TARGET_MODEL_NAME,
+        maxAcceptedTokens: Int = MAX_ACCEPTED_TOKENS,
+        draftMaxTokens: Int = DRAFT_MAX_TOKENS,
+        initialDraftTokens: Int = INITIAL_DRAFT_TOKENS,
+        draftMinTokens: Int = DRAFT_MIN_TOKENS,
+        draftMinProb: Double = DRAFT_MIN_PROB_UNSUPPORTED,
+        adaptiveDraftingEnabled: Boolean = false,
+        adaptiveDraftMinTokens: Int = ADAPTIVE_DRAFT_MIN_TOKENS,
+        onProgress: ((String) -> Unit)? = null
     ): String {
         val localLlm = LocalLlmImpl(context)
         val remoteClient = RemoteInferenceClient()
@@ -53,19 +64,25 @@ object SpeculativeExperimentRunner {
                 targetModel = targetModelName,
                 userPrompt = prompt,
                 temperature = 0.0,
-                topP = 1.0
+                topP = 1.0,
+                topK = 1,
+                seed = DEFAULT_SEED
             )
         )
+
+        val normalizedMaxAcceptedTokens = maxAcceptedTokens.coerceAtLeast(1)
 
         val localDraftSession = localLlm.startDraftSession(
             systemPrompt = "",
             userPrompt = prompt,
-            predictLength = MAX_ACCEPTED_TOKENS
+            predictLength = normalizedMaxAcceptedTokens,
+            draftMinProb = draftMinProb.toFloat()
         )
 
         val committedTokenIds = mutableListOf<Int>()
         val traces = mutableListOf<String>()
         var totalDraftFetchMs = 0L
+        var totalDraftGenerateMs = 0L
         var totalRemoteProposeMs = 0L
         var totalLocalApplyMs = 0L
         var totalAcceptedTokens = 0
@@ -75,37 +92,45 @@ object SpeculativeExperimentRunner {
         var closeReason = ""
         var closeAcceptedText = ""
 
-        var currentDraftMaxTokens = INITIAL_DRAFT_TOKENS
-        var consecutiveZeroAcceptSteps = 0
-        var consecutivePositiveAcceptSteps = 0
-        var pendingVerifiedTokenIds = emptyList<Int>()
-
+        val normalizedDraftMaxTokens = draftMaxTokens.coerceAtLeast(1)
+        val normalizedInitialDraftTokens = initialDraftTokens.coerceIn(1, normalizedDraftMaxTokens)
+        val normalizedDraftMinTokens = draftMinTokens.coerceAtLeast(0)
+        val draftProbabilityThresholdSupported = draftMinProb >= 0.0
+        val strategyMode = if (draftProbabilityThresholdSupported) {
+            "native_probability_threshold_with_max_cap"
+        } else {
+            "fixed_draft_length_aligned_to_native_split"
+        }
         try {
-            for (draftStep in 1..128) {
-                if (committedTokenIds.size >= MAX_ACCEPTED_TOKENS) {
+            for (draftStep in 1..MAX_EXPERIMENT_STEPS) {
+                if (committedTokenIds.size >= normalizedMaxAcceptedTokens) {
                     break
                 }
 
-                val requestedDraftMaxTokens = currentDraftMaxTokens
-                val draftFetchStartedAt = System.currentTimeMillis()
-                val proposedTokenIds = if (pendingVerifiedTokenIds.isEmpty()) {
-                    localLlm.draftNextRealTokenIds(
-                        sessionId = localDraftSession.sessionId,
-                        maxTokens = requestedDraftMaxTokens
-                    )
+                val requestedDraftMaxTokens = if (draftStep == 1) {
+                    normalizedInitialDraftTokens
                 } else {
-                    localLlm.applyVerifiedRealTokensAndDraftNextRealTokenIds(
-                        sessionId = localDraftSession.sessionId,
-                        tokenIds = pendingVerifiedTokenIds,
-                        maxTokens = requestedDraftMaxTokens
-                    )
+                    normalizedDraftMaxTokens
                 }
-                val draftFetchMs = System.currentTimeMillis() - draftFetchStartedAt
+                val draftFetchStartedAt = System.currentTimeMillis()
+                val proposedTokenIds = localLlm.syncAndDraftNextRealTokenIds(
+                    sessionId = localDraftSession.sessionId,
+                    authoritativeTokenIds = committedTokenIds,
+                    maxTokens = requestedDraftMaxTokens
+                )
+                val draftGenerateMs = System.currentTimeMillis() - draftFetchStartedAt
+                totalDraftGenerateMs += draftGenerateMs
+                val localApplyMs = 0L
+                val draftFetchMs = draftGenerateMs
                 totalDraftFetchMs += draftFetchMs
-                pendingVerifiedTokenIds = emptyList()
 
-                if (proposedTokenIds.size < MIN_DRAFT_TOKENS) {
-                    traces += "step=$draftStep stopped draftCount=${proposedTokenIds.size}"
+                if (proposedTokenIds.isEmpty()) {
+                    traces += "step=$draftStep stopped draftCount=0 draftMinTokens=$normalizedDraftMinTokens"
+                    break
+                }
+
+                if (proposedTokenIds.size < normalizedDraftMinTokens) {
+                    traces += "step=$draftStep stopped draftCount=${proposedTokenIds.size} draftMinTokens=$normalizedDraftMinTokens"
                     break
                 }
 
@@ -126,48 +151,28 @@ object SpeculativeExperimentRunner {
                 val remoteProposeMs = System.currentTimeMillis() - proposeStartedAt
                 totalRemoteProposeMs += remoteProposeMs
 
-                committedTokenIds += proposeResponse.acceptedTokenIds
-                committedTokenIds += proposeResponse.correctionTokenIds
-                totalAcceptedTokens += proposeResponse.acceptedTokenIds.size + proposeResponse.correctionTokenIds.size
+                val remainingCapacity = (normalizedMaxAcceptedTokens - committedTokenIds.size).coerceAtLeast(0)
+                val acceptedToCommit = proposeResponse.acceptedTokenIds.take(remainingCapacity)
+                val correctionsToCommit = proposeResponse.correctionTokenIds.take(
+                    (normalizedMaxAcceptedTokens - committedTokenIds.size - acceptedToCommit.size).coerceAtLeast(0)
+                )
 
-                val acceptedDraftTokens = proposeResponse.acceptedCount
-                if (acceptedDraftTokens == 0) {
-                    consecutiveZeroAcceptSteps += 1
-                    consecutivePositiveAcceptSteps = 0
-                    currentDraftMaxTokens = max(
-                        ADAPTIVE_DRAFT_MIN_TOKENS,
-                        currentDraftMaxTokens / 2
-                    )
-                } else {
-                    consecutiveZeroAcceptSteps = 0
-                    consecutivePositiveAcceptSteps += 1
-                    if (
-                        consecutivePositiveAcceptSteps >= 2 &&
-                        acceptedDraftTokens >= max(1, proposedTokenIds.size / 2)
-                    ) {
-                        currentDraftMaxTokens = minOf(DRAFT_MAX_TOKENS, currentDraftMaxTokens + 1)
-                        consecutivePositiveAcceptSteps = 0
-                    }
-                }
-
-                pendingVerifiedTokenIds = proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
-                val localApplyStartedAt = System.currentTimeMillis()
-                val localApplyMs = System.currentTimeMillis() - localApplyStartedAt
-                totalLocalApplyMs += localApplyMs
+                committedTokenIds += acceptedToCommit
+                committedTokenIds += correctionsToCommit
+                totalAcceptedTokens += acceptedToCommit.size + correctionsToCommit.size
 
                 val estimatedTransportMs =
                     max(0.0, remoteProposeMs.toDouble() - proposeResponse.timingServiceTotalMs)
-                traces += buildString {
+                val traceLine = buildString {
                     append("step=$draftStep")
                     append(" draftMax=$requestedDraftMaxTokens")
-                    append(" nextDraftMax=$currentDraftMaxTokens")
                     append(" proposed=${proposedTokenIds.size}")
-                    append(" accepted=${proposeResponse.acceptedCount}")
-                    append(" corrections=${proposeResponse.correctionTokenIds.size}")
+                    append(" accepted=${acceptedToCommit.size}")
+                    append(" corrections=${correctionsToCommit.size}")
                     append(" committed=${committedTokenIds.size}")
-                    append(" zeroAcceptStreak=$consecutiveZeroAcceptSteps")
-                    append(" positiveAcceptStreak=$consecutivePositiveAcceptSteps")
                     append(" draftFetchMs=$draftFetchMs")
+                    append(" draftGenerateMs=$draftGenerateMs")
+                    append(" draftRollbackMs=$localApplyMs")
                     append(" remoteMs=$remoteProposeMs")
                     append(" localApplyMs=$localApplyMs")
                     append(" prepareMs=${"%.3f".format(proposeResponse.timingPrepareMs)}")
@@ -180,8 +185,34 @@ object SpeculativeExperimentRunner {
                     append(" estimatedTransportMs=${"%.3f".format(estimatedTransportMs)}")
                     append(" finish=${proposeResponse.finishReason}")
                 }
+                traces += traceLine
+                onProgress?.invoke(
+                    buildString {
+                        appendLine("ANDROID_SPEC_EXPERIMENT_IN_PROGRESS")
+                        appendLine("prompt=$prompt")
+                        appendLine("timingBasis=steady_state_after_local_and_remote_sessions_ready_before_first_draft")
+                        appendLine("draftModel=$draftModelName")
+                        appendLine("targetModel=$targetModelName")
+                        appendLine("draftMaxTokens=$normalizedDraftMaxTokens")
+                        appendLine("initialDraftTokens=$normalizedInitialDraftTokens")
+                        appendLine("draftMinTokens=$normalizedDraftMinTokens")
+                        appendLine("draftMinProb=$draftMinProb")
+                        appendLine("draftProbabilityThresholdSupported=$draftProbabilityThresholdSupported")
+                        appendLine("strategyMode=$strategyMode")
+                        appendLine("adaptiveDraftingEnabled=$adaptiveDraftingEnabled")
+                        appendLine("adaptiveDraftMinTokens=$adaptiveDraftMinTokens")
+                        appendLine("seed=$DEFAULT_SEED")
+                        appendLine("stepsCompleted=${traces.size}")
+                        appendLine("committedTokens=${committedTokenIds.size}")
+                        appendLine("totalDraftFetchMs=$totalDraftFetchMs")
+                        appendLine("totalDraftGenerateMs=$totalDraftGenerateMs")
+                        appendLine("totalDraftRollbackMs=$totalLocalApplyMs")
+                        appendLine("totalRemoteProposeMs=$totalRemoteProposeMs")
+                        appendLine("latestTrace=$traceLine")
+                    }.trim()
+                )
 
-                if (proposeResponse.finishReason.isNotBlank() || committedTokenIds.size >= MAX_ACCEPTED_TOKENS) {
+                if (proposeResponse.finishReason.isNotBlank() || committedTokenIds.size >= normalizedMaxAcceptedTokens) {
                     break
                 }
             }
@@ -212,18 +243,27 @@ object SpeculativeExperimentRunner {
             appendLine("health=$health")
             appendLine("verifierMode=${probe.speculativeVerifierMode}")
             appendLine("prompt=$prompt")
+            appendLine("timingBasis=steady_state_after_local_and_remote_sessions_ready_before_first_draft")
             appendLine("draftModel=$draftModelName")
             appendLine("targetModel=$targetModelName")
-            appendLine("draftMaxTokens=$DRAFT_MAX_TOKENS")
-            appendLine("initialDraftTokens=$INITIAL_DRAFT_TOKENS")
-            appendLine("adaptiveDraftMinTokens=$ADAPTIVE_DRAFT_MIN_TOKENS")
-            appendLine("maxAcceptedTokens=$MAX_ACCEPTED_TOKENS")
+            appendLine("draftMaxTokens=$normalizedDraftMaxTokens")
+            appendLine("initialDraftTokens=$normalizedInitialDraftTokens")
+            appendLine("draftMinTokens=$normalizedDraftMinTokens")
+            appendLine("draftMinProb=$draftMinProb")
+            appendLine("draftProbabilityThresholdSupported=$draftProbabilityThresholdSupported")
+            appendLine("strategyMode=$strategyMode")
+            appendLine("adaptiveDraftingEnabled=$adaptiveDraftingEnabled")
+            appendLine("adaptiveDraftMinTokens=$adaptiveDraftMinTokens")
+            appendLine("seed=$DEFAULT_SEED")
+            appendLine("maxAcceptedTokens=$normalizedMaxAcceptedTokens")
             appendLine("steps=${traces.size}")
             appendLine("committedTokens=${committedTokenIds.size}")
             appendLine("totalAcceptedTokens=$totalAcceptedTokens")
             appendLine("totalProposedTokens=$totalProposedTokens")
             appendLine("totalMs=$totalMs")
             appendLine("totalDraftFetchMs=$totalDraftFetchMs")
+            appendLine("totalDraftGenerateMs=$totalDraftGenerateMs")
+            appendLine("totalDraftRollbackMs=$totalLocalApplyMs")
             appendLine("totalRemoteProposeMs=$totalRemoteProposeMs")
             appendLine("totalLocalApplyMs=$totalLocalApplyMs")
             appendLine("overallTokensPerSecond=${"%.3f".format(overallTokensPerSecond)}")

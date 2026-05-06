@@ -26,6 +26,26 @@ class SpeculativeExperimentReceiver : BroadcastReceiver() {
         val targetModelName = intent.getStringExtra("targetModelName").orEmpty().ifBlank {
             SpeculativeExperimentRunner.TARGET_MODEL_NAME
         }
+        val maxAcceptedTokens = intent.getIntExtra(
+            "maxAcceptedTokens",
+            SpeculativeExperimentRunner.MAX_ACCEPTED_TOKENS
+        )
+        val draftMaxTokens = intent.getIntExtra("draftMaxTokens", SpeculativeExperimentRunner.DRAFT_MAX_TOKENS)
+        val initialDraftTokens = intent.getIntExtra("initialDraftTokens", draftMaxTokens)
+        val draftMinTokens = intent.getIntExtra("draftMinTokens", SpeculativeExperimentRunner.DRAFT_MIN_TOKENS)
+        val draftMinProb = if (intent.hasExtra("draftMinProb")) {
+            intent.getFloatExtra(
+                "draftMinProb",
+                SpeculativeExperimentRunner.DRAFT_MIN_PROB_UNSUPPORTED.toFloat()
+            ).toDouble()
+        } else {
+            SpeculativeExperimentRunner.DRAFT_MIN_PROB_UNSUPPORTED
+        }
+        val adaptiveDraftingEnabled = intent.getBooleanExtra("adaptiveDraftingEnabled", false)
+        val adaptiveDraftMinTokens = intent.getIntExtra(
+            "adaptiveDraftMinTokens",
+            SpeculativeExperimentRunner.ADAPTIVE_DRAFT_MIN_TOKENS
+        )
 
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
@@ -34,7 +54,14 @@ class SpeculativeExperimentReceiver : BroadcastReceiver() {
                     baseUrl,
                     prompt,
                     draftModelName,
-                    targetModelName
+                    targetModelName,
+                    maxAcceptedTokens = maxAcceptedTokens,
+                    draftMaxTokens = draftMaxTokens,
+                    initialDraftTokens = initialDraftTokens,
+                    draftMinTokens = draftMinTokens,
+                    draftMinProb = draftMinProb,
+                    adaptiveDraftingEnabled = adaptiveDraftingEnabled,
+                    adaptiveDraftMinTokens = adaptiveDraftMinTokens
                 )
                 val outputFile = File(appContext.filesDir, "logs/${SpeculativeExperimentRunner.OUTPUT_NAME}")
                 outputFile.parentFile?.mkdirs()

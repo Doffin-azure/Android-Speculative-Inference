@@ -1,7 +1,8 @@
 param(
     [string]$DeviceSerial = "",
     [string]$Prompt = "Explain speculative decoding briefly.",
-    [string]$ModelName = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+    [string]$ModelName = "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    [int]$MaxGenerateTokens = 64
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,7 +12,7 @@ $logsDir = Join-Path $repoRoot "logs"
 $experimentsDir = Join-Path $repoRoot "reference\spec-split-demo-project\experiments"
 $dateDir = Join-Path $experimentsDir (Get-Date -Format "yyyy-MM-dd")
 $appId = "com.example.myapplication"
-$serviceComponent = "$appId/.AndroidLocalExperimentService"
+$activityComponent = "$appId/.MainActivity"
 $javaHomeDefault = "C:\Program Files\Android\Android Studio\jbr"
 $adbPath = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
 
@@ -110,7 +111,7 @@ $failureReason = ""
 $appOutputPath = Join-Path $logsDir "android_local_app_output_${runStamp}.txt"
 $gradleLogPath = Join-Path $logsDir "android_local_gradle_${runStamp}.log"
 $deviceLogcatPath = Join-Path $logsDir "android_local_logcat_${runStamp}.log"
-$serviceOutputPath = Join-Path $logsDir "android_local_service_${runStamp}.log"
+$activityOutputPath = Join-Path $logsDir "android_local_activity_${runStamp}.log"
 $modelPushLogPath = Join-Path $logsDir "android_local_model_push_${runStamp}.log"
 
 $caughtError = $null
@@ -128,6 +129,7 @@ try {
 
     $modelHostPath = Join-Path $repoRoot "models\$ModelName"
     Require-Path $modelHostPath
+    $modelSize = (Get-Item -LiteralPath $modelHostPath).Length
     $tmpModelPath = "/data/local/tmp/$ModelName"
 
     $pushResult = Invoke-AdbCapture -CommandArgs @("push", $modelHostPath, $tmpModelPath)
@@ -147,7 +149,7 @@ try {
     Write-Host "[android-local] model copied to app storage"
 
     $shellCheck = Invoke-RunAsExecCapture -CommandArgs @("stat", "files/imported-models/$ModelName")
-    if ($shellCheck.ExitCode -ne 0 -or $shellCheck.Output -notmatch "Size:\s+807694464") {
+    if ($shellCheck.ExitCode -ne 0 -or $shellCheck.Output -notmatch "Size:\s+$modelSize\b") {
         $resultStatus = "blocked_device_state"
         $failureReason = "model_missing_on_device"
         throw "Required model $ModelName is not present in app-private imported-models on device."
@@ -155,18 +157,24 @@ try {
     Write-Host "[android-local] model verified on device"
 
     Invoke-Adb @("logcat", "-c") | Out-Null
+    Invoke-AdbCapture -CommandArgs @("shell", "input", "keyevent", "KEYCODE_WAKEUP") | Out-Null
+    Invoke-AdbCapture -CommandArgs @("shell", "wm", "dismiss-keyguard") | Out-Null
+    Invoke-AdbCapture -CommandArgs @("shell", "input", "keyevent", "82") | Out-Null
 
-    $serviceShellCommand =
-        "am start-foreground-service -n $serviceComponent --es prompt " +
-        (New-ShellSingleQuoted $Prompt)
-    $startResult = Invoke-AdbCapture -CommandArgs @("shell", $serviceShellCommand)
+    $activityShellCommand =
+        "am start -W -n $activityComponent --es automationAction android_local_experiment --es prompt " +
+        (New-ShellSingleQuoted $Prompt) +
+        " --es modelName " +
+        (New-ShellSingleQuoted $ModelName) +
+        " --ei maxGenerateTokens $MaxGenerateTokens"
+    $startResult = Invoke-AdbCapture -CommandArgs @("shell", $activityShellCommand)
     if ($startResult.ExitCode -ne 0) {
         $resultStatus = "blocked_runtime"
-        $failureReason = "service_start_failed"
-        throw "Failed to start Android local experiment service.`n$($startResult.Output)"
+        $failureReason = "activity_start_failed"
+        throw "Failed to start Android local experiment activity.`n$($startResult.Output)"
     }
-    Set-Content -Path $serviceOutputPath -Value $startResult.Output
-    Write-Host "[android-local] foreground service start completed"
+    Set-Content -Path $activityOutputPath -Value $startResult.Output
+    Write-Host "[android-local] automation activity start completed"
 
     $latestText = ""
     for ($i = 0; $i -lt 240; $i++) {
@@ -198,7 +206,7 @@ try {
         throw "Android local experiment runner reported failure."
     }
 
-    $logcatResult = Invoke-AdbCapture -CommandArgs @("logcat", "-d", "-s", "AndroidLocalExpService", "*:S")
+    $logcatResult = Invoke-AdbCapture -CommandArgs @("logcat", "-d", "-s", "AndroidLocalExpService", "AndroidLocalExpRunner", "MainActivity", "*:S")
     if ($logcatResult.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($logcatResult.Output)) {
         Set-Content -Path $deviceLogcatPath -Value $logcatResult.Output
     }
@@ -219,7 +227,7 @@ try {
         finishedAt = $finishedAtPath
     }
 
-    foreach ($path in @($gradleLogPath, $serviceOutputPath, $appOutputPath, $deviceLogcatPath, $modelPushLogPath)) {
+    foreach ($path in @($gradleLogPath, $activityOutputPath, $appOutputPath, $deviceLogcatPath, $modelPushLogPath)) {
         if ($path -and (Test-Path $path)) {
             $dest = Join-Path $dateDir ([System.IO.Path]::GetFileName($path))
             Copy-Item $path $dest -Force
@@ -236,9 +244,10 @@ try {
         exception = if ($null -ne $caughtError) { $caughtError.ToString() } else { "" }
         deviceSerial = if ([string]::IsNullOrWhiteSpace($DeviceSerial)) { "" } else { $DeviceSerial }
         packageName = $appId
-        serviceComponent = $serviceComponent
+        activityComponent = $activityComponent
         prompt = $Prompt
         modelName = $ModelName
+        maxGenerateTokens = $MaxGenerateTokens
         archivedFiles = $archivePaths
     }
 

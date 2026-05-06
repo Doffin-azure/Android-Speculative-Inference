@@ -80,7 +80,8 @@ interface InferenceEngine {
     suspend fun startDraftSession(
         systemPrompt: String,
         userPrompt: String,
-        predictLength: Int = DEFAULT_PREDICT_LENGTH
+        predictLength: Int = DEFAULT_PREDICT_LENGTH,
+        draftMinProb: Float = 0.75f
     ): DraftSessionHandle {
         throw UnsupportedOperationException("Draft session is not implemented by this engine.")
     }
