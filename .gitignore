@@ -36,12 +36,6 @@ reference/sustechthesis/figures/android-app-spec-ui.png
 !reference/sustechthesis/main.tex
 !reference/sustechthesis/references.bib
 !reference/sustechthesis/sustechthesis.cls
-!reference/sustechthesis/current_thesis/
-reference/sustechthesis/current_thesis/*
-!reference/sustechthesis/current_thesis/**
-!reference/sustechthesis/original_reference_tex/
-reference/sustechthesis/original_reference_tex/*
-!reference/sustechthesis/original_reference_tex/**
 !reference/sustechthesis/sections/
 reference/sustechthesis/sections/*
 !reference/sustechthesis/sections/thesis/
