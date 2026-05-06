@@ -1,0 +1,209 @@
+\section{实验与结果分析}
+
+\subsection{实验设置}
+
+本文实验面向 Android 端与桌面端协同投机解码场景展开。实验系统由 Android 客户端、本地草稿模型运行时、桌面端推理服务以及 llama.cpp 相关目标模型运行时组成。为使端侧本地目标模型推理、云侧本地投机解码和跨设备投机解码具有可比性，本章统一采用 \texttt{Qwen2.5-0.5B-Instruct-Q4\_K\_M.gguf} 作为草稿模型，采用 \texttt{Qwen2.5-7B-Instruct-Q4\_K\_M.gguf} 作为目标模型。
+
+测试负载采用约 1000 词元的长输出任务。统一提示词为：
+
+\begin{quote}
+Write a detailed, continuous technical explanation of speculative decoding for about 1000 tokens. Cover motivation, workflow, acceptance, rejection, system overhead, and deployment tradeoffs. Do not stop early.
+\end{quote}
+
+实验中最大生成长度设置为 1000 词元，\texttt{ctxSize=2048}，投机提案上限为 \texttt{NMax=4}，最小提案长度为 \texttt{NMin=1}，草稿概率阈值为 \texttt{PMin=0.55}。吞吐率采用会话与运行时准备完成后的稳态墙钟时间计算，以降低模型加载和服务启动开销对不同部署方式比较的影响。
+
+线程设置采用部署口径对齐，而不是机械地要求所有方案使用相同桌面端线程数。云侧本地单进程和云侧本地双进程方案的草稿侧与目标侧均运行在桌面端，因此使用 8 个桌面端线程，以检验双进程拆分相对于单进程是否保持接近。跨设备方案中草稿生成由 Android 端承担，桌面端只承担目标验证，因此目标验证服务使用 10 个桌面端线程，以反映跨设备部署下桌面端算力可集中用于目标验证的实际条件。
+
+\subsection{评价指标与对比方案}
+
+本文选取接受率、吞吐率、端到端时延和分项耗时作为评价指标。接受率定义为已接受草稿词元数与草稿提案词元总数之比，用于衡量草稿模型与目标模型在局部前缀上的一致程度；吞吐率定义为单位时间内提交到最终输出的词元数，用于衡量系统整体生成效率；分项耗时用于定位草稿侧、验证侧和协同边界上的开销。
+
+\begin{table}[htbp]
+  \centering
+  \caption{实验对比方案}
+  \label{tab:schemes}
+  \small
+  \begin{tabularx}{0.98\textwidth}{p{34mm}p{18mm}p{18mm}p{25mm}X}
+    \toprule
+    方案 & 草稿侧 & 目标侧 & 线程口径 & 作用 \\
+    \midrule
+    Android 端侧本地目标模型推理 & 无 & Android 端 & 端侧本地 & 端侧直接运行 7B 目标模型的基线 \\
+    云侧本地单进程投机解码 & 桌面端 & 桌面端 & 桌面端 8 线程 & 云侧本地投机解码参考基线 \\
+    云侧本地双进程投机解码 & 桌面端 & 桌面端 & 桌面端 8 线程 & 检验云侧进程拆分开销 \\
+    Android--桌面端跨设备投机解码 & Android 端 & 桌面端 & 目标验证 10 线程 & 本文评估的协同方案 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+其中，云侧本地单进程投机解码将草稿模型与目标模型放入同一进程协同执行；云侧本地双进程投机解码将草稿侧与验证侧拆分为桌面端两个本地进程；跨设备投机解码由 Android 端执行草稿生成、桌面端执行目标验证。端侧本地目标模型推理不使用投机解码，直接在 Android 设备上运行 7B 目标模型。
+
+\subsection{实验数据记录口径}
+
+为保证实验结果可追溯，本文将本组实验的原始记录分别保存为 Android 端输出日志和云侧本地实验 JSON 记录。Android 端侧本地目标模型推理结果来自 Android 本地实验输出日志；云侧本地单进程与云侧本地双进程结果来自云侧本地完整实验记录；Android--桌面端跨设备投机解码结果来自跨设备实验输出日志。论文正文中的表格和图均依据上述记录整理，完整文件路径另行归档于实验记录文档中。
+
+其中，云侧本地单进程结果取自 JSON 记录中的 \texttt{baseline} 字段，云侧本地双进程结果取自 \texttt{nativeFull} 字段。跨设备方案的接受率、平均提案词元数和平均接受词元数由逐步日志中的 \texttt{proposed} 与 \texttt{accepted} 字段统计得到；吞吐率、总耗时、草稿侧耗时和远端验证耗时取自日志汇总字段。端侧本地目标模型推理基线直接使用 Android 日志中的 \texttt{outputTokensPerSecond}。
+
+\subsection{整体实验结果}
+
+表 \ref{tab:result-main} 汇总了四组方案在统一模型组合和长输出任务下的主要结果。端侧本地目标模型推理不包含草稿提案过程，因此接受率和平均每轮提案、接受词元数记为“--”。
+
+\begin{table}[htbp]
+  \centering
+  \caption{统一模型组合下的实验结果}
+  \label{tab:result-main}
+  \scriptsize
+  \setlength{\tabcolsep}{2.5pt}
+  \begin{tabularx}{0.99\textwidth}{Xccccc}
+    \toprule
+    方案 & 输出词元数 & 接受率 & 平均每轮提案词元数 & 平均每轮接受词元数 & 吞吐率 \\
+    \midrule
+    Android 端侧本地目标模型推理 & 1000 & -- & -- & -- & 7.232 token/s \\
+    云侧本地单进程投机解码 & 1004 & 65.86\% & 2.525 & 1.663 & 15.707 token/s \\
+    云侧本地双进程投机解码 & 1002 & 60.76\% & 3.272 & 1.988 & 14.816 token/s \\
+    Android--桌面端跨设备投机解码 & 1000 & 72.92\% & 2.335 & 1.703 & 13.996 token/s \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+实验结果显示，云侧本地双进程方案相对于云侧本地单进程方案的吞吐率比例为 94.33\%，说明在该模型组合和 8 线程配置下，进程拆分没有造成明显性能劣化。跨设备方案相对于云侧本地双进程方案的吞吐率比例为 94.46\%，说明在 Android 端承担草稿生成、桌面端集中执行目标验证的部署条件下，跨设备协同方案也保持了接近云侧本地双进程的生成效率。
+
+相对于 Android 端侧直接运行 7B 目标模型，跨设备投机解码的吞吐率由 7.232 token/s 提升到 13.996 token/s，相对提升约 93.5\%。该结果表明，在端侧直接运行较大目标模型成本较高的情况下，使用轻量草稿模型参与生成、并将目标验证放到桌面端执行，能够明显降低长输出任务的等待时间。
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+      width=.92\textwidth,
+      height=.42\textwidth,
+      ybar,
+      ymin=0,
+      ymax=18,
+      ylabel={吞吐率（token/s）},
+      symbolic x coords={端侧7B,云侧单进程,云侧双进程,跨设备},
+      xtick=data,
+      nodes near coords,
+      nodes near coords style={font=\small},
+      bar width=20pt,
+      grid=major,
+      major grid style={dashed,gray!30},
+      tick label style={font=\small},
+      label style={font=\small},
+    ]
+      \addplot coordinates {(端侧7B,7.232) (云侧单进程,15.707) (云侧双进程,14.816) (跨设备,13.996)};
+    \end{axis}
+  \end{tikzpicture}
+  \caption{统一模型组合下不同方案的吞吐率对比}
+  \label{fig:throughput-compare}
+\end{figure}
+
+从式 \eqref{eq:throughput-model} 可知，投机解码吞吐率主要受每轮提交词元数和单轮耗时共同影响。云侧本地单进程方案避免了跨进程通信和额外状态序列化，因此单轮开销较低。云侧本地双进程方案引入了本地进程间通信，但草稿侧与目标侧仍位于同一桌面端硬件环境中，调度和通信成本较小，所以吞吐率只出现小幅下降。跨设备方案需要在 Android 端维护草稿状态，并在每轮候选验证中完成请求发送、目标验证和结果回传；即使接受率较高，单轮协同开销仍会压低最终吞吐率。
+
+\subsection{接受率与分项耗时分析}
+
+表 \ref{tab:timing-main} 给出了三类投机解码方案的分项耗时。云侧本地单进程方案不包含独立进程间通信，其分项结果以草稿生成和目标验证耗时表示；云侧本地双进程方案进一步包含草稿同步、尾部刷新和验证通信；跨设备方案的草稿侧耗时对应 Android 端 \texttt{draftFetchMs}，验证侧耗时对应桌面端 \texttt{remoteMs}。
+
+\begin{table}[htbp]
+  \centering
+  \caption{投机解码方案分项耗时}
+  \label{tab:timing-main}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{0.98\textwidth}{Xccc}
+    \toprule
+    方案 & 草稿侧平均耗时 & 验证侧平均耗时 & 吞吐率 \\
+    \midrule
+    云侧本地单进程投机解码 & 27.445 ms & 141.630 ms & 15.707 token/s \\
+    云侧本地双进程投机解码 & 33.231 ms & 154.827 ms & 14.816 token/s \\
+    Android--桌面端跨设备投机解码 & 59.481 ms & 133.230 ms & 13.996 token/s \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+接受率方面，跨设备方案达到 72.92\%，高于云侧本地单进程和双进程方案。该现象说明跨设备方案当前并不是因为候选质量显著下降而变慢；其性能差距主要来自每轮协同耗时。跨设备方案平均每轮提案 2.335 个词元，平均接受 1.703 个草稿词元；云侧本地双进程方案平均每轮提案 3.272 个词元，平均接受 1.988 个草稿词元。跨设备方案的接受率较高，但平均提案长度更短，因此每轮实际推进收益仍低于云侧本地双进程方案。
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+      width=.88\textwidth,
+      height=.42\textwidth,
+      ybar,
+      ymin=0,
+      ymax=80,
+      ylabel={接受率（\%）},
+      symbolic x coords={云侧单进程,云侧双进程,跨设备},
+      xtick=data,
+      nodes near coords,
+      nodes near coords style={font=\small},
+      bar width=22pt,
+      grid=major,
+      major grid style={dashed,gray!30},
+      tick label style={font=\small},
+      label style={font=\small},
+    ]
+      \addplot coordinates {(云侧单进程,65.86) (云侧双进程,60.76) (跨设备,72.92)};
+    \end{axis}
+  \end{tikzpicture}
+  \caption{三类投机解码方案的草稿接受率对比}
+  \label{fig:accept-compare}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+      width=.92\textwidth,
+      height=.42\textwidth,
+      ybar,
+      ymin=0,
+      ymax=180,
+      ylabel={平均耗时（ms）},
+      symbolic x coords={云侧单进程,云侧双进程,跨设备},
+      xtick=data,
+      legend style={at={(0.5,-0.18)},anchor=north,legend columns=2,font=\small},
+      bar width=12pt,
+      grid=major,
+      major grid style={dashed,gray!30},
+      tick label style={font=\small},
+      label style={font=\small},
+    ]
+      \addplot coordinates {(云侧单进程,27.445) (云侧双进程,33.231) (跨设备,59.481)};
+      \addplot coordinates {(云侧单进程,141.630) (云侧双进程,154.827) (跨设备,133.230)};
+      \legend{草稿侧,验证侧}
+    \end{axis}
+  \end{tikzpicture}
+  \caption{三类投机解码方案的分项耗时对比}
+  \label{fig:timing-compare}
+\end{figure}
+
+分项耗时进一步解释了吞吐率差异。云侧本地双进程方案中，草稿侧平均耗时约为 33.231 ms，验证侧平均耗时约为 154.827 ms；跨设备方案中，Android 草稿侧平均耗时约为 59.481 ms，桌面端验证侧平均耗时约为 133.230 ms。跨设备方案的目标验证并未明显慢于云侧本地双进程方案，但 Android 草稿侧状态维护和候选生成耗时更高。跨设备日志共记录 370 步，按 \texttt{totalMs=71450 ms} 计算的平均步耗时约为 193.108 ms，其中草稿侧与验证侧平均耗时之和为 192.711 ms，其余差额来自本地应用、请求组织和统计取整等零散开销。
+
+因此，跨设备方案相对于云侧本地双进程的剩余差距主要来自两个方面。第一，Android 端需要在移动设备上维护草稿运行时状态，执行候选生成、状态提交和回滚后的上下文恢复；这部分成本高于桌面端草稿进程。第二，跨设备方案的平均提案长度低于云侧本地双进程方案，使每轮可摊销的目标验证成本减少。两者叠加后，即使跨设备接受率较高，最终吞吐率仍低于云侧本地双进程方案。
+
+\subsection{约束满足情况}
+
+本章实验围绕三个约束进行检查。第一，云侧本地双进程方案应接近云侧本地单进程方案；第二，跨设备方案不应相对于云侧本地双进程方案出现明显劣化；第三，跨设备方案应相对于 Android 端侧本地目标模型推理取得加速。表 \ref{tab:constraints} 给出了对应比例。
+
+\begin{table}[htbp]
+  \centering
+  \caption{实验约束检查结果}
+  \label{tab:constraints}
+  \small
+  \begin{tabularx}{0.92\textwidth}{Xcc}
+    \toprule
+    比较项 & 比例 & 结果 \\
+    \midrule
+    云侧本地双进程 / 云侧本地单进程 & 94.33\% & 接近 \\
+    跨设备 / 云侧本地双进程 & 94.46\% & 无明显劣化 \\
+    跨设备相对 Android 端侧本地目标模型推理提升 & 93.5\% & 高于 30\% \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+需要说明的是，第二项比较采用部署口径而非完全相同的桌面端线程数。云侧本地双进程同时在桌面端运行草稿和验证，跨设备方案则将草稿生成迁移到 Android 端；因此跨设备方案将更多桌面端线程用于目标验证，符合实际部署中的资源分配方式。若强制两类方案使用完全相同的桌面端线程数，会把跨设备方案中已经转移出去的草稿计算资源仍按云侧本地方式保留，不能准确反映端云协同部署边界。
+
+\subsection{实验小结}
+
+本章在统一模型组合、长输出任务和稳态墙钟时间口径下，对端侧本地目标模型推理、云侧本地单进程投机解码、云侧本地双进程投机解码和 Android--桌面端跨设备投机解码进行了比较。实验结果表明，云侧本地双进程方案能够保持接近单进程方案的吞吐率，跨设备方案能够保持接近云侧本地双进程方案的吞吐率，并显著快于 Android 端侧直接运行 7B 目标模型。
+
+从性能来源看，跨设备方案的主要限制不在目标验证侧，而在 Android 草稿侧状态维护、平均提案长度以及跨设备协同边界的固定开销。后续优化应重点降低 Android 草稿侧单轮耗时，提高每轮平均提案长度，并进一步减少请求组织和状态同步成本。
