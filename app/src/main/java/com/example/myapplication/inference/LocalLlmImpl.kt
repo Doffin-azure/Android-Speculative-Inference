@@ -57,19 +57,24 @@ class LocalLlmImpl(context: Context) : LocalLlm {
     }
 
     override suspend fun generate(prompt: String, maxTokens: Int): String {
-        val output = engine.generate(prompt, maxTokens).toList().joinToString(separator = "")
+        val output = generateTokenPieces(prompt, maxTokens).joinToString(separator = "")
         return when (val state = engine.state.value) {
             is InferenceEngine.State.Error -> state.message
             else -> output
         }
     }
 
+    override suspend fun generateTokenPieces(prompt: String, maxTokens: Int): List<String> {
+        return engine.generate(prompt, maxTokens).toList()
+    }
+
     override suspend fun startDraftSession(
         systemPrompt: String,
         userPrompt: String,
-        predictLength: Int
+        predictLength: Int,
+        draftMinProb: Float
     ): DraftSessionHandle {
-        return engine.startDraftSession(systemPrompt, userPrompt, predictLength)
+        return engine.startDraftSession(systemPrompt, userPrompt, predictLength, draftMinProb)
     }
 
     override suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> {

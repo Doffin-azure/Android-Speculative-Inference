@@ -5,8 +5,15 @@ param(
     [string]$DraftModelName = "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
     [string]$TargetModelPath = "",
     [string]$VerifierMode = "llama_cpp_spec_split",
+    [int]$MaxAcceptedTokens = 64,
     [int]$Port = 8080,
-    [int]$Threads = 0
+    [int]$Threads = 4,
+    [int]$DraftMaxTokens = 16,
+    [int]$InitialDraftTokens = 16,
+    [int]$DraftMinTokens = 0,
+    [double]$DraftMinProb = -1.0,
+    [bool]$AdaptiveDraftingEnabled = $false,
+    [int]$AdaptiveDraftMinTokens = 16
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,11 +22,56 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $logsDir = Join-Path $repoRoot "logs"
 $experimentsDir = Join-Path $repoRoot "reference\spec-split-demo-project\experiments"
 $dateDir = Join-Path $experimentsDir (Get-Date -Format "yyyy-MM-dd")
+$experimentLockDir = Join-Path $repoRoot ".experiment-lock"
+$experimentLockInfoPath = Join-Path $experimentLockDir "owner.json"
 $appId = "com.example.myapplication"
-$serviceComponent = "$appId/.SpeculativeExperimentService"
-$receiverComponent = "$appId/.SpeculativeExperimentReceiver"
+$activityComponent = "$appId/.MainActivity"
 $javaHomeDefault = "C:\Program Files\Android\Android Studio\jbr"
 $adbPath = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
+$outputPollCount = 900
+$outputPollIntervalSeconds = 2
+
+function Acquire-ExperimentLock {
+    param(
+        [Parameter(Mandatory = $true)][string]$LockDir,
+        [Parameter(Mandatory = $true)][string]$OwnerInfoPath
+    )
+
+    try {
+        New-Item -ItemType Directory -Path $LockDir -ErrorAction Stop | Out-Null
+    } catch {
+        $ownerInfo = ""
+        if (Test-Path $OwnerInfoPath) {
+            $ownerInfo = Get-Content -Path $OwnerInfoPath -Raw
+        }
+        throw "Another experiment is already running. lockDir=$LockDir owner=$ownerInfo"
+    }
+
+    $owner = [ordered]@{
+        pid = $PID
+        script = $MyInvocation.MyCommand.Path
+        startedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz"
+        host = $env:COMPUTERNAME
+    }
+    $owner | ConvertTo-Json -Depth 4 | Set-Content -Path $OwnerInfoPath -Encoding UTF8
+}
+
+function Release-ExperimentLock {
+    param([Parameter(Mandatory = $true)][string]$LockDir)
+    if (Test-Path $LockDir) {
+        Remove-Item -LiteralPath $LockDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Acquire-ExperimentLock -LockDir $experimentLockDir -OwnerInfoPath $experimentLockInfoPath
+$lockAcquired = $true
+trap {
+    if ($lockAcquired) {
+        Release-ExperimentLock -LockDir $experimentLockDir
+        $lockAcquired = $false
+    }
+    throw
+}
 
 function New-TimestampTag {
     return (Get-Date -Format "yyyy-MM-ddTHH-mm-sszzz").Replace(":", "-")
@@ -173,7 +225,7 @@ $failureReason = ""
 $appOutputPath = Join-Path $logsDir "android_spec_split_app_output_${runStamp}.txt"
 $gradleLogPath = Join-Path $logsDir "android_spec_split_gradle_${runStamp}.log"
 $deviceLogcatPath = Join-Path $logsDir "android_spec_split_logcat_${runStamp}.log"
-$broadcastOutputPath = Join-Path $logsDir "android_spec_split_broadcast_${runStamp}.log"
+$activityOutputPath = Join-Path $logsDir "android_spec_split_activity_${runStamp}.log"
 
 $caughtError = $null
 
@@ -228,29 +280,39 @@ try {
     Write-Host "[android-spec] draft model verified on device"
 
     Invoke-Adb @("logcat", "-c") | Out-Null
+    Invoke-AdbCapture -CommandArgs @("shell", "input", "keyevent", "KEYCODE_WAKEUP") | Out-Null
+    Invoke-AdbCapture -CommandArgs @("shell", "wm", "dismiss-keyguard") | Out-Null
+    Invoke-AdbCapture -CommandArgs @("shell", "input", "keyevent", "82") | Out-Null
 
     $serviceShellCommand =
-        "am start-foreground-service -n $serviceComponent --es baseUrl " +
+        "am start -W -n $activityComponent --es automationAction android_spec_experiment --es baseUrl " +
         (New-ShellSingleQuoted $BaseUrl) +
         " --es prompt " +
         (New-ShellSingleQuoted $Prompt) +
         " --es draftModelName " +
         (New-ShellSingleQuoted $DraftModelName) +
         " --es targetModelName " +
-        (New-ShellSingleQuoted ([System.IO.Path]::GetFileName($TargetModelPath)))
+        (New-ShellSingleQuoted ([System.IO.Path]::GetFileName($TargetModelPath))) +
+        " --ei maxAcceptedTokens $MaxAcceptedTokens" +
+        " --ei draftMaxTokens $DraftMaxTokens" +
+        " --ei initialDraftTokens $InitialDraftTokens" +
+        " --ei draftMinTokens $DraftMinTokens" +
+        " --ef draftMinProb $DraftMinProb" +
+        " --ez adaptiveDraftingEnabled $AdaptiveDraftingEnabled" +
+        " --ei adaptiveDraftMinTokens $AdaptiveDraftMinTokens"
     $startResult = Invoke-AdbCapture -CommandArgs @("shell", $serviceShellCommand)
     if ($startResult.ExitCode -ne 0) {
         $resultStatus = "blocked_runtime"
-        $failureReason = "service_start_failed"
-        throw "Failed to start Android speculative experiment service.`n$($startResult.Output)"
+        $failureReason = "activity_start_failed"
+        throw "Failed to start Android speculative experiment activity.`n$($startResult.Output)"
     }
-    Set-Content -Path $broadcastOutputPath -Value $startResult.Output
-    Write-Host "[android-spec] foreground service start completed"
+    Set-Content -Path $activityOutputPath -Value $startResult.Output
+    Write-Host "[android-spec] automation activity start completed"
 
     $latestText = ""
-    for ($i = 0; $i -lt 240; $i++) {
+    for ($i = 0; $i -lt $outputPollCount; $i++) {
         if ($i -gt 0) {
-            Start-Sleep -Seconds 2
+            Start-Sleep -Seconds $outputPollIntervalSeconds
         }
         $outputResult = Invoke-RunAsShCapture -Script "if [ -f files/logs/speculative-experiment-latest.txt ]; then cat files/logs/speculative-experiment-latest.txt; fi"
         $candidateText = $outputResult.Output.Trim()
@@ -277,11 +339,6 @@ try {
         throw "Android experiment runner reported failure."
     }
 
-    $logcatResult = Invoke-AdbCapture -CommandArgs @("logcat", "-d", "-s", "SpecExpReceiver", "SpecExpService", "*:S")
-    if ($logcatResult.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($logcatResult.Output)) {
-        Set-Content -Path $deviceLogcatPath -Value $logcatResult.Output
-    }
-
     $resultStatus = "completed"
     Write-Host "[android-spec] experiment completed"
 } catch {
@@ -292,6 +349,10 @@ try {
 } finally {
     $finishedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz"
     Set-Content -Path $finishedAtPath -Value $finishedAt
+    $logcatResult = Invoke-AdbCapture -CommandArgs @("logcat", "-d", "-s", "SpecExpReceiver", "SpecExpService", "MainActivity", "*:S")
+    if ($logcatResult.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($logcatResult.Output)) {
+        Set-Content -Path $deviceLogcatPath -Value $logcatResult.Output
+    }
     Stop-DesktopService -ServiceInfo $serviceInfo
 
     $archivePaths = [ordered]@{
@@ -299,7 +360,7 @@ try {
         finishedAt = $finishedAtPath
     }
 
-    foreach ($path in @($gradleLogPath, $broadcastOutputPath, $appOutputPath, $deviceLogcatPath, $modelPushLogPath, $serviceInfo.Stdout, $serviceInfo.Stderr)) {
+    foreach ($path in @($gradleLogPath, $activityOutputPath, $appOutputPath, $deviceLogcatPath, $modelPushLogPath, $serviceInfo.Stdout, $serviceInfo.Stderr)) {
         if ($path -and (Test-Path $path)) {
             $dest = Join-Path $dateDir ([System.IO.Path]::GetFileName($path))
             Copy-Item $path $dest -Force
@@ -311,19 +372,26 @@ try {
         generatedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz"
         startedAt = $startedAt
         finishedAt = $finishedAt
+        timingBasis = "steady_state_after_local_and_remote_sessions_ready_before_first_draft"
         status = $resultStatus
         failureReason = $failureReason
         exception = if ($null -ne $caughtError) { $caughtError.ToString() } else { "" }
         deviceSerial = if ([string]::IsNullOrWhiteSpace($DeviceSerial)) { "" } else { $DeviceSerial }
         packageName = $appId
-        serviceComponent = $serviceComponent
-        receiverComponent = $receiverComponent
+        activityComponent = $activityComponent
         baseUrl = $BaseUrl
         verifierMode = $VerifierMode
         threads = $Threads
         prompt = $Prompt
         draftModelName = $DraftModelName
         targetModelPath = $TargetModelPath
+        maxAcceptedTokens = $MaxAcceptedTokens
+        draftMaxTokens = $DraftMaxTokens
+        initialDraftTokens = $InitialDraftTokens
+        draftMinTokens = $DraftMinTokens
+        draftMinProb = $DraftMinProb
+        adaptiveDraftingEnabled = $AdaptiveDraftingEnabled
+        adaptiveDraftMinTokens = $AdaptiveDraftMinTokens
         archivedFiles = $archivePaths
     }
 
@@ -337,4 +405,8 @@ try {
         }
         throw "Android spec split experiment did not complete. status=$resultStatus reason=$failureReason"
     }
+}
+if ($lockAcquired) {
+    Release-ExperimentLock -LockDir $experimentLockDir
+    $lockAcquired = $false
 }

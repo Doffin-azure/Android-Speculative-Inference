@@ -612,7 +612,6 @@ class MainViewModel(
                 var totalDraftFetchMs = 0L
                 var totalRemoteProposeMs = 0L
                 var totalLocalApplyMs = 0L
-                var pendingVerifiedRealTokens = emptyList<Int>()
 
                 for (draftStep in 1..SPECULATIVE_TEST_MAX_STEPS) {
                     var localDraftTreeProposal: DraftTreeProposal? = null
@@ -641,18 +640,11 @@ class MainViewModel(
                             } else {
                                 if (useRealTokenDraftPath) {
                                     if (useReferenceStyleSplitDraft) {
-                                        if (pendingVerifiedRealTokens.isEmpty()) {
-                                            localLlm.draftNextRealTokenIds(
-                                                sessionId = activeLocalDraftSessionId,
-                                                maxTokens = SPECULATIVE_TEST_MAX_DRAFT_TOKENS
-                                            )
-                                        } else {
-                                            localLlm.applyVerifiedRealTokensAndDraftNextRealTokenIds(
-                                                sessionId = activeLocalDraftSessionId,
-                                                tokenIds = pendingVerifiedRealTokens,
-                                                maxTokens = SPECULATIVE_TEST_MAX_DRAFT_TOKENS
-                                            )
-                                        }
+                                        localLlm.syncAndDraftNextRealTokenIds(
+                                            sessionId = activeLocalDraftSessionId,
+                                            authoritativeTokenIds = committedTokenIds,
+                                            maxTokens = SPECULATIVE_TEST_MAX_DRAFT_TOKENS
+                                        )
                                     } else {
                                         localLlm.draftNextRealTokenIds(
                                             sessionId = activeLocalDraftSessionId,
@@ -677,7 +669,6 @@ class MainViewModel(
                     }
                     val draftFetchMs = System.currentTimeMillis() - draftFetchStartedAt
                     totalDraftFetchMs += draftFetchMs
-                    pendingVerifiedRealTokens = emptyList()
                     if (baseTokens.isEmpty()) {
                         appendLog("Speculative loop stopped: no more draft tokens available for step $draftStep.")
                         break
@@ -739,8 +730,6 @@ class MainViewModel(
                         runCatching {
                             val applyStartedAt = System.currentTimeMillis()
                             if (useReferenceStyleSplitDraft) {
-                                pendingVerifiedRealTokens =
-                                    proposeResponse.acceptedTokenIds + proposeResponse.correctionTokenIds
                                 DraftSessionHandle(
                                     sessionId = activeLocalDraftSessionId,
                                     runtimeLabel = "ai-chat split draft session",

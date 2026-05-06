@@ -255,6 +255,8 @@ class SpeculativeSession:
     verifier_mode: str
     temperature: float
     top_p: float
+    top_k: int
+    sampling_seed: int | None
     status: str
     draft_step: int
     accepted_token_ids: list[int]
@@ -1597,11 +1599,15 @@ def current_assistant_prefix_text(session: SpeculativeSession) -> str:
 
 
 def build_target_session_state(session: SpeculativeSession) -> TargetSessionState:
-    verifier_sampling_seed = int(
-        hashlib.sha256(
-            f"{session.request_id}:{session.session_id}:verifier".encode("utf-8")
-        ).hexdigest()[:8],
-        16,
+    verifier_sampling_seed = (
+        int(session.sampling_seed)
+        if session.sampling_seed is not None
+        else int(
+            hashlib.sha256(
+                f"{session.request_id}:{session.session_id}:verifier".encode("utf-8")
+            ).hexdigest()[:8],
+            16,
+        )
     )
     return TargetSessionState(
         target_session_id=str(uuid.uuid4()),
@@ -2556,6 +2562,11 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
     sampling = payload.get("sampling") if isinstance(payload.get("sampling"), dict) else {}
     temperature = float(sampling.get("temperature") or payload.get("temperature") or DEFAULT_TEMPERATURE)
     top_p = float(sampling.get("topP") or payload.get("topP") or DEFAULT_TOP_P)
+    top_k = int(sampling.get("topK") or payload.get("topK") or 1)
+    seed_value = sampling.get("seed")
+    if seed_value is None:
+        seed_value = payload.get("seed")
+    sampling_seed = int(seed_value) if seed_value is not None else None
     target_model = str(payload.get("targetModel") or config.model_path.name)
     draft_model = str(payload.get("draftModel") or "")
     system_prompt = str(payload.get("systemPrompt") or "")
@@ -2575,6 +2586,8 @@ def build_speculative_session(payload: dict[str, Any], config: ServiceConfig) ->
         verifier_mode=config.speculative_verifier_mode,
         temperature=temperature,
         top_p=top_p,
+        top_k=top_k,
+        sampling_seed=sampling_seed,
         status="ready",
         draft_step=0,
         accepted_token_ids=[],
@@ -2667,7 +2680,7 @@ def start_llama_cpp_native_target_session(
         samplingConfig={
             "temperature": session.temperature,
             "topP": session.top_p,
-            "topK": 1,
+            "topK": session.top_k,
             "minP": 0.0,
             "penaltyRepeat": 1.0,
             "penaltyFreq": 0.0,

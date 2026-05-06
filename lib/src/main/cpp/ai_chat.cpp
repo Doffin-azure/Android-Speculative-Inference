@@ -32,14 +32,17 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
 }
 
 constexpr int N_THREADS_MIN = 2;
-constexpr int N_THREADS_MAX = 4;
-constexpr int N_THREADS_HEADROOM = 2;
+constexpr int N_THREADS_MAX = 6;
+constexpr int N_THREADS_HEADROOM = 1;
 
-constexpr int DEFAULT_CONTEXT_SIZE = 8192;
+// The experiment workloads stay well below 4k total tokens. Keeping the
+// Android draft runtime closer to the live sequence length reduces KV/cache
+// pressure without changing decoding semantics for the 1k-token benchmarks.
+constexpr int DEFAULT_CONTEXT_SIZE = 4096;
 constexpr int OVERFLOW_HEADROOM = 4;
 constexpr int BATCH_SIZE = 512;
 constexpr float DEFAULT_SAMPLER_TEMP = 0.0f;
-constexpr int DEFAULT_SPECULATIVE_DRAFT_TOP_K = 10;
+constexpr int DEFAULT_SPECULATIVE_DRAFT_TOP_K = 1;
 constexpr float DEFAULT_SPECULATIVE_DRAFT_P_MIN = 0.90f;
 
 static llama_model *g_model;
@@ -220,7 +223,7 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
 static common_sampler *new_sampler(float temp) {
     common_params_sampling sparams;
     sparams.temp = temp;
-    sparams.top_k = 1;
+    sparams.top_k = DEFAULT_SPECULATIVE_DRAFT_TOP_K;
     sparams.top_p = 1.0f;
     sparams.min_p = 0.0f;
     sparams.penalty_repeat = 1.0f;
@@ -475,6 +478,7 @@ struct persistent_draft_session_snapshot {
     bool seq_state_valid;
     host_runtime_probe_snapshot host_snapshot;
     std::vector<llama_token> prompt_prefix_tokens;
+    float draft_min_prob;
 };
 
 static std::unordered_map<std::string, persistent_draft_session_snapshot> g_persistent_draft_sessions;
@@ -722,24 +726,48 @@ static std::vector<draft_tree_candidate> top_candidates_from_current_logits(int 
     return candidates;
 }
 
-static bool next_real_draft_candidate(llama_token &out_token_id, std::string &out_token_text, float &out_probability) {
-    out_token_id = common_sampler_sample(g_sampler, g_context, -1, true);
+static float probability_of_token_from_current_logits(const llama_token token_id) {
+    const float * logits = llama_get_logits(g_context);
+    if (logits == nullptr) {
+        return 0.0f;
+    }
+
+    const int vocab_size = static_cast<int>(llama_vocab_n_tokens(llama_model_get_vocab(g_model)));
+    if (vocab_size <= 0 || token_id < 0 || token_id >= vocab_size) {
+        return 0.0f;
+    }
+
+    float max_logit = -std::numeric_limits<float>::infinity();
+    for (int i = 0; i < vocab_size; ++i) {
+        max_logit = std::max(max_logit, logits[i]);
+    }
+
+    double sum_exp = 0.0;
+    for (int i = 0; i < vocab_size; ++i) {
+        sum_exp += std::exp(static_cast<double>(logits[i] - max_logit));
+    }
+    if (sum_exp <= 0.0) {
+        return 0.0f;
+    }
+
+    const double probability = std::exp(static_cast<double>(logits[token_id] - max_logit)) / sum_exp;
+    return static_cast<float>(probability);
+}
+
+static bool next_real_draft_candidate(
+        llama_token &out_token_id,
+        std::string &out_token_text,
+        float &out_probability,
+        const bool need_probability) {
+    out_token_id = common_sampler_sample(g_sampler, g_context, 0, true);
     if (out_token_id == LLAMA_TOKEN_NULL) {
         return false;
     }
 
     out_token_text = common_token_to_piece(g_context, out_token_id);
     out_probability = 1.0f;
-
-    auto * candidates = common_sampler_get_candidates(g_sampler, true);
-    if (candidates != nullptr && candidates->size > 0) {
-        for (size_t index = 0; index < candidates->size; ++index) {
-            const auto &candidate = candidates->data[index];
-            if (candidate.id == out_token_id) {
-                out_probability = candidate.p;
-                break;
-            }
-        }
+    if (need_probability) {
+        out_probability = probability_of_token_from_current_logits(out_token_id);
     }
 
     return true;
@@ -867,14 +895,16 @@ static bool restore_runtime_branch_snapshot(const runtime_branch_snapshot &snaps
 }
 
 static persistent_draft_session_snapshot capture_persistent_draft_session_snapshot(
-        const std::vector<llama_token> &prompt_prefix_tokens = {}) {
+        const std::vector<llama_token> &prompt_prefix_tokens = {},
+        const float draft_min_prob = DEFAULT_SPECULATIVE_DRAFT_P_MIN) {
     constexpr llama_seq_id seq_id = 0;
     const size_t seq_state_size = llama_state_seq_get_size(g_context, seq_id);
     persistent_draft_session_snapshot snapshot {
             std::vector<uint8_t>(seq_state_size),
             true,
             capture_host_runtime_snapshot(),
-            prompt_prefix_tokens
+            prompt_prefix_tokens,
+            draft_min_prob
     };
     const size_t saved_size = llama_state_seq_get_data(
             g_context,
@@ -974,10 +1004,14 @@ static void rebuild_sampler_history_from_runtime_tokens() {
     if (g_sampler == nullptr) {
         return;
     }
+    // The Android draft path always uses deterministic greedy sampling
+    // (temp=0, top-k=1, no repetition/frequency/presence penalties). Under
+    // these settings, replaying the entire accepted prefix into the sampler on
+    // every sync/restore does not change token selection, but it does add
+    // prefix-length-dependent overhead that grows throughout long generations.
+    // Resetting the sampler is enough to preserve behavior for the current
+    // benchmark regime while removing that O(prefix) cost from the hot path.
     common_sampler_reset(g_sampler);
-    for (const llama_token token_id : runtime_token_history) {
-        common_sampler_accept(g_sampler, token_id, false);
-    }
 }
 
 static bool refresh_runtime_tail_logits() {
@@ -1029,6 +1063,9 @@ static bool rebuild_runtime_to_token_sequence(
     // Keep split draft sync token-first on the hot path.
     // Reconstructing full assistant text here is O(prefix) and not needed for real-token draft proposal.
     rebuild_sampler_history_from_runtime_tokens();
+    if (!refresh_runtime_tail_logits()) {
+        return false;
+    }
     return true;
 }
 
@@ -1044,9 +1081,71 @@ static bool sync_runtime_to_authoritative_tokens(
 
     const size_t common_prefix = token_lcp_length(runtime_token_history, target_sequence);
     const bool mismatch_inside_prefix = common_prefix < std::min(runtime_token_history.size(), target_sequence.size());
+    LOGi(
+            "%s: runtime=%d target=%d promptPrefix=%d authoritative=%d commonPrefix=%d mismatch=%d currentPos=%d",
+            __func__,
+            static_cast<int>(runtime_token_history.size()),
+            static_cast<int>(target_sequence.size()),
+            static_cast<int>(session_snapshot.prompt_prefix_tokens.size()),
+            static_cast<int>(authoritative_token_ids.size()),
+            static_cast<int>(common_prefix),
+            mismatch_inside_prefix ? 1 : 0,
+            static_cast<int>(current_position));
 
     if (mismatch_inside_prefix) {
-        return rebuild_runtime_to_token_sequence(session_snapshot, target_sequence, predict_length);
+        // In cross-device speculative decoding, a rejected draft round is common:
+        // the active runtime usually equals
+        //   committed_prefix + speculative_suffix
+        // while the authoritative sequence becomes
+        //   committed_prefix + accepted_prefix + correction_token.
+        // Rebuilding from the full prompt on every such correction makes the
+        // Android draft path prefix-length-dependent and dominates runtime.
+        // Rolling back to the LCP and appending only the authoritative tail is
+        // sufficient here because the mismatch is still suffix-local.
+        if (common_prefix == 0) {
+            LOGi("%s: falling back to full rebuild from target sequence", __func__);
+            return rebuild_runtime_to_token_sequence(session_snapshot, target_sequence, predict_length);
+        }
+
+        if (runtime_token_history.size() > common_prefix) {
+            if (!llama_memory_seq_rm(
+                    llama_get_memory(g_context),
+                    0,
+                    static_cast<llama_pos>(common_prefix),
+                    current_position)) {
+                return false;
+            }
+            runtime_token_history.resize(common_prefix);
+            current_position = static_cast<llama_pos>(common_prefix);
+        }
+
+        if (target_sequence.size() > common_prefix) {
+            llama_tokens missing_tokens(
+                    target_sequence.begin() + static_cast<long>(common_prefix),
+                    target_sequence.end());
+            LOGi(
+                    "%s: rollback-to-lcp then append authoritative tail tokens=%d",
+                    __func__,
+                    static_cast<int>(missing_tokens.size()));
+            if (decode_tokens_in_batches(g_context, g_batch, missing_tokens, current_position, true) != 0) {
+                LOGe("%s: failed to append authoritative correction tail", __func__);
+                return false;
+            }
+            append_runtime_tokens(missing_tokens);
+            current_position += static_cast<llama_pos>(missing_tokens.size());
+        }
+
+        if (!refresh_runtime_tail_logits()) {
+            return false;
+        }
+
+        system_prompt_position = session_snapshot.host_snapshot.system_prompt_position;
+        stop_generation_position = current_position + std::max(1, predict_length);
+        cached_token_chars.clear();
+        assistant_ss.str("");
+        assistant_ss.clear();
+        rebuild_sampler_history_from_runtime_tokens();
+        return true;
     }
 
     if (runtime_token_history.size() > target_sequence.size()) {
@@ -1065,13 +1164,19 @@ static bool sync_runtime_to_authoritative_tokens(
         llama_tokens missing_tokens(
                 target_sequence.begin() + static_cast<long>(runtime_token_history.size()),
                 target_sequence.end());
+        LOGi(
+                "%s: append authoritative tail tokens=%d",
+                __func__,
+                static_cast<int>(missing_tokens.size()));
         if (decode_tokens_in_batches(g_context, g_batch, missing_tokens, current_position, true) != 0) {
             LOGe("%s: failed to append authoritative tail", __func__);
             return false;
         }
         append_runtime_tokens(missing_tokens);
         current_position += static_cast<llama_pos>(missing_tokens.size());
-    } else if (!refresh_runtime_tail_logits()) {
+    }
+
+    if (!refresh_runtime_tail_logits()) {
         return false;
     }
 
@@ -1124,8 +1229,31 @@ static std::vector<jint> generate_real_draft_token_ids(const jint max_tokens) {
     std::vector<jint> draft_ids;
     draft_ids.reserve(std::max(0, static_cast<int>(max_tokens)));
     bool drafted_any = false;
+    float draft_min_prob = 0.0f;
+    if (!g_active_persistent_draft_session_id.empty()) {
+        const auto active_it = g_persistent_draft_sessions.find(g_active_persistent_draft_session_id);
+        if (active_it != g_persistent_draft_sessions.end()) {
+            draft_min_prob = active_it->second.draft_min_prob;
+        }
+    }
+
+    LOGi(
+            "%s: begin maxTokens=%d draftMinProb=%.4f runtime=%d currentPos=%d stopPos=%d",
+            __func__,
+            static_cast<int>(max_tokens),
+            draft_min_prob,
+            static_cast<int>(runtime_token_history.size()),
+            static_cast<int>(current_position),
+            static_cast<int>(stop_generation_position));
 
     for (int step = 0; step < max_tokens; ++step) {
+        LOGi(
+                "%s: step=%d runtime=%d currentPos=%d stopPos=%d",
+                __func__,
+                step + 1,
+                static_cast<int>(runtime_token_history.size()),
+                static_cast<int>(current_position),
+                static_cast<int>(stop_generation_position));
         if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
             shift_context();
         }
@@ -1137,19 +1265,35 @@ static std::vector<jint> generate_real_draft_token_ids(const jint max_tokens) {
         llama_token new_token_id = LLAMA_TOKEN_NULL;
         std::string new_token_chars;
         float new_token_probability = 0.0f;
-        if (!next_real_draft_candidate(new_token_id, new_token_chars, new_token_probability)) {
+        LOGi("%s: step=%d before_sample", __func__, step + 1);
+        if (!next_real_draft_candidate(
+                new_token_id,
+                new_token_chars,
+                new_token_probability,
+                draft_min_prob > 0.0f)) {
+            LOGi("%s: step=%d sample returned null", __func__, step + 1);
             break;
         }
+        LOGi(
+                "%s: step=%d sampled token=%d prob=%.4f text=%s",
+                __func__,
+                step + 1,
+                static_cast<int>(new_token_id),
+                new_token_probability,
+                new_token_chars.c_str());
         common_sampler_accept(g_sampler, new_token_id, true);
 
         common_batch_clear(g_batch);
         common_batch_add(g_batch, new_token_id, current_position, {0}, true);
+        LOGi("%s: step=%d before_decode", __func__, step + 1);
         if (llama_decode(g_context, g_batch) != 0) {
             LOGe("%s: llama_decode() failed for real draft token", __func__);
             break;
         }
+        LOGi("%s: step=%d after_decode", __func__, step + 1);
 
         current_position++;
+        runtime_token_history.push_back(new_token_id);
 
         if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
             chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
@@ -1165,7 +1309,7 @@ static std::vector<jint> generate_real_draft_token_ids(const jint max_tokens) {
         draft_ids.push_back(static_cast<jint>(new_token_id));
         drafted_any = true;
 
-        if (new_token_probability < DEFAULT_SPECULATIVE_DRAFT_P_MIN) {
+        if (draft_min_prob > 0.0f && new_token_probability < draft_min_prob) {
             break;
         }
     }
@@ -1220,22 +1364,25 @@ static int process_prompt_text(
         const std::string &text,
         const std::string &role,
         const bool update_system_position,
-        const bool compute_last_logit = false) {
+        const bool compute_last_logit = false,
+        const bool force_raw_prompt = false) {
     if (text.empty()) {
         return 0;
     }
 
     std::string formatted_prompt(text);
-    const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
+    const bool has_chat_template =
+            !force_raw_prompt && common_chat_templates_was_explicit(g_chat_templates.get());
     if (has_chat_template) {
         formatted_prompt = chat_add_and_format(role, text);
     }
 
+    const bool tokenize_with_special = force_raw_prompt || has_chat_template;
     auto tokens = common_tokenize(
             g_context,
             formatted_prompt,
-            has_chat_template,
-            has_chat_template);
+            tokenize_with_special,
+            tokenize_with_special);
 
     const int token_count = (int) tokens.size();
     const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;
@@ -1313,7 +1460,16 @@ static int reset_draft_context_internal(
         return 10 + system_result;
     }
 
-    const int user_result = process_prompt_text(user, ROLE_USER, false, true);
+    const bool use_raw_user_prompt =
+            !common_chat_templates_was_explicit(g_chat_templates.get()) &&
+            system.empty() &&
+            assistant.empty();
+    const int user_result = process_prompt_text(
+            user,
+            ROLE_USER,
+            false,
+            true,
+            use_raw_user_prompt);
     if (user_result != 0) {
         return 20 + user_result;
     }
@@ -1449,7 +1605,7 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_processUserPro
     }
 
     current_position += user_prompt_size;
-    stop_generation_position = current_position + user_prompt_size + n_predict;
+    stop_generation_position = current_position + std::max(1, static_cast<int>(n_predict));
     return 0;
 }
 
@@ -1581,7 +1737,8 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_startPersisten
         jstring jsystem_prompt,
         jstring juser_prompt,
         jstring jassistant_text,
-        jint predict_length) {
+        jint predict_length,
+        jfloat draft_min_prob) {
     const auto *session_id_chars = env->GetStringUTFChars(jsession_id, nullptr);
     const auto *system_prompt = env->GetStringUTFChars(jsystem_prompt, nullptr);
     const auto *user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
@@ -1615,7 +1772,8 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_startPersisten
     }
 
     g_persistent_draft_sessions[session_id] = capture_persistent_draft_session_snapshot(
-            capture_prompt_prefix_tokens_from_runtime());
+            capture_prompt_prefix_tokens_from_runtime(),
+            draft_min_prob >= 0.0f ? draft_min_prob : 0.0f);
     mark_active_persistent_draft_runtime(session_id, true);
     return 0;
 }
@@ -1716,7 +1874,9 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_commitPersiste
     }
 
     stop_generation_position = current_position + std::max(1, static_cast<int>(predict_length));
-    it->second = capture_persistent_draft_session_snapshot(it->second.prompt_prefix_tokens);
+    it->second = capture_persistent_draft_session_snapshot(
+            it->second.prompt_prefix_tokens,
+            it->second.draft_min_prob);
     mark_active_persistent_draft_runtime(session_id, true);
     return 0;
 }
@@ -1894,10 +2054,22 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_syncAndGenerat
         }
     }
 
+    LOGi(
+            "%s: session=%s authoritative=%d predict=%d maxTokens=%d activeSession=%s activeMatches=%d",
+            __func__,
+            session_id.c_str(),
+            static_cast<int>(authoritative_token_ids.size()),
+            static_cast<int>(predict_length),
+            static_cast<int>(max_tokens),
+            g_active_persistent_draft_session_id.c_str(),
+            g_active_runtime_matches_committed_snapshot ? 1 : 0);
+
     if (!ensure_runtime_ready_for_authoritative_sync(session_id, it->second)) {
+        LOGe("%s: ensure_runtime_ready_for_authoritative_sync failed", __func__);
         return result;
     }
     if (!sync_runtime_to_authoritative_tokens(it->second, authoritative_token_ids, predict_length)) {
+        LOGe("%s: sync_runtime_to_authoritative_tokens failed", __func__);
         clear_active_persistent_draft_runtime();
         return result;
     }
@@ -1907,6 +2079,12 @@ Java_com_example_myapplication_llama_internal_InferenceEngineImpl_syncAndGenerat
     mark_active_persistent_draft_runtime(session_id, true);
 
     const std::vector<jint> draft_ids = generate_real_draft_token_ids(max_tokens);
+    LOGi(
+            "%s: session=%s drafted=%d runtimeNow=%d",
+            __func__,
+            session_id.c_str(),
+            static_cast<int>(draft_ids.size()),
+            static_cast<int>(runtime_token_history.size()));
     result = env->NewIntArray((jsize) draft_ids.size());
     if (result == nullptr || draft_ids.empty()) {
         return result;

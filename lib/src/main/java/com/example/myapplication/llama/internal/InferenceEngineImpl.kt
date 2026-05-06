@@ -39,6 +39,7 @@ internal class InferenceEngineImpl private constructor(
         val systemPrompt: String,
         val userPrompt: String,
         val predictLength: Int,
+        val draftMinProb: Float = 0.75f,
         val acceptedText: String = "",
         val acceptedTokenIds: List<Int> = emptyList(),
         val acceptedTextDirty: Boolean = false
@@ -104,7 +105,8 @@ internal class InferenceEngineImpl private constructor(
         systemPrompt: String,
         userPrompt: String,
         assistantText: String,
-        predictLength: Int
+        predictLength: Int,
+        draftMinProb: Float
     ): Int
 
     @FastNative
@@ -363,7 +365,8 @@ internal class InferenceEngineImpl private constructor(
     override suspend fun startDraftSession(
         systemPrompt: String,
         userPrompt: String,
-        predictLength: Int
+        predictLength: Int,
+        draftMinProb: Float
     ): DraftSessionHandle = withContext(llamaDispatcher) {
         check(state.value is InferenceEngine.State.ModelReady) {
             "Cannot start draft session in ${state.value.javaClass.simpleName}."
@@ -374,14 +377,16 @@ internal class InferenceEngineImpl private constructor(
             sessionId = sessionId,
             systemPrompt = systemPrompt,
             userPrompt = userPrompt,
-            predictLength = predictLength
+            predictLength = predictLength,
+            draftMinProb = draftMinProb
         )
         val startResult = startPersistentDraftSession(
             sessionId = sessionId,
             systemPrompt = systemPrompt,
             userPrompt = userPrompt,
             assistantText = runtime.acceptedText,
-            predictLength = runtime.predictLength
+            predictLength = runtime.predictLength,
+            draftMinProb = runtime.draftMinProb
         )
         if (startResult != 0) {
             currentError = "Failed to start persistent draft session: $startResult"

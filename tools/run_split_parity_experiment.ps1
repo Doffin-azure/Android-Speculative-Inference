@@ -1,9 +1,12 @@
 param(
     [string]$Prompt = "Explain speculative decoding briefly.",
     [int]$NMax = 16,
+    [int]$NMin = 0,
+    [double]$PMin = 0.75,
     [int]$MaxOutputTokens = 65,
     [int]$CtxSize = 512,
-    [switch]$RunBaseline
+    [int]$Threads = 4,
+    [switch]$RunBaseline = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,6 +57,9 @@ function Get-NativeMetrics {
         stateFile = $summary.nativeFull.stateFile
         decisionFile = $summary.nativeFull.decisionFile
         baseline = $summary.baseline
+        overallTokensPerSecond = $summary.nativeFull.overallTokensPerSecond
+        averageProposedTokensPerRound = $summary.nativeFull.averageProposedTokensPerRound
+        averageAcceptedDraftTokensPerRound = $summary.nativeFull.averageAcceptedDraftTokensPerRound
     }
 }
 
@@ -94,6 +100,11 @@ function Get-AndroidMetrics {
         totalRemoteProposeMs = [int]($metrics.totalRemoteProposeMs)
         overallTokensPerSecond = [double]($metrics.overallTokensPerSecond)
         draftTokensPerSecond = [double]($metrics.draftTokensPerSecond)
+        averageAcceptedPerProposed = if ([int]($metrics.totalProposedTokens) -gt 0) {
+            [math]::Round(([int]($metrics.totalAcceptedTokens) / [int]($metrics.totalProposedTokens)), 4)
+        } else {
+            0.0
+        }
         closeStatus = $metrics.closeStatus
         closeReason = $metrics.closeReason
     }
@@ -104,8 +115,11 @@ New-Item -ItemType Directory -Force -Path $experimentsDir | Out-Null
 & (Join-Path $referenceRoot "run_recorded_native_full_experiment.ps1") `
     -Prompt $Prompt `
     -NMax $NMax `
+    -NMin $NMin `
+    -PMin $PMin `
     -MaxOutputTokens $MaxOutputTokens `
     -CtxSize $CtxSize `
+    -Threads $Threads `
     -RunBaseline:$RunBaseline
 if ($LASTEXITCODE -ne 0) {
     throw "Reference native full experiment failed."
@@ -113,8 +127,16 @@ if ($LASTEXITCODE -ne 0) {
 
 $nativeSummary = Get-LatestFile -DirectoryPath $experimentsDir -Filter "recorded_run_*.json"
 $nativeMetrics = Get-NativeMetrics -SummaryPath $nativeSummary.FullName
+$baselineMetrics = $nativeMetrics.baseline.metrics
 
-& (Join-Path $repoRoot "tools\run_android_spec_split_experiment.ps1") -Prompt $Prompt
+& (Join-Path $repoRoot "tools\run_android_spec_split_experiment.ps1") `
+    -Prompt $Prompt `
+    -MaxAcceptedTokens $MaxOutputTokens `
+    -DraftMaxTokens $NMax `
+    -InitialDraftTokens $NMax `
+    -DraftMinTokens $NMin `
+    -DraftMinProb $PMin `
+    -Threads $Threads
 if ($LASTEXITCODE -ne 0) {
     throw "Android split experiment failed."
 }
@@ -125,15 +147,70 @@ $androidMetrics = Get-AndroidMetrics -SummaryPath $androidSummary.FullName
 $comparison = [ordered]@{
     generatedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz"
     prompt = $Prompt
+    config = [ordered]@{
+        nMax = $NMax
+        nMin = $NMin
+        pMin = $PMin
+        maxOutputTokens = $MaxOutputTokens
+        ctxSize = $CtxSize
+        threads = $Threads
+    }
+    pcSpeculativeSimple = $nativeMetrics.baseline
     referenceNativeFull = $nativeMetrics
     androidSplit = $androidMetrics
     comparison = [ordered]@{
-        acceptedPosVsCommittedTokens = $nativeMetrics.acceptedPos - $androidMetrics.committedTokens
-        nativeFinalRoundVsAndroidSteps = $nativeMetrics.finalRound - $androidMetrics.steps
-        androidOverallTpsDeltaVsNativeAcceptedPosPerSecond = if ($androidMetrics.totalMs -gt 0) {
-            $androidMetrics.overallTokensPerSecond - ($nativeMetrics.acceptedPos / (((Get-Date $nativeMetrics.end) - (Get-Date $nativeMetrics.start)).TotalSeconds))
+        baselineVsNativeAcceptedTokens = if ($null -ne $baselineMetrics) {
+            $baselineMetrics.decodedTokens - $nativeMetrics.acceptedPos
         } else {
-            0.0
+            $null
+        }
+        nativeVsAndroidAcceptedTokens = $nativeMetrics.acceptedPos - $androidMetrics.committedTokens
+        baselineOverallTps = if ($null -ne $baselineMetrics) { $baselineMetrics.overallTokensPerSecond } else { $null }
+        nativeOverallTps = $nativeMetrics.overallTokensPerSecond
+        androidOverallTps = $androidMetrics.overallTokensPerSecond
+        nativeVsBaselineTpsRatio = if ($null -ne $baselineMetrics -and $baselineMetrics.overallTokensPerSecond -gt 0) {
+            [math]::Round($nativeMetrics.overallTokensPerSecond / $baselineMetrics.overallTokensPerSecond, 4)
+        } else {
+            $null
+        }
+        androidVsBaselineTpsRatio = if ($null -ne $baselineMetrics -and $baselineMetrics.overallTokensPerSecond -gt 0) {
+            [math]::Round($androidMetrics.overallTokensPerSecond / $baselineMetrics.overallTokensPerSecond, 4)
+        } else {
+            $null
+        }
+        androidVsNativeTpsRatio = if ($nativeMetrics.overallTokensPerSecond -gt 0) {
+            [math]::Round($androidMetrics.overallTokensPerSecond / $nativeMetrics.overallTokensPerSecond, 4)
+        } else {
+            $null
+        }
+        baselineAcceptRatio = if ($null -ne $baselineMetrics) { $baselineMetrics.acceptRatio } else { $null }
+        nativeAcceptedPerProposed = if ($nativeMetrics.averageProposedTokensPerRound -gt 0) {
+            [math]::Round($nativeMetrics.averageAcceptedDraftTokensPerRound / $nativeMetrics.averageProposedTokensPerRound, 4)
+        } else {
+            $null
+        }
+        androidAcceptedPerProposed = $androidMetrics.averageAcceptedPerProposed
+        nativeVsBaselineAcceptDelta = if ($null -ne $baselineMetrics -and $nativeMetrics.averageProposedTokensPerRound -gt 0) {
+            [math]::Round(
+                (($nativeMetrics.averageAcceptedDraftTokensPerRound / $nativeMetrics.averageProposedTokensPerRound) * 100.0) - $baselineMetrics.acceptRatio,
+                3
+            )
+        } else {
+            $null
+        }
+        androidVsBaselineAcceptDelta = if ($null -ne $baselineMetrics) {
+            [math]::Round(($androidMetrics.averageAcceptedPerProposed * 100.0) - $baselineMetrics.acceptRatio, 3)
+        } else {
+            $null
+        }
+        androidVsNativeAcceptDelta = if ($nativeMetrics.averageProposedTokensPerRound -gt 0) {
+            [math]::Round(
+                ($androidMetrics.averageAcceptedPerProposed * 100.0) -
+                (($nativeMetrics.averageAcceptedDraftTokensPerRound / $nativeMetrics.averageProposedTokensPerRound) * 100.0),
+                3
+            )
+        } else {
+            $null
         }
         androidDraftShare = if ($androidMetrics.totalMs -gt 0) {
             [math]::Round($androidMetrics.totalDraftFetchMs / $androidMetrics.totalMs, 4)
@@ -142,11 +219,6 @@ $comparison = [ordered]@{
         }
         androidRemoteShare = if ($androidMetrics.totalMs -gt 0) {
             [math]::Round($androidMetrics.totalRemoteProposeMs / $androidMetrics.totalMs, 4)
-        } else {
-            0.0
-        }
-        androidAcceptedPerProposed = if ($androidMetrics.totalProposedTokens -gt 0) {
-            [math]::Round($androidMetrics.totalAcceptedTokens / $androidMetrics.totalProposedTokens, 4)
         } else {
             0.0
         }

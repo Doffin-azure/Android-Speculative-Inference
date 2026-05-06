@@ -18,7 +18,13 @@ interface LocalLlm {
     suspend fun loadModel(modelPath: String): Boolean
     suspend fun setSystemPrompt(systemPrompt: String): Boolean
     suspend fun generate(prompt: String, maxTokens: Int = TEST_MAX_TOKENS): String
-    suspend fun startDraftSession(systemPrompt: String, userPrompt: String, predictLength: Int = TEST_MAX_TOKENS): DraftSessionHandle {
+    suspend fun generateTokenPieces(prompt: String, maxTokens: Int = TEST_MAX_TOKENS): List<String>
+    suspend fun startDraftSession(
+        systemPrompt: String,
+        userPrompt: String,
+        predictLength: Int = TEST_MAX_TOKENS,
+        draftMinProb: Float = 0.75f
+    ): DraftSessionHandle {
         throw UnsupportedOperationException("Draft session is not implemented by this LocalLlm.")
     }
     suspend fun draftNextTokenIds(sessionId: String, maxTokens: Int): List<Int> {

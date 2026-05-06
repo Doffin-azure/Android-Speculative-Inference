@@ -51,7 +51,9 @@ data class SpeculativeStartRequest(
     val systemPrompt: String = "",
     val userPrompt: String,
     val temperature: Double = 0.7,
-    val topP: Double = 0.9
+    val topP: Double = 0.9,
+    val topK: Int = 1,
+    val seed: Int? = null
 )
 
 data class SpeculativeStartResponse(
@@ -143,44 +145,36 @@ data class SpeculativeCloseResponse(
 class RemoteInferenceClient {
     suspend fun health(baseUrl: String): String = withContext(Dispatchers.IO) {
         val connection = openJsonConnection(baseUrl.trimEnd('/') + "/health", "GET")
-        try {
-            val statusCode = connection.responseCode
-            val body = readResponseBody(connection, statusCode)
-            require(statusCode in 200..299) { "Health check failed: HTTP $statusCode ${body.ifBlank { "" }}".trim() }
-            JSONObject(body).optString("status", "unknown")
-        } finally {
-            connection.disconnect()
-        }
+        val statusCode = connection.responseCode
+        val body = readResponseBody(connection, statusCode)
+        require(statusCode in 200..299) { "Health check failed: HTTP $statusCode ${body.ifBlank { "" }}".trim() }
+        JSONObject(body).optString("status", "unknown")
     }
 
     suspend fun probe(baseUrl: String): RemoteProbeResponse = withContext(Dispatchers.IO) {
         val connection = openJsonConnection(baseUrl.trimEnd('/') + "/probe", "GET")
-        try {
-            val statusCode = connection.responseCode
-            val body = readResponseBody(connection, statusCode)
-            require(statusCode in 200..299) { "Probe failed: HTTP $statusCode ${body.ifBlank { "" }}".trim() }
-            val json = JSONObject(body)
-            val addressArray = json.optJSONArray("ipv4Addresses")
-            val addresses = buildList {
-                if (addressArray != null) {
-                    for (index in 0 until addressArray.length()) {
-                        add(addressArray.optString(index))
-                    }
+        val statusCode = connection.responseCode
+        val body = readResponseBody(connection, statusCode)
+        require(statusCode in 200..299) { "Probe failed: HTTP $statusCode ${body.ifBlank { "" }}".trim() }
+        val json = JSONObject(body)
+        val addressArray = json.optJSONArray("ipv4Addresses")
+        val addresses = buildList {
+            if (addressArray != null) {
+                for (index in 0 until addressArray.length()) {
+                    add(addressArray.optString(index))
                 }
             }
-            RemoteProbeResponse(
-                status = json.optString("status", "unknown"),
-                message = json.optString("message"),
-                clientAddress = json.optString("clientAddress"),
-                requestLogPath = json.optString("requestLogPath"),
-                ipv4Addresses = addresses,
-                speculativeVerifierMode = json.optString("speculativeVerifierMode"),
-                speculativeVerifierStage = json.optString("speculativeVerifierStage"),
-                llamaServerBaseUrl = json.optString("llamaServerBaseUrl")
-            )
-        } finally {
-            connection.disconnect()
         }
+        RemoteProbeResponse(
+            status = json.optString("status", "unknown"),
+            message = json.optString("message"),
+            clientAddress = json.optString("clientAddress"),
+            requestLogPath = json.optString("requestLogPath"),
+            ipv4Addresses = addresses,
+            speculativeVerifierMode = json.optString("speculativeVerifierMode"),
+            speculativeVerifierStage = json.optString("speculativeVerifierStage"),
+            llamaServerBaseUrl = json.optString("llamaServerBaseUrl")
+        )
     }
 
     suspend fun generate(baseUrl: String, request: RemoteGenerateRequest): RemoteGenerateResponse =
@@ -196,30 +190,26 @@ class RemoteInferenceClient {
                 put("topP", request.topP)
             }
 
-            try {
-                OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                    writer.write(payload.toString())
-                }
-
-                val statusCode = connection.responseCode
-                val body = readResponseBody(connection, statusCode)
-                val json = JSONObject(body)
-                val error = json.optString("error")
-                require(statusCode in 200..299) {
-                    "Remote inference failed: HTTP $statusCode ${error.ifBlank { body }}"
-                }
-
-                RemoteGenerateResponse(
-                    requestId = json.optString("requestId", request.requestId),
-                    outputText = json.optString("outputText"),
-                    finishReason = json.optString("finishReason", "unknown"),
-                    backendLabel = json.optString("backendLabel", "remote"),
-                    error = error,
-                    generationMs = json.optJSONObject("timings")?.optLong("generationMs") ?: -1L
-                )
-            } finally {
-                connection.disconnect()
+            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+                writer.write(payload.toString())
             }
+
+            val statusCode = connection.responseCode
+            val body = readResponseBody(connection, statusCode)
+            val json = JSONObject(body)
+            val error = json.optString("error")
+            require(statusCode in 200..299) {
+                "Remote inference failed: HTTP $statusCode ${error.ifBlank { body }}"
+            }
+
+            RemoteGenerateResponse(
+                requestId = json.optString("requestId", request.requestId),
+                outputText = json.optString("outputText"),
+                finishReason = json.optString("finishReason", "unknown"),
+                backendLabel = json.optString("backendLabel", "remote"),
+                error = error,
+                generationMs = json.optJSONObject("timings")?.optLong("generationMs") ?: -1L
+            )
         }
 
     suspend fun startSpeculativeSession(
@@ -241,41 +231,41 @@ class RemoteInferenceClient {
                 JSONObject().apply {
                     put("temperature", request.temperature)
                     put("topP", request.topP)
+                    put("topK", request.topK)
+                    if (request.seed != null) {
+                        put("seed", request.seed)
+                    }
                 }
             )
         }
 
-        try {
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(payload.toString())
-            }
-
-            val statusCode = connection.responseCode
-            val body = readResponseBody(connection, statusCode)
-            val json = JSONObject(body)
-            val error = json.optString("error")
-            require(statusCode in 200..299) {
-                "Speculative start failed: HTTP $statusCode ${error.ifBlank { body }}"
-            }
-
-            SpeculativeStartResponse(
-                sessionId = json.optString("sessionId", request.sessionId),
-                requestId = json.optString("requestId", request.requestId),
-                status = json.optString("status", "unknown"),
-                targetSessionId = json.optString("targetSessionId"),
-                verifierMode = json.optString("verifierMode"),
-                verifierStage = json.optString("verifierStage"),
-                targetPreviewText = json.optString("targetPreviewText"),
-                acceptedText = json.optString("acceptedText"),
-                lastReplayPrompt = json.optJSONObject("debug")?.optString("lastReplayPrompt").orEmpty(),
-                trueRuntimeBackend = json.optJSONObject("debug")?.optString("trueRuntimeBackend").orEmpty(),
-                llamaServerSlotId = json.optJSONObject("debug")?.optInt("llamaServerSlotId", -1) ?: -1,
-                fallbackAvailable = json.optBoolean("fallbackAvailable", false),
-                error = error
-            )
-        } finally {
-            connection.disconnect()
+        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(payload.toString())
         }
+
+        val statusCode = connection.responseCode
+        val body = readResponseBody(connection, statusCode)
+        val json = JSONObject(body)
+        val error = json.optString("error")
+        require(statusCode in 200..299) {
+            "Speculative start failed: HTTP $statusCode ${error.ifBlank { body }}"
+        }
+
+        SpeculativeStartResponse(
+            sessionId = json.optString("sessionId", request.sessionId),
+            requestId = json.optString("requestId", request.requestId),
+            status = json.optString("status", "unknown"),
+            targetSessionId = json.optString("targetSessionId"),
+            verifierMode = json.optString("verifierMode"),
+            verifierStage = json.optString("verifierStage"),
+            targetPreviewText = json.optString("targetPreviewText"),
+            acceptedText = json.optString("acceptedText"),
+            lastReplayPrompt = json.optJSONObject("debug")?.optString("lastReplayPrompt").orEmpty(),
+            trueRuntimeBackend = json.optJSONObject("debug")?.optString("trueRuntimeBackend").orEmpty(),
+            llamaServerSlotId = json.optJSONObject("debug")?.optInt("llamaServerSlotId", -1) ?: -1,
+            fallbackAvailable = json.optBoolean("fallbackAvailable", false),
+            error = error
+        )
     }
 
     suspend fun proposeDraft(
@@ -298,61 +288,57 @@ class RemoteInferenceClient {
             }
         }
 
-        try {
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(payload.toString())
-            }
-
-            val statusCode = connection.responseCode
-            val body = readResponseBody(connection, statusCode)
-            val json = JSONObject(body)
-            val error = json.optString("error")
-            require(statusCode in 200..299) {
-                "Speculative propose failed: HTTP $statusCode ${error.ifBlank { body }}"
-            }
-
-            SpeculativeProposeResponse(
-                sessionId = json.optString("sessionId", request.sessionId),
-                requestId = json.optString("requestId"),
-                status = json.optString("status", "unknown"),
-                tokenMode = json.optJSONObject("debug")?.optString("tokenMode").orEmpty(),
-                acceptanceMode = json.optJSONObject("debug")?.optString("acceptanceMode").orEmpty(),
-                acceptedCount = json.optInt("acceptedCount", 0),
-                acceptedTokenIds = json.optJSONArray("acceptedTokenIds").toIntList(),
-                rejectedFromIndex = json.optInt("rejectedFromIndex", -1),
-                correctionTokenIds = json.optJSONArray("correctionTokenIds").toIntList(),
-                targetTextDelta = json.optString("targetTextDelta"),
-                acceptedText = json.optString("acceptedText"),
-                lastReplayPrompt = json.optJSONObject("debug")?.optString("lastReplayPrompt").orEmpty(),
-                verifierStage = json.optString("verifierStage"),
-                trueRuntimeBackend = json.optJSONObject("debug")?.optString("trueRuntimeBackend").orEmpty(),
-                llamaServerSlotId = json.optJSONObject("debug")?.optInt("llamaServerSlotId", -1) ?: -1,
-                lastTrueChunkStart = json.optJSONObject("debug")?.optInt("lastTrueChunkStart", -1) ?: -1,
-                lastTrueChunkConsumed = json.optJSONObject("debug")?.optInt("lastTrueChunkConsumed", -1) ?: -1,
-                trueCacheHitStreak = json.optJSONObject("debug")?.optInt("trueCacheHitStreak", 0) ?: 0,
-                trueFetchStreak = json.optJSONObject("debug")?.optInt("trueFetchStreak", 0) ?: 0,
-                treeCandidateCount = json.optJSONObject("debug")?.optInt("treeCandidateCount", 0) ?: 0,
-                treeBestPathTokenIds = json.optJSONObject("debug")?.optJSONArray("treeBestPathTokenIds").toIntList(),
-                treeBranchFactor = json.optJSONObject("debug")?.optInt("treeBranchFactor", 0) ?: 0,
-                treeDepthEvaluated = json.optJSONObject("debug")?.optInt("treeDepthEvaluated", 0) ?: 0,
-                treeDebugSummary = json.optJSONObject("debug")?.optString("treeDebugSummary").orEmpty(),
-                timingPrepareMs = json.optJSONObject("debug")?.optDouble("timingPrepareMs", 0.0) ?: 0.0,
-                timingDecodeMs = json.optJSONObject("debug")?.optDouble("timingDecodeMs", 0.0) ?: 0.0,
-                timingSampleMs = json.optJSONObject("debug")?.optDouble("timingSampleMs", 0.0) ?: 0.0,
-                timingRollbackMs = json.optJSONObject("debug")?.optDouble("timingRollbackMs", 0.0) ?: 0.0,
-                timingHelperTotalMs = json.optJSONObject("debug")?.optDouble("timingHelperTotalMs", 0.0) ?: 0.0,
-                timingHelperRoundTripMs = json.optJSONObject("debug")?.optDouble("timingHelperRoundTripMs", 0.0) ?: 0.0,
-                timingServiceTotalMs = json.optJSONObject("debug")?.optDouble("timingServiceTotalMs", 0.0) ?: 0.0,
-                draftTreeNodeCount = json.optJSONObject("debug")?.optInt("draftTreeNodeCount", 0) ?: 0,
-                draftTreeDepthEvaluated = json.optJSONObject("debug")?.optInt("draftTreeDepthEvaluated", 0) ?: 0,
-                draftTreeBestPathNodeIndices = json.optJSONObject("debug")?.optJSONArray("draftTreeBestPathNodeIndices").toIntList(),
-                warning = json.optString("warning"),
-                finishReason = json.optString("finishReason"),
-                error = error
-            )
-        } finally {
-            connection.disconnect()
+        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(payload.toString())
         }
+
+        val statusCode = connection.responseCode
+        val body = readResponseBody(connection, statusCode)
+        val json = JSONObject(body)
+        val error = json.optString("error")
+        require(statusCode in 200..299) {
+            "Speculative propose failed: HTTP $statusCode ${error.ifBlank { body }}"
+        }
+
+        SpeculativeProposeResponse(
+            sessionId = json.optString("sessionId", request.sessionId),
+            requestId = json.optString("requestId"),
+            status = json.optString("status", "unknown"),
+            tokenMode = json.optJSONObject("debug")?.optString("tokenMode").orEmpty(),
+            acceptanceMode = json.optJSONObject("debug")?.optString("acceptanceMode").orEmpty(),
+            acceptedCount = json.optInt("acceptedCount", 0),
+            acceptedTokenIds = json.optJSONArray("acceptedTokenIds").toIntList(),
+            rejectedFromIndex = json.optInt("rejectedFromIndex", -1),
+            correctionTokenIds = json.optJSONArray("correctionTokenIds").toIntList(),
+            targetTextDelta = json.optString("targetTextDelta"),
+            acceptedText = json.optString("acceptedText"),
+            lastReplayPrompt = json.optJSONObject("debug")?.optString("lastReplayPrompt").orEmpty(),
+            verifierStage = json.optString("verifierStage"),
+            trueRuntimeBackend = json.optJSONObject("debug")?.optString("trueRuntimeBackend").orEmpty(),
+            llamaServerSlotId = json.optJSONObject("debug")?.optInt("llamaServerSlotId", -1) ?: -1,
+            lastTrueChunkStart = json.optJSONObject("debug")?.optInt("lastTrueChunkStart", -1) ?: -1,
+            lastTrueChunkConsumed = json.optJSONObject("debug")?.optInt("lastTrueChunkConsumed", -1) ?: -1,
+            trueCacheHitStreak = json.optJSONObject("debug")?.optInt("trueCacheHitStreak", 0) ?: 0,
+            trueFetchStreak = json.optJSONObject("debug")?.optInt("trueFetchStreak", 0) ?: 0,
+            treeCandidateCount = json.optJSONObject("debug")?.optInt("treeCandidateCount", 0) ?: 0,
+            treeBestPathTokenIds = json.optJSONObject("debug")?.optJSONArray("treeBestPathTokenIds").toIntList(),
+            treeBranchFactor = json.optJSONObject("debug")?.optInt("treeBranchFactor", 0) ?: 0,
+            treeDepthEvaluated = json.optJSONObject("debug")?.optInt("treeDepthEvaluated", 0) ?: 0,
+            treeDebugSummary = json.optJSONObject("debug")?.optString("treeDebugSummary").orEmpty(),
+            timingPrepareMs = json.optJSONObject("debug")?.optDouble("timingPrepareMs", 0.0) ?: 0.0,
+            timingDecodeMs = json.optJSONObject("debug")?.optDouble("timingDecodeMs", 0.0) ?: 0.0,
+            timingSampleMs = json.optJSONObject("debug")?.optDouble("timingSampleMs", 0.0) ?: 0.0,
+            timingRollbackMs = json.optJSONObject("debug")?.optDouble("timingRollbackMs", 0.0) ?: 0.0,
+            timingHelperTotalMs = json.optJSONObject("debug")?.optDouble("timingHelperTotalMs", 0.0) ?: 0.0,
+            timingHelperRoundTripMs = json.optJSONObject("debug")?.optDouble("timingHelperRoundTripMs", 0.0) ?: 0.0,
+            timingServiceTotalMs = json.optJSONObject("debug")?.optDouble("timingServiceTotalMs", 0.0) ?: 0.0,
+            draftTreeNodeCount = json.optJSONObject("debug")?.optInt("draftTreeNodeCount", 0) ?: 0,
+            draftTreeDepthEvaluated = json.optJSONObject("debug")?.optInt("draftTreeDepthEvaluated", 0) ?: 0,
+            draftTreeBestPathNodeIndices = json.optJSONObject("debug")?.optJSONArray("draftTreeBestPathNodeIndices").toIntList(),
+            warning = json.optString("warning"),
+            finishReason = json.optString("finishReason"),
+            error = error
+        )
     }
 
     suspend fun closeSpeculativeSession(
@@ -367,42 +353,38 @@ class RemoteInferenceClient {
             put("reason", request.reason)
         }
 
-        try {
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(payload.toString())
-            }
-
-            val statusCode = connection.responseCode
-            val body = readResponseBody(connection, statusCode)
-            val json = JSONObject(body)
-            val error = json.optString("error")
-            require(statusCode in 200..299) {
-                "Speculative close failed: HTTP $statusCode ${error.ifBlank { body }}"
-            }
-
-            SpeculativeCloseResponse(
-                sessionId = json.optString("sessionId", request.sessionId),
-                status = json.optString("status", "unknown"),
-                reason = json.optString("reason", request.reason),
-                acceptedTokenCount = json.optInt("acceptedTokenCount", 0),
-                mismatchCount = json.optInt("mismatchCount", 0),
-                acceptedText = json.optString("acceptedText"),
-                lastTargetTextDelta = json.optString("lastTargetTextDelta"),
-                lastFinishReason = json.optString("lastFinishReason"),
-                trueRuntimeBackend = json.optString("trueRuntimeBackend"),
-                llamaServerSlotId = json.optInt("llamaServerSlotId", -1),
-                error = error
-            )
-        } finally {
-            connection.disconnect()
+        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(payload.toString())
         }
+
+        val statusCode = connection.responseCode
+        val body = readResponseBody(connection, statusCode)
+        val json = JSONObject(body)
+        val error = json.optString("error")
+        require(statusCode in 200..299) {
+            "Speculative close failed: HTTP $statusCode ${error.ifBlank { body }}"
+        }
+
+        SpeculativeCloseResponse(
+            sessionId = json.optString("sessionId", request.sessionId),
+            status = json.optString("status", "unknown"),
+            reason = json.optString("reason", request.reason),
+            acceptedTokenCount = json.optInt("acceptedTokenCount", 0),
+            mismatchCount = json.optInt("mismatchCount", 0),
+            acceptedText = json.optString("acceptedText"),
+            lastTargetTextDelta = json.optString("lastTargetTextDelta"),
+            lastFinishReason = json.optString("lastFinishReason"),
+            trueRuntimeBackend = json.optString("trueRuntimeBackend"),
+            llamaServerSlotId = json.optInt("llamaServerSlotId", -1),
+            error = error
+        )
     }
 
     private fun openJsonConnection(url: String, method: String): HttpURLConnection {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.requestMethod = method
         connection.connectTimeout = 10_000
-        connection.readTimeout = 180_000
+        connection.readTimeout = 3_600_000
         connection.setRequestProperty("Accept", "application/json")
         connection.setRequestProperty("Connection", "close")
         if (method == "POST") {
