@@ -204,7 +204,6 @@
   \信息中英键{UDC}
   \信息中英键{密级}
   \信息中英键{题目}
-  \信息中英键{副标题}
   \信息中英键{姓名}
   \信息中英键{学号}
   \信息中英键{院系}
@@ -217,11 +216,10 @@
 
 \newcommand{\前序格式化}{
   \setcounter{page}{1}
-  \pagenumbering{Roman}
+  \pagenumbering{arabic}
 }
 \newcommand{\正文格式化}{
-  \setcounter{page}{1}
-  \pagenumbering{arabic}
+  \relax
 }
 % 定义中英文常量
 \ifsustech@chinese
@@ -253,7 +251,7 @@
 \RequirePackage{fancyhdr}
   \pagestyle{fancy}
     \lhead{}\chead{}\rhead{}\lfoot{}\rfoot{} % 除了页脚页码之外，什么也没有
-    \cfoot{\五号\thepage} % 页脚居中、阿拉伯数字（五号新罗马体）连续编码
+    \cfoot{{\rmfamily\五号\thepage}} % 页脚居中、阿拉伯数字（五号新罗马体）连续编码
     \renewcommand{\headrulewidth}{0bp} % 改为 0bp 即可去掉页眉下面的横线
     \renewcommand{\footrulewidth}{0bp} % 改为 0bp 即可去掉页脚上面的横线
 % 设置标题页
@@ -329,14 +327,7 @@
     \vskip 2.25cm
     {\粗体\宋体\三号
       \begin{tabular}{rl}
-        \sustech@info@item*[5em]{题目：}[9cm]{\题目@中}\\[6pt]
-        \ifdefempty{\副标题@中}%
-        {% empty
-          \\[-6pt]
-        }{% not empty
-          \sustech@info@item[5em]{}[9cm]{\副标题@中}\\[20pt]
-        }%
-
+        \sustech@info@item*[5em]{题目：}[9cm]{\题目@中}\\[18pt]
         \sustech@info@item[5em]{姓名：}[9cm]{\姓名@中}\\[16pt]
         \sustech@info@item[5em]{学号：}[9cm]{\学号@中}\\[16pt]
         \sustech@info@item*[5em]{院系：}[9cm]{\院系@中}\\[16pt]
@@ -366,13 +357,7 @@
     \vskip 2.7cm
     {\粗体\三号
       \begin{tabular}{rl}
-        \sustech@info@item*{Thesis Title:}[9cm]{\题目@英}\\[12pt]
-        \ifdefempty{\副标题@英}%
-        {% empty
-          \\[-4pt]
-        }{% not empty
-          \sustech@info@item{}[9cm]{\副标题@英}\\[15pt]
-        }%
+        \sustech@info@item*{Thesis Title:}[9cm]{\题目@英}\\[18pt]
         \sustech@info@item{Student Name:}[9cm]{\姓名@英}\\[12pt]
         \sustech@info@item{Student ID:}[9cm]{\学号@英}\\[12pt]
         \sustech@info@item*{Department:}[9cm]{\院系@英}\\[12pt]
@@ -457,22 +442,8 @@
     \else
       \二号\题目@英
     \fi
-    \\
-    
     \ifsustech@chinese
-      %  英文论文一般没有副标题
-      \ifdefempty{\副标题@中}%
-      {% empty
-        \relax
-      }{% not empty
-        \ifsustech@chinese
-          \hspace*{\fill} \黑体\小二 ——\副标题@中\\
-        \else
-          % 按需使用英文副标题
-          \hspace*{\fill} \小二 ---\副标题@英\\
-        \fi
-      }%
-
+      \\
       \vskip 1cm
       \宋体\四号\姓名@中 \\[9pt]
       （\楷书\小四{\院系@中 \quad 指导教师： \指导老师@中}）
@@ -482,35 +453,33 @@
 }
 \newenvironment{中文摘要}[1]%
   {\setsepchar{；}\readlist\args{#1}
-    \begin{spacing}{1.45}
-      \noindent\黑体\三号 [摘要]：
-      \宋体\四号}%
-  {\vfill
-      \noindent\黑体\三号 [关键词]：
-      \宋体\四号
+      \noindent{\黑体\三号 [摘要]：}
+      \begingroup\宋体\fontsize{14bp}{25bp}\selectfont}%
+  {\par\endgroup
+    \vfill
+      \noindent{\黑体\三号 [关键词]：}
+      {\宋体\fontsize{14bp}{25bp}\selectfont
       \foreachitem\word\in\args{
         \word
         \ifthenelse{
           \wordcnt < \argslen}
           {；}{}
-      }
-    \end{spacing}
+      }}
     \vfill\clearpage}
 \newenvironment{英文摘要}[1]%
-  {\setsepchar{{, }}\readlist\args{#1}
-    \begin{spacing}{1.45}
-      \noindent\三号 [ABSTRACT]:
-      \四号}%
-  {\vfill
-      \noindent\三号 [Keywords]:
-      \四号
+  {\setsepchar{;}\readlist\args{#1}
+      \noindent{\bfseries\rmfamily\三号 [ABSTRACT]:}
+      \begingroup\rmfamily\mdseries\fontsize{14bp}{25bp}\selectfont}%
+  {\par\endgroup
+    \vfill
+      \noindent{\bfseries\rmfamily\三号 [Key words]:}
+      {\rmfamily\mdseries\fontsize{14bp}{25bp}\selectfont
       \foreachitem\word\in\args{
         \word
         \ifthenelse{
           \wordcnt < \argslen}
-          {,}{}
-      }
-    \end{spacing}
+          {; }{}
+      }}
     \vfill\clearpage}
 % 参考文献
 \newcommand{\参考文献}{

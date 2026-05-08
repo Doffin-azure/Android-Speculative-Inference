@@ -111,3 +111,13 @@ docs/thesis_ai_tone_audit_2026-04-28.md
 docs/thesis_language_audit_2026-04-28.md
 docs/figures/
 docs/figures/_tmp*
+docs/reference-papers/
+
+# LaTeX generated artifacts
+reference/sustechthesis/main.fdb_latexmk
+reference/sustechthesis/main.fls
+reference/sustechthesis/main.synctex.gz
+reference/sustechthesis/main.xdv
+
+# Unused raw thesis screenshots; keep the cropped paper figure tracked instead.
+reference/sustechthesis/figures/android-app-spec-ui-paper.png
