@@ -12,7 +12,7 @@
 \end{equation}
 其中，$p_{\theta}$ 表示目标模型给出的词元分布，$y_{<t}$ 表示第 $t$ 个词元之前已经生成的前缀。式 \eqref{eq:autoregressive-factorization} 中每一步生成都依赖前一步结果，因此大语言模型推理天然具有串行特征。
 
-在工程实现中，为避免对相同前缀重复计算，推理系统通常使用 KV Cache 或等价状态缓存机制存储中间结果。对于长上下文、多轮生成和持续会话场景，缓存管理会直接影响推理效率\cite{kwon2023pagedattention,dao2022flashattention}。因此，本地推理、远程推理和端云协同推理都需要维护运行时状态。
+在工程实现中，为避免对相同前缀重复计算，推理系统通常使用 KV Cache 或等价状态缓存机制存储中间结果。对于长上下文、多轮生成和持续会话场景，缓存管理会直接影响推理效率\cite{kwon2023pagedattention,dao2022flashattention}。围绕大模型在线服务，已有研究进一步从请求批处理、连续批处理、预填充与解码阶段分离等角度降低系统等待时间与资源碎片，例如 Orca、FastServe 和 DistServe 分别讨论了生成式模型服务、分布式推理调度以及预填充/解码解耦问题\cite{yu2022orca,wu2023fastserve,zhong2024distserve}。因此，本地推理、远程推理和端云协同推理都需要维护运行时状态。
 
 若将第 $t$ 步之前的缓存记为 $C_{t-1}$，则一次增量解码可抽象为
 \begin{equation}
@@ -86,7 +86,11 @@
 
 \subsection{典型方法与本文切入点}
 
-已有研究将投机解码作为一类系统化的推理加速机制进行讨论\cite{leviathan2023speculative,chen2023speculative,miao2023specinfer,li2024eagle}。Speculative Decoding 和 Speculative Sampling 给出了草稿模型与目标模型协作的基本框架\cite{leviathan2023speculative,chen2023speculative}，SpecInfer 讨论了词元树验证问题\cite{miao2023specinfer}，Medusa 与 REST 分别从多头候选和检索候选角度扩展了草稿来源\cite{cai2024medusa,he2023rest}，EAGLE 强调统一词元空间和输出分布保持问题\cite{li2024eagle}。本文不以提出新的投机解码理论为目标，而是将相关方法应用于 Android 移动端与桌面端协同场景，重点解决以下问题：
+围绕大语言模型推理加速，现有研究大致可归纳为三个方向。第一类工作关注单步计算与内存访问优化，典型方法包括量化、缓存管理和注意力计算优化\cite{frantar2022gptq,kwon2023pagedattention,dao2022flashattention,song2023powerinfer}。该类方法能够降低单次前向开销，但并不改变自回归生成逐词元推进的基本顺序。第二类工作关注服务系统层面的请求编排与资源调度，通过连续批处理、请求级流水化以及预填充和解码分离来改善整体吞吐与时延表现\cite{yu2022orca,wu2023fastserve,zhong2024distserve}。这类研究说明，大模型推理效率不仅取决于模型本身，也受运行时组织方式影响。第三类工作则直接针对解码过程本身，尝试通过候选预测与目标校正减少高质量模型实际参与解码的次数，其中投机解码是代表性路线\cite{leviathan2023speculative,chen2023speculative,miao2023specinfer,li2024eagle}。
+
+在投机解码相关研究中，Speculative Decoding 和 Speculative Sampling 给出了草稿模型与目标模型协作的基本框架\cite{leviathan2023speculative,chen2023speculative}；SpecInfer 将线性候选扩展到词元树验证，强调候选组织形式与验证并行性的关系\cite{miao2023specinfer}；Medusa 与 REST 分别从多头候选和检索候选角度扩展草稿来源，以提高候选覆盖能力\cite{cai2024medusa,he2023rest}；EAGLE 则进一步强调统一词元空间、特征不确定性建模和输出分布保持问题\cite{li2024eagle}。总体来看，现有工作已经对投机解码的候选生成、验证结构和分布一致性展开较为系统的讨论，但多数研究以单机服务器或数据中心部署为主要场景，对跨设备协同中的状态维护、通信路径和运行时边界关注相对较少。
+
+本文不以提出新的投机解码理论为目标，而是将相关方法应用于 Android 移动端与桌面端协同场景，重点解决以下问题：
 
 \begin{enumerate}[label=\arabic*.]
   \item 如何设计适合跨设备的投机会话生命周期。
