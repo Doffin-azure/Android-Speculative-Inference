@@ -13,7 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--llama-cpp-dir",
         type=Path,
-        default=Path(r"C:/src\llama.cpp"),
+        required=True,
         help="Path to the local llama.cpp checkout",
     )
     return parser

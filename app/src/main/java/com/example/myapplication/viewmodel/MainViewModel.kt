@@ -98,7 +98,7 @@ class MainViewModel(
     private val _inferenceMode = MutableStateFlow(InferenceMode.LOCAL)
     val inferenceMode: StateFlow<InferenceMode> = _inferenceMode.asStateFlow()
 
-    private val _remoteServerUrl = MutableStateFlow("http://127.0.0.1:8080")
+    private val _remoteServerUrl = MutableStateFlow("")
     val remoteServerUrl: StateFlow<String> = _remoteServerUrl.asStateFlow()
 
     private val _output = MutableStateFlow("Ready")

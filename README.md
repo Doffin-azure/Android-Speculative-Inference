@@ -59,7 +59,7 @@ python tools/desktop_inference_service.py --host 127.0.0.1 --port 18080 `
   --speculative-verifier-mode llama_cpp_spec_split
 ```
 
-On the phone, put the 1B GGUF in a folder you can select with the file picker. In **Local Mode**, choose **Pick Model Directory** and **Load Model**. Switch to **Speculative Mode**, enter `http://127.0.0.1:18080`, then enter a prompt and tap **Run Speculative**. The interactive run below committed seven tokens across two verification rounds.
+On the phone, put the 1B GGUF in a folder you can select with the file picker. In **Local Mode**, choose **Pick Model Directory** and **Load Model**. Switch to **Speculative Mode**, enter `http://127.0.0.1:18080` for the USB setup above, then enter a prompt and tap **Run Speculative**. The interactive run below committed seven tokens across two verification rounds.
 
 <img src="docs/media/android-speculative-demo.png" alt="Android app showing the prompt and output from a speculative decoding run" width="380">
 

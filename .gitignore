@@ -81,6 +81,7 @@ reference/sustechthesis/SUSTech-thesis-undergraduate-v20260308.tmu
 .idea/navEditor.xml
 .idea/assetWizardSettings.xml
 .idea/vcs.xml
+.idea/misc.xml
 
 # Build outputs
 build/
