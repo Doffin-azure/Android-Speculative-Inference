@@ -5,7 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 if [[ -f "${REPO_ROOT}/gradle-local.properties" ]]; then
-  LLAMA_CPP_DIR="$(grep '^llamaCppSourceDir=' "${REPO_ROOT}/gradle-local.properties" | sed 's/^llamaCppSourceDir=//' | sed 's#\\\\#/#g' | sed 's#^\([A-Za-z]\):#/mnt/\L\1#')"
+  LLAMA_CPP_DIR="$(
+    grep '^llamaCppSourceDir=' "${REPO_ROOT}/gradle-local.properties" |
+      sed -e 's/^llamaCppSourceDir=//' -e 's/\r$//' -e 's#\\\\#/#g' -e 's#^\([A-Za-z]\):#/mnt/\L\1#'
+  )"
 else
   LLAMA_CPP_DIR=""
 fi
