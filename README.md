@@ -48,6 +48,21 @@ totalProposedTokens=20
 overallTokensPerSecond=6.867
 ```
 
+### Android app screenshot
+
+For an interactive run, keep the desktop verifier running in its own PowerShell window:
+
+```powershell
+adb reverse tcp:18080 tcp:18080
+python tools/desktop_inference_service.py --host 127.0.0.1 --port 18080 `
+  --model-path models/Llama-3.2-3B-Instruct-Q4_K_M.gguf `
+  --speculative-verifier-mode llama_cpp_spec_split
+```
+
+On the phone, put the 1B GGUF in a folder you can select with the file picker. In **Local Mode**, choose **Pick Model Directory** and **Load Model**. Switch to **Speculative Mode**, enter `http://127.0.0.1:18080`, then enter a prompt and tap **Run Speculative**. The interactive run below committed seven tokens across two verification rounds.
+
+<img src="docs/media/android-speculative-demo.png" alt="Android app showing the prompt and output from a speculative decoding run" width="380">
+
 ## Thesis benchmark
 
 The thesis used Qwen2.5-Instruct Q4_K_M models (0.5B draft and 7B target) with an Android phone and Windows workstation on the same local network. The approximately 1,000-token run measured steady-state generation after setup.
