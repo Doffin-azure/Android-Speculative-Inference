@@ -55,7 +55,6 @@ The thesis used Qwen2.5-Instruct Q4_K_M models (0.5B draft and 7B target) with a
 | Configuration | Tokens/s |
 | --- | ---: |
 | Android local 7B model | 7.232 |
-| Windows single-process speculative decoding | 15.707 |
 | Windows two-process speculative decoding | 14.816 |
 | **Android draft + Windows verifier** | **13.996** |
 
