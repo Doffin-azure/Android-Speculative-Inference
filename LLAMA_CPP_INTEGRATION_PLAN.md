@@ -250,7 +250,7 @@ Completed in this node:
 - Added `lib/src/main/cpp/logging.h` from the official Android sample.
 - Updated `lib/build.gradle.kts` with the key official CMake arguments needed for real `llama.cpp` builds.
 - Created a machine-local `gradle-local.properties` pointing at the cloned local checkout:
-  `C:/src\llama.cpp`
+  `C:\Users\JXZ\AndroidStudioProjects\llama.cpp`
 
 Current status:
 - The project is no longer using a hand-written stub native shell.
@@ -325,7 +325,7 @@ Use this section as the primary resume point in a fresh context window.
 
 Current real status:
 - Real `llama.cpp` sources are cloned locally at:
-  `C:/src\llama.cpp`
+  `C:\Users\JXZ\AndroidStudioProjects\llama.cpp`
 - Local path injection is active through ignored file:
   `gradle-local.properties`
 - `:lib` is the only native integration module.
@@ -690,7 +690,7 @@ Android Studio verification needed by user:
 - 终端默认没有配置 `JAVA_HOME`，直接运行 `gradlew` 会失败。
 - 使用 Android Studio 自带 JBR 可启动 Gradle：
   - `C:\Program Files\Android\Android Studio\jbr`
-- 默认 `C:/src/.gradle` 下的 wrapper 锁文件存在权限问题，已改为项目内 `GRADLE_USER_HOME=.gradle-user` 规避。
+- 默认 `C:\Users\JXZ\.gradle` 下的 wrapper 锁文件存在权限问题，已改为项目内 `GRADLE_USER_HOME=.gradle-user` 规避。
 - 上一次 `assembleDebug` 在项目内 Gradle home 下运行时被手动中断，因此还没有拿到完整构建结果。
 - 继续探测时应遵守：
   - 单次命令超过 60 秒就停止
@@ -742,7 +742,7 @@ Android Studio verification needed by user:
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
 $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
-$env:GRADLE_USER_HOME='C:/src\MyApplication2\.gradle-user'
+$env:GRADLE_USER_HOME='c:\Users\JXZ\AndroidStudioProjects\MyApplication2\.gradle-user'
 ```
 
 ## 建议替换点
